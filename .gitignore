@@ -1,0 +1,7 @@
+# Root-level ignore
+node_modules/
+dist/
+*.log
+*.log.bak
+.DS_Store
+*.local.json

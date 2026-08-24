@@ -1,0 +1,17 @@
+node_modules/
+dist/
+src-tauri/target/
+.DS_Store
+*.log
+.env
+.env.local
+.vscode/
+.idea/
+
+# Tauri icons placeholders (实际打包前需要真实图标)
+src-tauri/icons/
+
+# Local config
+*.local.json
+# WorkBuddy automation memory (contains credentials — never commit)
+.workbuddy/

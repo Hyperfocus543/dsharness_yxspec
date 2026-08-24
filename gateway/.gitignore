@@ -1,0 +1,5 @@
+# Runtime logs & test artifacts
+*.log
+*.log.bak
+dispatch_final.txt
+sse_final.txt

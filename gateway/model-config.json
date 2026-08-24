@@ -1,0 +1,28 @@
+{
+  "defaultModel": "deepseek/deepseek-v4-flash-vision-exp",
+  "models": [
+    {
+      "id": "minimax-cn/MiniMax-M3",
+      "provider": "minimax-cn",
+      "model": "MiniMax-M3",
+      "label": "MiniMax M3",
+      "modalities": [
+        "text"
+      ],
+      "contextWindow": null,
+      "maxTokens": 49152
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-vision-exp",
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash-vision-exp",
+      "label": "DeepSeek V4 Flash Vision",
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "contextWindow": 1000000,
+      "maxTokens": 128000
+    }
+  ]
+}
