@@ -12,7 +12,36 @@ const modelsModule = await import('./models.mjs')
 export const RUNTIME_BIN = 'D:/AI/deepseek-harness-master/packages/examples/jsonrpc-demo/lib/bin.js'
 export const CONFIG_PATH = fileURLToPath(new URL('../runtime-js/config/cordis.yml', import.meta.url))
 export const HARNESS_CWD = 'D:/AI/deepseek-harness-master'
-export const WORKSPACE_CWD = 'D:/Work/01_Projects/Aima_X1_BCM'
+// 工作区（项目根）可经环境变量覆盖：runtime 的 fs/bash cwd + session 目录归属
+export const WORKSPACE_CWD = process.env.YXSPEC_WORKSPACE_CWD || 'D:/Work/01_Projects/Aima_X1_BCM'
+
+// 审计日志根：<project>/.dsh/gateway-log/<session>/turn-<n>.jsonl
+// 记录每轮 agent 的 tool/call(name+arguments) + tool/result + turn/end(reason)，
+// 形成"每步工具用了什么、产出什么"的离线事实账本（harness 架构增效）。
+import { mkdirSync, appendFileSync } from 'node:fs'
+import { join } from 'node:path'
+export const AUDIT_ROOT = process.env.YXSPEC_AUDIT_ROOT || join(WORKSPACE_CWD, '.dsh', 'gateway-log')
+const auditTurnCounters = new Map() // sessionId -> {n}
+let auditStreamOpen = true
+
+function auditWrite(sessionId, kind, payload) {
+  if (!auditStreamOpen) return
+  try {
+    const counter = auditTurnCounters.get(sessionId) ?? { n: 0 }
+    if (kind === 'turn/start') counter.n += 1
+    auditTurnCounters.set(sessionId, counter)
+    const dir = join(AUDIT_ROOT, sessionId || 'default')
+    const file = join(dir, `turn-${String(counter.n).padStart(3, '0')}.jsonl`)
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), kind, ...payload }) + '\n', 'utf8')
+  } catch {
+    /* 审计日志写失败不影响主流程 */
+  }
+}
+
+function auditClose() {
+  auditStreamOpen = false
+}
 
 // 单例 harness，跨请求复用（SDK 设计：一个 runtime 子进程跨多个 session）。
 // 模型按 spec 缓存：请求的 provider/model 与当前不同时，先 closeHarness 再重建。
@@ -35,6 +64,17 @@ export class TurnAbortedError extends Error {
   constructor(message = 'turn aborted by user') {
     super(message)
     this.name = 'TurnAbortedError'
+  }
+}
+
+/** turn 超时熔断：单轮 agent 最长时间，超过视为卡死（杀 runtime + 清队列，让编排器拿明确失败）。 */
+const TURN_TIMEOUT_MS = 30 * 60 * 1000
+
+/** 超时熔断异常：runTurn 超时未返回时抛出，调用方（runAndEmit）置 blocked。 */
+export class TurnTimeoutError extends Error {
+  constructor(message = `turn timeout after ${TURN_TIMEOUT_MS / 60000}min`) {
+    super(message)
+    this.name = 'TurnTimeoutError'
   }
 }
 
@@ -136,25 +176,105 @@ export async function runTurn({ prompt, sessionId, model, onEvent }) {
     ? { provider: spec.provider, model: spec.model, maxTokens: spec.maxTokens }
     : null
 
-  return withRunLock(async () => {
-    // 上一轮 abort 标记只影响“被中止的那一轮”；新 turn 真正开始执行时清除。
-    abortRequested = false
-    const h = specArgs ? getHarness(specArgs) : getHarness()
-    return executeTurn({ h, prompt, sessionId, onEvent })
+  // 超时熔断：整轮（含排队 + 执行）带硬超时。SDK run() 卡住不返回时，
+  // race 触发 → 杀 runtime + 清队列，让调用方拿 TurnTimeoutError 明确失败，
+  // 而不是让后续所有 turn 在队列里永久等待（跑一晚上最怕的卡死）。
+  let timeoutId
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new TurnTimeoutError())
+    }, TURN_TIMEOUT_MS)
   })
+
+  try {
+    return await Promise.race([
+      withRunLock(async () => {
+        // 上一轮 abort 标记只影响"被中止的那一轮"；新 turn 真正开始执行时清除。
+        abortRequested = false
+        const h = specArgs ? getHarness(specArgs) : getHarness()
+        return executeTurn({ h, prompt, sessionId, onEvent })
+      }),
+      timeout,
+    ])
+  } catch (err) {
+    if (err instanceof TurnTimeoutError) {
+      console.error(`[harness] turn 超时熔断: session=${sessionId} 超过 ${TURN_TIMEOUT_MS / 60000}min，杀 runtime + 清队列`)
+      // 清空等待队列：后续排队 turn 立即拒绝（防连锁卡死）
+      queueGeneration++
+      // 摘除死 harness + 关 runtime，下次 getHarness 重建
+      const dead = harness
+      harness = null
+      currentSpec = null
+      if (dead) dead.close().catch(() => {})
+    } else if (!(err instanceof TurnAbortedError)) {
+      // 非用户中止的运行时错误（runtime 崩溃/传输层错误）：摘除 harness 重建，
+      // 避免 getHarness 复用死实例导致后续 turn 连续失败。
+      const dead = harness
+      harness = null
+      currentSpec = null
+      if (dead) dead.close().catch(() => {})
+      console.warn(`[harness] 运行时错误，摘除 harness 重建: ${err?.message ?? err}`)
+    }
+    throw err
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function auditStringify(v) {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'string') return v
+  try { return JSON.stringify(v) } catch { return String(v) }
 }
 
 async function runOnce({ h, prompt, sessionId, onEvent, events }) {
-  return h.run(prompt, {
+  auditWrite(sessionId, 'turn/start', { prompt: String(prompt).slice(0, 200) })
+  const out = await h.run(prompt, {
     sessionId,
     onNotification: (n) => {
       if (n.method !== 'session.event') return
       const evt = n.params?.event
       if (!evt || typeof evt.type !== 'string') return
       events.push(evt)
+      // 审计：工具调用 / 结果 / turn 终结
+      if (evt.type === 'tool/call') {
+        let args = evt.data?.arguments
+        try { args = typeof args === 'string' ? JSON.parse(args) : args } catch { /* 保留原始 */ }
+        auditWrite(sessionId, 'tool/call', { name: evt.data?.name, args: auditStringify(args).slice(0, 800) })
+      } else if (evt.type === 'tool/result') {
+        const content = evt.data?.message?.content
+        auditWrite(sessionId, 'tool/result', {
+          callId: evt.data?.message?.callId ?? evt.data?.callId ?? null,
+          error: evt.data?.error?.code ?? null,
+          content: auditStringify(content).slice(0, 800),
+        })
+      } else if (evt.type === 'assistant/message') {
+        // 补记 token usage：SDK 事件流里 assistant/message 携带 data.usage
+        // （DeepSeek 适配器从 prompt_tokens/completion_tokens 映射）。只记 usage 摘要，
+        // 不落 message 正文，避免账本无限膨胀。
+        const u = evt.data?.usage
+        if (u && typeof u === 'object' && (typeof u.inputTokens === 'number' || typeof u.outputTokens === 'number')) {
+          auditWrite(sessionId, 'assistant/message', {
+            usage: {
+              inputTokens: u.inputTokens ?? 0,
+              outputTokens: u.outputTokens ?? 0,
+              cacheReadTokens: u.cacheReadTokens ?? 0,
+              cacheWriteTokens: u.cacheWriteTokens ?? 0,
+            },
+          })
+        }
+      } else if (evt.type === 'turn/end') {
+        auditWrite(sessionId, 'turn/end', { reason: evt.data?.reason ?? null })
+      } else if (evt.type === 'goal/change') {
+        auditWrite(sessionId, 'goal/change', { name: evt.data?.name, state: evt.data?.state })
+      } else if (evt.type === 'todo/write') {
+        auditWrite(sessionId, 'todo/write', { todos: (evt.data?.todos ?? []).map((t) => ({ content: t?.content, status: t?.status })) })
+      }
       onEvent?.(evt)
     },
   })
+  // 透传 harness 实际使用的 sessionId（复用失败换新 session 时，返回新 id）
+  return { ...out, sessionId: out.sessionId ?? sessionId }
 }
 
 async function executeTurn({ h, prompt, sessionId, onEvent }) {
@@ -189,14 +309,15 @@ async function executeTurn({ h, prompt, sessionId, onEvent }) {
           break
         }
       }
-      return { finalResponse: retry.finalResponse, events, finishReason }
+      // 透传实际使用的新 sessionId（复用失败重试后，前端需切到新频道订阅）
+      return { finalResponse: retry.finalResponse, events, finishReason, sessionId: retry.sessionId }
     } catch (err) {
       if (abortRequested) throw new TurnAbortedError(String(err?.message ?? err))
       throw err
     }
   }
 
-  return { finalResponse: result.finalResponse, events, finishReason }
+  return { finalResponse: result.finalResponse, events, finishReason, sessionId: result.sessionId }
 }
 
 export async function closeHarness() {

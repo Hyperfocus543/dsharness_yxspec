@@ -88,16 +88,6 @@
     maxTokens: 8192
     compactionRetries: 1
 
-# ---- WeKnora knowledge retrieval（知识库检索优先，第一原则）----
-# baseUrl 指向 WeKnora 后端；无 Docker 时由本地简化后端（mock-weknora）承接，
-# 换真后端只需改 baseUrl 与环境变量。
-- id: weknora
-  name: '@wxg-prc-cpg/dsh-weknora'
-  config:
-    baseUrl: http://localhost:8080/api/v1
-    knowledgeBaseIds:
-      - kb-aima-x1-bcm
-
 # ---- graph-memory (cross-session memory) ----
 # agent-presets service: graph-memory depends on agentPresets for per-agent
 # compaction lookup. Empty roster + includeUserRoot=false keeps the default

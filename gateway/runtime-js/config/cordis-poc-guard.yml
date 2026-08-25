@@ -127,3 +127,9 @@
       baseURL: !!js process.env.GRAPH_MEMORY_EMBEDDING_BASE_URL
       model: !!js process.env.GRAPH_MEMORY_EMBEDDING_MODEL
       dimensions: !!js "process.env.GRAPH_MEMORY_EMBEDDING_DIMENSIONS ? Number(process.env.GRAPH_MEMORY_EMBEDDING_DIMENSIONS) : undefined"
+
+# ---- POC: yxspec tool-guard（coding 阶段工具结构性拦截）----
+- id: yxspec-tool-guard
+  name: '@yxspec/tool-guard'
+  config:
+    stage: swe_coding_do

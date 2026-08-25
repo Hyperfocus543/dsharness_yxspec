@@ -1,0 +1,10 @@
+{
+  "name": "@yxspec/tool-guard",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "YXSpec 工具守卫：coding 阶段结构性拦截白名单外工具（POC）"
+}

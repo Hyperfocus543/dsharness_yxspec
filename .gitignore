@@ -5,3 +5,22 @@ dist/
 *.log.bak
 .DS_Store
 *.local.json
+
+# 运行时状态 / 会话 / 数据库（不进仓库）
+gateway-log/
+graph-memory/
+dsh_state.json
+dsh_state.json.*
+.sessions/
+.sessions-*/
+runs/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+
+# POC 与临时物
+_poc-guard/
+_tmp_clone/
+scripts/runtime-stderr.log
+scripts/runtime-stdout.log

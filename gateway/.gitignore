@@ -3,3 +3,7 @@
 *.log.bak
 dispatch_final.txt
 sse_final.txt
+
+# 配置备份与冒烟产物（不进仓库）
+runtime-js/config/*.bak*
+test/gm-smoke-*

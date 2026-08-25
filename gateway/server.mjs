@@ -13,7 +13,8 @@ if (process.stdin && typeof process.stdin.setDefaultEncoding === 'function') {
   process.stdin.setDefaultEncoding('utf-8')
 }
 // HTTP 接口：
-//   POST /api/agent {prompt, session_id}   → 派活（门控拦截或真实推进）
+//   POST /api/agent {prompt, session_id}   → 派活（门控拦截或注册后台任务；成功后立即返回 task_id）
+//   GET  /api/tasks/:id                    → 查询后台任务状态（前端轮询长任务）
 //   POST /api/agent/abort {session_id}     → 中断当前 turn（杀 runtime）
 //   POST /api/chat {prompt}                → 快速对话（501 未实现，占位）
 //   GET  /api/events?session_id=           → SSE 事件流
@@ -22,10 +23,14 @@ if (process.stdin && typeof process.stdin.setDefaultEncoding === 'function') {
 import { createServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { readState, updateState, snapshot, nextCurrent } from './lib/state.mjs'
-import { resolveStage, scanGates, buildAgentPrompt, STAGES } from './lib/stages.mjs'
-import { openSseStream, broadcastGoal, broadcastTodos, broadcastTurnEnd, emitEvent } from './lib/bus.mjs'
-import { runTurn, closeHarness, abortTurn, getCurrentSpec, TurnAbortedError } from './lib/harness.mjs'
+import { resolveStage, scanGates, buildAgentPrompt, STAGES, STAGE_TOKENS, PROJECT_ROOT } from './lib/stages.mjs'
+import { openSseStream, broadcastGoal, broadcastTodos, broadcastTurnEnd, broadcastToolCall, broadcastToolResult, broadcastStageUpdate, emitEvent, rememberSessionState, getSessionState } from './lib/bus.mjs'
+import { runTurn, closeHarness, abortTurn, getCurrentSpec, TurnAbortedError, TurnTimeoutError } from './lib/harness.mjs'
 import * as models from './lib/models.mjs'
+import { listFeatures, setFeature, addCustomFeature, removeCustomFeature, listFeatureSkills, syncFeatureSkillInvocation, syncAllFeatureSkillInvocations } from './lib/features.mjs'
+import { buildCostStats } from './lib/cost.mjs'
+import { getCommunityPlugins } from './lib/community.mjs'
+import { listInstalledPlugins } from './lib/installed.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
 
@@ -50,8 +55,145 @@ function notFound(res) {
   json(res, 404, { error: 'not_found' })
 }
 
+/**
+ * 生成周报 Markdown（GET /api/export?format=md）。
+ * 已读 stages.mjs 确认：STAGES 无 group 字段 → 按 aspice 点号前部分分组（ACQ/SYS/HWE/SWE/SUP/SPL）。
+ */
+function buildWeeklyReportMd() {
+  const state = snapshot()
+  // 只统计活跃阶段：STAGES 共 27 条（含废弃 swe_detail + PC 变体 swe_coding_verify_pc），
+  // 周报口径按"25 活跃阶段"算进度，废弃/变体节点不列明细、不进分母。
+  const tokens = Object.keys(STAGES).filter((t) => !STAGES[t]?.deprecated && !STAGES[t]?.variant)
+  const total = tokens.length
+  const done = tokens.filter((t) => state.stages?.[t]?.state === 'done').length
+  const pct = Math.round((done / total) * 100)
+  const today = new Date().toISOString().slice(0, 10)
+
+  const lines = []
+  lines.push('# YXSpec 项目周报')
+  lines.push(`- 项目代号：${state.project ?? '—'}`)
+  lines.push(`- 生成日期：${today}`)
+  lines.push(`- 整体进度：${done}/${total}（${pct}%）`)
+  lines.push('')
+
+  // 阶段明细：按 STAGES 顺序，按 aspice 前缀分组，组内保持流程顺序
+  lines.push('## 阶段明细')
+  const groups = new Map()
+  for (const token of tokens) {
+    const meta = STAGES[token]
+    const aspice = meta?.aspice ?? '—'
+    const groupKey = aspice.split('.')[0] || '其他'
+    if (!groups.has(groupKey)) groups.set(groupKey, [])
+    groups.get(groupKey).push({ token, aspice, stage: state.stages?.[token] })
+  }
+  for (const [group, rows] of groups) {
+    lines.push(`### ${group}`)
+    lines.push('| 阶段 | ASPICE | 状态 | 产物数 | 门控 |')
+    lines.push('|------|--------|------|--------|------|')
+    for (const { token, aspice, stage } of rows) {
+      const stateVal = stage?.state ?? '—'
+      const artifactCount = Array.isArray(stage?.artifacts) ? stage.artifacts.length : 0
+      const gateMsg = stage?.gate?.message || '—'
+      lines.push(`| ${token} | ${aspice} | ${stateVal} | ${artifactCount} | ${gateMsg.replace(/\|/g, '\\|')} |`)
+    }
+    lines.push('')
+  }
+
+  // 阻塞与待产物：gate.message 非空且未完成的阶段
+  lines.push('## 阻塞与待产物')
+  let blockers = 0
+  for (const token of tokens) {
+    const stage = state.stages?.[token]
+    const msg = stage?.gate?.message
+    if (!msg || stage?.state === 'done') continue
+    lines.push(`- ${token}: ${msg}`)
+    blockers++
+  }
+  if (blockers === 0) lines.push('- （无）')
+  lines.push('')
+
+  return lines.join('\n')
+}
+
+// ---------- 后台任务注册表（长任务轮询） ----------
+// 设计原因：3-5 分钟的长 turn 若占着 HTTP 请求不放，客户端连接抖动/代理超时
+// 会让 fetch 抛 "Failed to fetch"，结果还丢在网关里。改成任务制：
+//   POST /api/agent → 注册任务后立即返回 {task_id, session_id}
+//   前端轮询 GET /api/tasks/:id 直到 status=done|error|aborted
+// 纯内存实现（网关重启即失效，前端 abort 处理残留即可）。
+// 防泄漏：TTL 清理——终态任务 30 分钟后回收（定时器兜底 + 查询时惰性清理）。
+const TASK_TTL_MS = 30 * 60 * 1000
+let taskSeq = 0
+const tasks = new Map() // task_id -> { status, sessionId, result, error, createdAt, lastAccess }
+// 每 10 分钟扫一次过期终态任务（timer 不 hold 事件循环退出）
+setInterval(() => sweepExpiredTasks(), 10 * 60 * 1000).unref?.()
+
+function sweepExpiredTasks() {
+  const now = Date.now()
+  for (const [id, t] of tasks) {
+    // 只清终态；running 任务永不清（可能正在被前端轮询）
+    if (t.status !== 'running' && now - t.lastAccess > TASK_TTL_MS) {
+      tasks.delete(id)
+      console.log(`[gateway] 任务 TTL 回收: ${id}`)
+    }
+  }
+}
+
+function registerTask({ sessionId }) {
+  const taskId = `task-${Date.now()}-${++taskSeq}`
+  tasks.set(taskId, {
+    status: 'running',
+    sessionId: sessionId ?? null,
+    result: null,
+    error: null,
+    createdAt: new Date().toISOString(),
+    lastAccess: Date.now(),
+  })
+  return taskId
+}
+
+function settleTask(taskId, { result = null, error = null } = {}) {
+  const t = tasks.get(taskId)
+  if (!t) return
+  t.result = result
+  t.error = error
+  t.status = error ? 'error' : 'done'
+  t.lastAccess = Date.now()
+}
+
+/** 后台跑一轮 turn（串行闸门保证一次一个），完成后 settle 任务。 */
+async function runTaskInBackground({ taskId, session, token, agentPrompt, state, general, model }) {
+  try {
+    const out = await runAndEmit({ session, token, agentPrompt, state, general, model })
+    settleTask(taskId, { result: out })
+  } catch (err) {
+    // runAndEmit 内部已广播 turn/end(error) 并置 blocked；这里记录任务终态
+    console.error(`[gateway] 后台任务失败: task=${taskId}`, err?.message ?? err)
+    settleTask(taskId, {
+      error: {
+        message: String(err?.message ?? err),
+        finish_reason: 'error',
+        session_id: session,
+        stage: general ? null : token,
+      },
+    })
+  }
+}
+
 // ---------- 派活核心 ----------
-async function dispatchAgent({ prompt, sessionId, model }) {
+// 返回两种形态：
+//   { task: { task_id, session_id } }       → 任务已注册，后台跑 turn，前端轮询 /api/tasks/:id
+//   { result: {...} }                        → 无需后台跑（门控拦截），直接返回结果
+
+/** 把前端传的 system 补充说明追加到 buildAgentPrompt 产物末尾；system 为 undefined/null/空串时原样返回。 */
+function withSystem(agentPrompt, system) {
+  if (!system || typeof system !== 'string') return agentPrompt
+  const trimmed = system.trim()
+  if (!trimmed) return agentPrompt
+  return `${agentPrompt}\n\n[System 补充] ${trimmed}`
+}
+
+async function dispatchAgent({ prompt, sessionId, model, system }) {
   const session = sessionId || `bcm-${Date.now()}`
   // 识别目标阶段
   const hit = resolveStage(prompt)
@@ -62,10 +204,16 @@ async function dispatchAgent({ prompt, sessionId, model }) {
     const current = state.current
     const stage = STAGES[current]
     const gates = scanGates(state)
-    const agentPrompt = buildAgentPrompt({
+    const agentPrompt = withSystem(buildAgentPrompt({
       userPrompt: prompt, token: current, stage, state, gates, force: false, general: true,
+    }), system)
+    // 咨询模式也写缓存，让 /api/session 能反映"正在咨询"（当前阶段不点亮）
+    rememberSessionState(session, {
+      goal: { name: current, state: 'in_progress', command: 'general', aspice: stage?.aspice ?? '' },
     })
-    return runAndEmit({ session, token: current, agentPrompt, state, general: true, model })
+    const taskId = registerTask({ sessionId: session })
+    runTaskInBackground({ taskId, session, token: current, agentPrompt, state, general: true, model })
+    return { task: { task_id: taskId, session_id: session } }
   }
 
   const { token, stage } = hit
@@ -80,16 +228,18 @@ async function dispatchAgent({ prompt, sessionId, model }) {
     broadcastTurnEnd(session, { kind: 'blocked' })
     const message = gate.message
     return {
-      final_response: `门控拦截：${message}。请先完成上游阶段（${Object.entries(gate.upstream).filter(([, v]) => !v).map(([k]) => k).join('、')}）再推进 ${stage.label}。`,
-      finish_reason: 'blocked',
-      session_id: session,
-      error: null,
-      stage: token,
-      gate,
+      result: {
+        final_response: `门控拦截：${message}。请先完成上游阶段（${Object.entries(gate.upstream).filter(([, v]) => !v).map(([k]) => k).join('、')}）再推进 ${stage.label}。`,
+        finish_reason: 'blocked',
+        session_id: session,
+        error: null,
+        stage: token,
+        gate,
+      },
     }
   }
 
-  // 放行：置 in_progress → 驱动 agent
+  // 放行：置 in_progress → 注册后台任务，turn 在闸门队列里跑
   updateState((s) => {
     if (s.stages[token]) {
       s.stages[token].state = 'in_progress'
@@ -97,13 +247,20 @@ async function dispatchAgent({ prompt, sessionId, model }) {
     }
     s.current = token
     return s
-  })
+  }, { activeToken: token })
   broadcastGoal(session, token, 'in_progress', stage.aspice)
-
-  const agentPrompt = buildAgentPrompt({
-    userPrompt: prompt, token, stage, state, gates, force: false,
+  // 主动写 session 快照缓存：不等 harness 的 goal/change 事件（该事件要等模型首响应），
+  // 让 /api/session 在 turn 一开始就能返回当前 goal，页面刷新后驾驶舱立即恢复状态。
+  rememberSessionState(session, {
+    goal: { name: token, state: 'in_progress', command: stage.command, aspice: stage.aspice },
   })
-  return runAndEmit({ session, token, agentPrompt, state, model })
+
+  const agentPrompt = withSystem(buildAgentPrompt({
+    userPrompt: prompt, token, stage, state, gates, force: false,
+  }), system)
+  const taskId = registerTask({ sessionId: session })
+  runTaskInBackground({ taskId, session, token, agentPrompt, state, model })
+  return { task: { task_id: taskId, session_id: session } }
 }
 
 /** 驱动 agent 跑一轮，转发事件到 SSE，完成后回写状态。
@@ -123,8 +280,15 @@ async function runAndEmit({ session, token, agentPrompt, state, general = false,
         if (evt.type === 'goal/change') {
           // 通用咨询模式：不广播 in_progress（避免把阶段点亮成进行中）
           if (!general) broadcastGoal(session, token, 'in_progress', stage.aspice)
+          // 缓存 session 最新 goal（/api/session 快照用，前端页面刷新可恢复）
+          rememberSessionState(session, { goal: evt.data ?? null })
         } else if (evt.type === 'todo/write') {
           broadcastTodos(session, evt.data?.todos ?? [])
+          rememberSessionState(session, { todos: evt.data?.todos ?? [] })
+        } else if (evt.type === 'tool/call' || evt.type === 'tool/result') {
+          // 事件级流式：把 agent 的工具动作实时转发给 SSE 订阅方（前端渲染"正在做…"）
+          if (evt.type === 'tool/call') broadcastToolCall(session, evt)
+          else broadcastToolResult(session, evt)
         } else if (evt.type === 'turn/end') {
           broadcastTurnEnd(session, evt.data?.reason ?? { kind: 'completed' })
         }
@@ -155,6 +319,31 @@ async function runAndEmit({ session, token, agentPrompt, state, general = false,
         model: getCurrentSpec() ? `${getCurrentSpec().provider}/${getCurrentSpec().model}` : (model ?? null),
       }
     }
+    if (err instanceof TurnTimeoutError) {
+      // 超时熔断：阶段置 blocked（不是悬停 in_progress），返回明确失败让编排器可重试。
+      console.error(`[gateway] turn 超时: session=${session} stage=${token} ${err?.message}`)
+      if (!general) {
+        updateState((s) => {
+          if (s.stages[token] && s.stages[token].state === 'in_progress') {
+            s.stages[token].state = 'blocked'
+            s.stages[token].lastUpdate = new Date().toISOString()
+          }
+          return s
+        })
+      }
+      broadcastTurnEnd(session, { kind: 'error' })
+      if (!general) broadcastStageUpdate(session, { token, state: 'blocked', artifacts: [], gate: null, lastUpdate: new Date().toISOString() })
+      return {
+        final_response: '执行超时（超过 30 分钟），阶段已置 blocked，可重试',
+        finish_reason: 'error',
+        session_id: session,
+        error: String(err?.message ?? err),
+        stage: general ? null : token,
+        artifacts: [],
+        gate: null,
+        model: getCurrentSpec() ? `${getCurrentSpec().provider}/${getCurrentSpec().model}` : (model ?? null),
+      }
+    }
     // 其它异常（runtime 崩溃/传输层错误）→ 置 blocked，不悬停
     console.error(`[gateway] runTurn 异常: session=${session} stage=${token}`, err)
     if (!general) {
@@ -173,13 +362,14 @@ async function runAndEmit({ session, token, agentPrompt, state, general = false,
   const finish = result.finishReason ?? 'completed'
   if (!general) {
     // 状态回写：completed → done；否则 blocked
+    // 传 activeToken 让对账跳过当前阶段（它刚置 in_progress），由这里显式回写
     updateState((s) => {
       if (s.stages[token]) {
         s.stages[token].state = finish === 'completed' ? 'done' : 'blocked'
         s.stages[token].lastUpdate = new Date().toISOString()
       }
       return s
-    })
+    }, { activeToken: token })
     // 阶段完成 → 推进 current 到下一个未完成阶段（驾驶舱显示正确入口）
     updateState((s) => {
       const next = nextCurrent(s)
@@ -189,6 +379,20 @@ async function runAndEmit({ session, token, agentPrompt, state, general = false,
   }
   // 产物扫描已由 updateState 重算
   const finalState = snapshot()
+
+  // stage/update 广播：让前端卡片实时同步（完成→done、产物数、门控），无需等刷新/下一轮
+  if (!general) {
+    const st = finalState.stages?.[token]
+    if (st) {
+      broadcastStageUpdate(session, {
+        token,
+        state: st.state,
+        artifacts: st.artifacts ?? [],
+        gate: st.gate ?? null,
+        lastUpdate: st.lastUpdate ?? null,
+      })
+    }
+  }
 
   return {
     final_response: result.finalResponse,
@@ -208,8 +412,11 @@ const server = createServer(async (req, res) => {
   const path = url.pathname
 
   // CORS：前端（localhost:1420）跨端口调用本网关（127.0.0.1:8787）必需
+  // 注意：Allow-Methods 必须覆盖前端用到的全部方法——PUT（功能开关 setFeature）、
+  // DELETE（自定义功能删除）也是非简单请求，浏览器会先发 OPTIONS 预检，
+  // 白名单漏掉就抛 Failed to fetch。
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (req.method === 'OPTIONS') {
     res.writeHead(204)
@@ -220,16 +427,55 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === 'POST' && path === '/api/agent') {
       const body = await readBody(req)
-      const { prompt, session_id, model } = body
+      const { prompt, session_id, model, system } = body
       if (!prompt || typeof prompt !== 'string') {
         return json(res, 400, { error: 'prompt required' })
       }
       // 诊断日志：记录请求与响应（写文件，独立进程无 stdout）
       const t0 = Date.now()
-      console.log(`[gateway] /api/agent 收到: prompt="${String(prompt).slice(0, 80)}" session=${session_id ?? '(none)'} model=${model ?? '(default)'}`)
-      const out = await dispatchAgent({ prompt, sessionId: session_id, model })
-      console.log(`[gateway] /api/agent 完成: ${Date.now() - t0}ms finish=${out.finish_reason} resp_len=${(out.final_response || '').length} stage=${out.stage ?? '(general)'} model=${out.model ?? '(default)'}`)
-      return json(res, 200, out)
+      console.log(`[gateway] /api/agent 收到: prompt="${String(prompt).slice(0, 80)}" session=${session_id ?? '(none)'} model=${model ?? '(default)'} system=${system ? `len=${String(system).length}` : '(none)'}`)
+      const out = await dispatchAgent({ prompt, sessionId: session_id, model, system })
+      // 后台任务：立即返回 task_id（HTTP 202），turn 在网关内部跑；前端轮询 /api/tasks/:id
+      if (out.task) {
+        console.log(`[gateway] /api/agent 已注册后台任务: ${out.task.task_id} (${Date.now() - t0}ms)`)
+        return json(res, 202, {
+          task_id: out.task.task_id,
+          session_id: out.task.session_id,
+          accepted: true,
+          message: '已进入执行队列，轮询 /api/tasks/:id 获取结果',
+        })
+      }
+      // 门控拦截等即时结果：直接返回
+      const r = out.result
+      console.log(`[gateway] /api/agent 即时完成: ${Date.now() - t0}ms finish=${r.finish_reason} stage=${r.stage ?? '(general)'}`)
+      return json(res, 200, r)
+    }
+
+    // 后台任务状态查询（长任务轮询）：GET /api/tasks/:id
+    if (req.method === 'GET' && path.startsWith('/api/tasks/')) {
+      const taskId = path.slice('/api/tasks/'.length)
+      const t = tasks.get(taskId)
+      if (!t) return json(res, 404, { error: 'task_not_found', task_id: taskId })
+      // 查询即续期（惰性 TTL）：终态任务也因被读到而保留，避免前端还没拿到就回收
+      t.lastAccess = Date.now()
+      // running 态不返回 result/error（终态 result 可能很大，如 final_response 几千字），
+      // 轮询期间只回轻量元信息，避免每个轮询周期都传大 payload。
+      if (t.status === 'running') {
+        return json(res, 200, {
+          task_id: taskId,
+          status: t.status,
+          session_id: t.sessionId,
+          created_at: t.createdAt,
+        })
+      }
+      return json(res, 200, {
+        task_id: taskId,
+        status: t.status, // done | error | aborted
+        session_id: t.sessionId,
+        result: t.result,
+        error: t.error,
+        created_at: t.createdAt,
+      })
     }
 
     // 快速对话：暂未实现。保留路由让前端感知（501 → 隐藏"快速对话"按钮）。
@@ -306,18 +552,39 @@ const server = createServer(async (req, res) => {
     }
 
     // 中断：清队列（等待中的 turn 立即判取消）+ 杀当前 runtime，让在跑的 turn 立刻报错
-    // （前端捕获显示"已取消"）。
+    // （前端捕获显示"已取消"）。同时把该 session 相关的后台任务置终态（aborted）。
     if (req.method === 'POST' && path === '/api/agent/abort') {
       const body = await readBody(req)
       const { session_id } = body
       console.log(`[gateway] abort 请求: session_id=${session_id ?? '(none)'}`)
       abortTurn()
       await closeHarness()
+      // 关联任务终态：在跑 turn 因 runtime 被杀会抛 TurnAbortedError，
+      // runAndEmit 返回 finish_reason=aborted → 这里直接同步标记 running→done(aborted)
+      if (session_id) {
+        for (const [id, t] of tasks) {
+          if (t.sessionId === session_id && t.status === 'running') {
+            t.status = 'done'
+            t.result = {
+              final_response: '执行已取消',
+              finish_reason: 'aborted',
+              session_id,
+              error: 'aborted by user',
+              stage: null,
+              artifacts: [],
+              gate: null,
+            }
+            console.log(`[gateway] abort 已将任务 ${id} 置为 done(aborted)`)
+          }
+        }
+      }
       return json(res, 200, { ok: true, session_id: session_id ?? null })
     }
 
     if (req.method === 'GET' && path === '/api/events') {
-      const sessionId = url.searchParams.get('session_id') ?? 'bcm'
+      // 有 session_id → 订阅该频道；无 → 订阅全部事件（openSseStream 内部处理），
+      // 让前端无论谁派活（含编排脚本 verify-*）都能实时看到模型动作。
+      const sessionId = url.searchParams.get('session_id') ?? undefined
       // SSE 挂起，不 await
       openSseStream(res, { sessionId })
       return
@@ -325,12 +592,164 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && path === '/api/session') {
       const s = snapshot()
+      // 合并当前 turn 的 goal/todos（若该 session 有缓存）：
+      // 前端 connectEvents 先拉快照再订阅，页面刷新后能恢复当前阶段状态。
+      const sid = url.searchParams.get('session_id') ?? s.current
+      if (sid) {
+        const cached = getSessionState(sid)
+        if (cached.goal) s.goal = cached.goal
+        if (cached.todos?.length) s.todos = cached.todos
+      }
       return json(res, 200, s)
+    }
+
+    // 周报导出：GET /api/export?format=md → {ok, format, content, filename}
+    if (req.method === 'GET' && path === '/api/export') {
+      const format = url.searchParams.get('format') ?? 'md'
+      if (format !== 'md') {
+        return json(res, 400, { ok: false, error: `unsupported format: ${format}` })
+      }
+      const content = buildWeeklyReportMd()
+      const date = new Date().toISOString().slice(0, 10)
+      return json(res, 200, {
+        ok: true,
+        format,
+        content,
+        filename: `yxspec-周报-${date}.md`,
+      })
     }
 
     if (req.method === 'GET' && path === '/api/gates') {
       const gates = scanGates(readState())
       return json(res, 200, gates)
+    }
+
+    // 执行成本统计：GET /api/cost
+    // 聚合审计账本（.dsh/gateway-log）按阶段统计负载（耗时/次数/工具调用）。
+    // token usage 由 harness 审计层从 SDK 事件流补记（assistant/message 的 data.usage）；
+    // 改前执行的老账本无 usage 记录 → token 计 0，hasTokenData=false。
+    // 单价可经 YXSPEC_COST_INPUT_PRICE / YXSPEC_COST_OUTPUT_PRICE 配置（每百万 token）。
+    if (req.method === 'GET' && path === '/api/cost') {
+      const cost = buildCostStats()
+      return json(res, 200, cost)
+    }
+
+    // 断点续跑：GET /api/resume
+    // 网关重启/电脑休眠后，前端据此恢复断点。只读，不改任何状态。
+    // 返回 dsh_state 当前断点 + 第一个未完成阶段 + 建议继续执行的命令。
+    // resumable=false 表示全部阶段已完成（或状态文件为空/结构异常）。
+    if (req.method === 'GET' && path === '/api/resume') {
+      const state = readState()
+      const isDone = (tok) => {
+        const s = state.stages?.[tok]
+        return s?.state === 'done' || s?.state === 'skipped'
+      }
+      const activeTokens = STAGE_TOKENS.filter((t) => !STAGES[t]?.deprecated && !STAGES[t]?.variant)
+      // current 语义：优先 dsh_state.current；为空/已完成 → 第一个非 done/skipped 的活跃阶段
+      let current = state.current
+      if (!current || !STAGE_TOKENS.includes(current) || isDone(current)) {
+        current = activeTokens.find((t) => !isDone(t)) ?? current
+      }
+      if (!current) {
+        return json(res, 200, {
+          projectPath: PROJECT_ROOT,
+          current: null,
+          currentIndex: -1,
+          pendingCount: 0,
+          blockedStages: [],
+          suggestedNext: null,
+          resumable: false,
+        })
+      }
+      const currentIndex = STAGE_TOKENS.indexOf(current)
+      const pendingCount = activeTokens.filter((t) => !isDone(t)).length
+      const gates = scanGates(state)
+      const blockedStages = activeTokens.filter((t) => gates[t]?.blocked === true)
+      const meta = STAGES[current]
+      return json(res, 200, {
+        projectPath: PROJECT_ROOT,
+        current,
+        currentIndex,
+        pendingCount,
+        blockedStages,
+        suggestedNext: meta
+          ? {
+              token: current,
+              command: meta.command,
+              command_name: (meta.command || '').replace(/^\/yxspec:/, ''),
+              aspice: meta.aspice ?? '',
+              label: meta.label ?? '',
+            }
+          : null,
+        resumable: true,
+      })
+    }
+
+    // ---------- 功能商店 ----------
+    // GET   /api/features              → 全部 feature 元数据 + 启用状态 + 规则可加载性
+    // PUT   /api/features/{id}         → 设置开关（body { enabled: true|false }）
+    // POST  /api/features/custom       → 新增自定义功能（body 传自定义字段，校验失败 400）
+    // DELETE /api/features/custom/{id} → 删除自定义功能
+    if (req.method === 'GET' && path === '/api/features') {
+      return json(res, 200, { ok: true, features: listFeatures() })
+    }
+
+    if (req.method === 'POST' && path === '/api/features/custom') {
+      const body = await readBody(req)
+      try {
+        const f = await addCustomFeature(body)
+        console.log(`[gateway] 新增自定义功能: ${f.id}`)
+        return json(res, 200, { ok: true, feature: f })
+      } catch (e) {
+        return json(res, 400, { error: String(e?.message ?? e) })
+      }
+    }
+
+    if (req.method === 'DELETE' && path.startsWith('/api/features/custom/')) {
+      const id = path.slice('/api/features/custom/'.length)
+      try {
+        await removeCustomFeature(id)
+        console.log(`[gateway] 删除自定义功能: ${id}`)
+        return json(res, 200, { ok: true, id })
+      } catch (e) {
+        return json(res, 400, { error: String(e?.message ?? e) })
+      }
+    }
+
+    if (req.method === 'PUT' && path.startsWith('/api/features/')) {
+      const id = path.slice('/api/features/'.length)
+      const body = await readBody(req)
+      try {
+        const val = setFeature(id, body.enabled === true)
+        // A+A：开关状态同步进 SKILL.md frontmatter（disable-model-invocation）
+        syncFeatureSkillInvocation(id)
+        console.log(`[gateway] 功能开关: ${id} -> ${val}（已同步 skill invocation）`)
+        return json(res, 200, { ok: true, id, enabled: val })
+      } catch (e) {
+        return json(res, 400, { error: String(e?.message ?? e) })
+      }
+    }
+
+    // A+A：harness 原生 dsh skills 只读清单（前端「dsh skills」区块展示）
+    if (req.method === 'GET' && path === '/api/features/skills') {
+      return json(res, 200, { ok: true, skills: listFeatureSkills() })
+    }
+
+    // 社区插件市场：GET /api/community-plugins
+    // 浏览/筛选社区 dsh 插件（GitHub topic:dsh-plugin），只读不安装。
+    // 网关侧缓存 6h；GitHub 挂/限流时降级旧缓存(stale)或内置静态精选(static)。
+    if (req.method === 'GET' && path === '/api/community-plugins') {
+      const data = await getCommunityPlugins()
+      return json(res, 200, { ok: true, ...data })
+    }
+
+    // 已安装插件：GET /api/installed-plugins
+    // 真相源 = runtime 装配表 cordis.yml 解析；返回已接入 runtime 的非内置插件
+    // （graph-memory / weknora 等），带版本号（读 node_modules package.json）。
+    // 前端「功能开关」tab 顶部展示：已装了什么一目了然。
+    if (req.method === 'GET' && path === '/api/installed-plugins') {
+      const plugins = listInstalledPlugins()
+      return json(res, 200, { ok: true, count: plugins.length, plugins })
     }
 
     if (req.method === 'GET' && path === '/health') {
@@ -345,10 +764,17 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[gateway] YXSpec SQT 网关已启动 http://127.0.0.1:${PORT}`)
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[gateway] YXSpec SQT 网关已启动 http://0.0.0.0:${PORT}`)
   console.log(`[gateway] SSE:  /api/events?session_id=<id>`)
   console.log(`[gateway] 派活:  POST /api/agent`)
+  // A+A：启动时把 features.yaml 开关状态同步进 .dsh/skills/<id>/SKILL.md frontmatter
+  try {
+    const n = syncAllFeatureSkillInvocations()
+    console.log(`[gateway] A+A: 已同步 ${n} 个 feature skill invocation（.dsh/skills）`)
+  } catch (e) {
+    console.warn(`[gateway] A+A: skill invocation 同步失败: ${e?.message ?? e}`)
+  }
 })
 
 async function shutdown() {

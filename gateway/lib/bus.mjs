@@ -10,6 +10,24 @@ export function emitEvent(sessionId, type, data) {
   HUB.emit('event-all', evt)
 }
 
+// =============================================================================
+// session 状态缓存（/api/session 快照用）
+// harness SDK 不暴露同步的 goal/todo 快照查询；网关在 onEvent 里已能看到每条
+// goal/change + todo/write，这里顺手缓存最新值，供 GET /api/session 合并返回，
+// 让前端 connectEvents 的"先拉快照再订阅"兜底逻辑真正生效（页面刷新后驾驶舱
+// 能从快照恢复当前阶段，而不是等下一次派活）。
+// =============================================================================
+const sessionStates = new Map() // sessionId -> { goal, todos }
+
+export function rememberSessionState(sessionId, patch) {
+  const cur = sessionStates.get(sessionId) || { goal: null, todos: [] }
+  sessionStates.set(sessionId, { ...cur, ...patch })
+}
+
+export function getSessionState(sessionId) {
+  return sessionStates.get(sessionId) || { goal: null, todos: [] }
+}
+
 export function subscribeSession(sessionId, onEvent) {
   const handler = (sid, evt) => {
     if (sid === sessionId) onEvent(evt)
@@ -33,7 +51,9 @@ export function sseKeepalive() {
   return ': keep-alive\n\n'
 }
 
-/** 打开一个 SSE 响应流：连接帧 → 事件 → 心跳 → 关闭。 */
+/** 打开一个 SSE 响应流：连接帧 → 事件 → 心跳 → 关闭。
+ *  sessionId 为空 → 订阅全部事件（subscribeAll）：无论谁派活（含编排脚本
+ *  verify-* / 其它工具），前端都能实时看到模型动作，不被 session 隔离挡住。 */
 export function openSseStream(res, { sessionId, onClose }) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -55,11 +75,15 @@ export function openSseStream(res, { sessionId, onClose }) {
   }
 
   // session/connected 连接帧
-  send(sseFrame({ type: 'session/connected', data: { session_id: sessionId } }))
+  send(sseFrame({ type: 'session/connected', data: { session_id: sessionId ?? null } }))
 
-  const unsubscribe = subscribeSession(sessionId, (evt) => {
-    send(sseFrame(evt))
-  })
+  const unsubscribe = sessionId
+    ? subscribeSession(sessionId, (evt) => {
+        send(sseFrame(evt))
+      })
+    : subscribeAll((evt) => {
+        send(sseFrame(evt))
+      })
 
   const heartbeat = setInterval(() => {
     send(sseKeepalive())
@@ -89,4 +113,28 @@ export function broadcastTodos(sessionId, todos) {
 /** 广播 turn/end（契约 §2 shape）。 */
 export function broadcastTurnEnd(sessionId, reason) {
   emitEvent(sessionId, 'turn/end', { reason })
+}
+
+/** 广播 tool/call（事件级流式：agent 正在调用某工具）。 */
+export function broadcastToolCall(sessionId, toolEvent) {
+  const args = toolEvent.data?.arguments
+  emitEvent(sessionId, 'tool/call', {
+    name: toolEvent.data?.name ?? null,
+    args: typeof args === 'string' ? args.slice(0, 800) : args,
+  })
+}
+
+/** 广播 tool/result（事件级流式：工具执行完成）。 */
+export function broadcastToolResult(sessionId, toolEvent) {
+  const content = toolEvent.data?.message?.content
+  emitEvent(sessionId, 'tool/result', {
+    callId: toolEvent.data?.message?.callId ?? toolEvent.data?.callId ?? null,
+    error: toolEvent.data?.error?.code ?? null,
+    content: typeof content === 'string' ? content.slice(0, 500) : content,
+  })
+}
+
+/** 广播 stage/update（阶段状态同步：完成回写后，前端直接用 payload 更新对应卡片）。 */
+export function broadcastStageUpdate(sessionId, stageUpdate) {
+  emitEvent(sessionId, 'stage/update', stageUpdate)
 }
