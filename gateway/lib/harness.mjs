@@ -10,7 +10,10 @@ const { DeepSeekHarness } = sdkClient
 const modelsModule = await import('./models.mjs')
 
 export const RUNTIME_BIN = 'D:/AI/deepseek-harness-master/packages/examples/jsonrpc-demo/lib/bin.js'
-export const CONFIG_PATH = fileURLToPath(new URL('../runtime-js/config/cordis.yml', import.meta.url))
+// 运行时装配表：默认主 cordis.yml，可经 env YXSPEC_CORDIS_CONFIG 覆盖（副本网关验证用）
+export const CONFIG_PATH = process.env.YXSPEC_CORDIS_CONFIG
+  ? (process.env.YXSPEC_CORDIS_CONFIG.startsWith('file:') ? fileURLToPath(new URL(process.env.YXSPEC_CORDIS_CONFIG)) : process.env.YXSPEC_CORDIS_CONFIG)
+  : fileURLToPath(new URL('../runtime-js/config/cordis.yml', import.meta.url))
 export const HARNESS_CWD = 'D:/AI/deepseek-harness-master'
 // 工作区（项目根）可经环境变量覆盖：runtime 的 fs/bash cwd + session 目录归属
 export const WORKSPACE_CWD = process.env.YXSPEC_WORKSPACE_CWD || 'D:/Work/01_Projects/Aima_X1_BCM'

@@ -128,7 +128,6 @@
       model: !!js process.env.GRAPH_MEMORY_EMBEDDING_MODEL
       dimensions: !!js "process.env.GRAPH_MEMORY_EMBEDDING_DIMENSIONS ? Number(process.env.GRAPH_MEMORY_EMBEDDING_DIMENSIONS) : undefined"
 
-# ---- yxspec-tool-guard（工具裁剪 + 门控结构性化，夜间验证通过）----
-# 阶段动态解析：dsh_state.current → env YXSPEC_STAGE → config stage
-- id: yxspec-tool-guard
-  name: '@yxspec/tool-guard'
+# ---- POC: yxspec-commands（阶段命令注册表验证）----
+- id: yxspec-commands
+  name: '@yxspec/commands'

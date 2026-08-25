@@ -1,0 +1,10 @@
+{
+  "name": "@yxspec/commands",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "YXSpec 阶段命令注册表：把 25 个 /yxspec:* 命令经 harness 注册表路由，取代网关的 includes 子串匹配（POC 先验证 API）"
+}
