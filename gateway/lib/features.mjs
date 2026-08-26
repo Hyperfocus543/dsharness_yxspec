@@ -180,9 +180,9 @@ export const FEATURES = {
   'coding-rules': {
     id: 'coding-rules',
     name: '工程编码规则（coding-rules）',
-    desc: '编码入口唯一：分层/命名/禁止项强制规范（coding-rules skill，依赖 harness 挂 skills 目录）',
+    desc: '编码入口唯一：分层/类型/工具库/日志/通信/API 规范/禁止事项强制规范（skill 已灌真，指针指向框架权威源）',
     appliesTo: ['swe_coding_do'],
-    cost: 'medium', depends: ['yxspec skill'], available: false, defaultEnabled: false,
+    cost: 'medium', depends: [], available: true, defaultEnabled: true,
     ruleFile: null, maxChars: 0,
   },
   // ---------- 纯 UI 功能（uiOnly：不进 agent prompt，只控制前端功能卡显隐）----------

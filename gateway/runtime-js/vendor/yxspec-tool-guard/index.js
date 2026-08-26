@@ -1,13 +1,12 @@
 // =============================================================================
-// @yxspec/tool-guard — YXSpec 工具守卫 + 门控结构性化（阶段 3）
+// @yxspec/tool-guard — YXSpec 工具守卫 + 门控结构性化（方向 A：全 25 阶段）
 // =============================================================================
-// 目标：把「coding 阶段只许 fs/bash」+「跳级派活禁止」从 prompt 软约束
-//       → 结构性硬约束。
+// 目标：把「阶段工具面」+「跳级派活禁止」从 prompt 软约束 → 结构性硬约束。
 //
-// 两个硬约束：
-//   1. 工具裁剪：coding 类阶段（restrictTools）只允许 fs/bash/read + 状态工具，
-//      白名单外工具调用直接 deny（模型拿到失败反馈，自主改用白名单工具）。
-//   2. 门控检查：当前阶段的上游阶段未完成（dsh_state 里非 done）→ 结构性
+// 两个硬约束（guard 回调每次工具调用实时解析阶段后生效）：
+//   1. 工具裁剪：每个阶段按大类专属白名单，白名单外工具调用直接 deny
+//      （模型拿到失败反馈，自主改用白名单工具）。
+//   2. 门控检查：当前阶段上游阶段未完成（dsh_state 里非 done）→ 结构性
 //      拒绝该阶段全部工具调用（禁行），模型被迫停下，无法跳过上游。
 //
 // 当前阶段来源（实时解析，guard 回调每次调用时读取）：
@@ -21,13 +20,38 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-/** 阶段 → 白名单工具（restrictTools 阶段，与网关 stages.mjs 一致）。 */
+/** 阶段 → 白名单工具。全 25 阶段，按阶段大类分面（与网关 stages.mjs 语义一致）。 */
 const STAGE_ALLOWED = {
-  swe_coding_do: ['fs', 'bash', 'read'],
-  swe_static_verify: ['fs', 'bash', 'read'],
-  swe_coding_verify: ['fs', 'bash', 'read'],
-  swe_coding_verify_pc: ['fs', 'bash', 'read'],
-  sqt_auto_test: ['fs', 'bash', 'read'],
+  // 分析/需求类（PRD/SYS/SWE/SQT 需求分析、架构、策略）：检索 + 状态 + 只读
+  init: ['fs', 'read', 'bash'],
+  sys_elicitation: ['fs', 'read', 'bash', 'weknora_ask'],
+  sys_analysis: ['fs', 'read', 'bash', 'weknora_ask'],
+  sys_arch: ['fs', 'read', 'bash', 'weknora_ask'],
+  hwe_analysis: ['fs', 'read', 'bash', 'weknora_ask'],
+  swe_analysis: ['fs', 'read', 'bash', 'weknora_ask'],
+  swe_arch: ['fs', 'read', 'bash', 'weknora_ask'],
+  swe_arch_if: ['fs', 'read', 'bash', 'weknora_ask'],
+  swe_coding_plan: ['fs', 'read', 'bash'],
+  // 编码/验证类：只读 + 写（write/fs/bash），不做外部检索
+  swe_coding_do: ['fs', 'read', 'write', 'bash'],
+  swe_static_verify: ['fs', 'read', 'write', 'bash'],
+  swe_coding_verify: ['fs', 'read', 'write', 'bash'],
+  swe_coding_verify_pc: ['fs', 'read', 'write', 'bash'],
+  swe_unit_verify: ['fs', 'read', 'bash'],
+  swe_integration_verify: ['fs', 'read', 'bash'],
+  // 测试类
+  sqt_strategy: ['fs', 'read', 'bash', 'weknora_ask'],
+  sqt_tr: ['fs', 'read', 'bash', 'weknora_ask'],
+  sqt_case_design: ['fs', 'read', 'bash', 'weknora_ask'],
+  sqt_script_gen: ['fs', 'read', 'write', 'bash'],
+  sqt_auto_test: ['fs', 'read', 'write', 'bash'],
+  sqt_defect_feedback: ['fs', 'read', 'bash', 'weknora_ask'],
+  // 发布/合规/追溯类
+  comp: ['fs', 'read', 'bash'],
+  traceability: ['fs', 'read', 'bash'],
+  swe_sdk_release: ['fs', 'read', 'bash'],
+  swe_release: ['fs', 'read', 'bash'],
+  swe_release_promote: ['fs', 'read', 'bash'],
 };
 
 /** 通用允许工具（goal/todo 状态更新必须放行，否则阶段执行卡死）。 */
@@ -42,10 +66,12 @@ const STAGE_UPSTREAM = {
   swe_analysis: ['sys_arch'],
   swe_arch: ['swe_analysis'],
   swe_arch_if: ['swe_arch'],
+  swe_detail: ['swe_arch_if'], // 废弃节点，保留门控定义
   swe_coding_plan: ['swe_arch_if'],
   swe_coding_do: ['swe_coding_plan'],
   swe_static_verify: ['swe_coding_do'],
   swe_coding_verify: ['swe_static_verify'],
+  swe_coding_verify_pc: ['swe_static_verify'], // 变体节点（补漏）
   swe_unit_verify: ['swe_coding_verify'],
   swe_integration_verify: ['swe_unit_verify'],
   sqt_strategy: ['swe_integration_verify'],
@@ -62,6 +88,9 @@ const STAGE_UPSTREAM = {
 };
 
 export const name = 'yxspec-tool-guard';
+
+/** 导出白名单表（单测/驾驶舱诊断复用）。 */
+export { STAGE_ALLOWED };
 
 /** 声明对 tools 服务的依赖（cordis 注入检查）。 */
 export const inject = ['tools'];
@@ -98,7 +127,7 @@ function readCurrentStage() {
 }
 
 export function apply(ctx, input = {}) {
-  ctx.logger?.info?.('[yxspec-tool-guard] apply: 动态阶段守卫激活');
+  ctx.logger?.info?.('[yxspec-tool-guard] apply: 全阶段守卫激活');
 
   // 注册结构性守卫：返回字符串 = 拒绝执行；返回 undefined = 放行
   // 阶段每次调用实时解析（优先级）：
@@ -120,7 +149,7 @@ export function apply(ctx, input = {}) {
     const upstream = STAGE_UPSTREAM[stage] ?? null;
     const gated = !!upstream;
 
-    // 门控检查：上游未完成 → 禁行该阶段全部工具
+    // 门控检查：上游未完成 → 禁行该阶段全部工具（init 无上游，始终放行）
     if (gated) {
       const states = readStageStates();
       if (states) {
@@ -131,7 +160,7 @@ export function apply(ctx, input = {}) {
       }
     }
 
-    // 工具裁剪：restrictTools 阶段白名单外 deny
+    // 工具裁剪：该阶段白名单外 deny
     if (allowed && !allowed.includes(name)) {
       return `[yxspec-tool-guard] 阶段 ${stage} 仅允许 ${allowed.join('/')}，工具 ${name} 被结构性拦截`;
     }
