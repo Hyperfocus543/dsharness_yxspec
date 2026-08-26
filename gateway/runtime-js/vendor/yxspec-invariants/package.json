@@ -1,0 +1,10 @@
+{
+  "name": "@yxspec/invariants",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "YXSpec 跨事件不变量：阶段产物落盘前上游必须 done（方向 C POC）"
+}

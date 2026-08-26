@@ -185,7 +185,7 @@ Claude Code 是终端交互、人驱动的开发/定义引擎；DSH 是 headless
 | P1（已完成）| guard 全 25 阶段白名单 + write 修复 | 第二期方向 A | 全阶段工具面 + 单测 62/62 + runtime 冒烟 |
 | P2（已完成）| 修 `TEMPLATES_ROOT`（15 模板命中 + prompt 实测含模板）+ 升级 `prd-gq6`（补 IQ/读权威源）+ skill() 调起实证 | 本期 | 模板真注入 + skill() 调起成功 |
 | P3（已完成）| 盘点 15 skill 灌真状态 + 灌真 `coding-rules`（空壳→指针，启用特征）+ 修 `sys-aq`（错引 SYS.3→SYS.2 + 补读权威源）+ 两 skill() 端到端验证 | 本期 | 去占位，指针型 skill 设计实证（模型主动读权威源全文）|
-| P4（后续）| 方向 B agent preset / C invariants / D subagent | 第二期方向 B/C/D | 阶段=装配、原生不变量、并行验证 |
+| P4（已完成探明）| **方向 B（agent preset）**：SDK 场景不可达——agent-spine-demo 不含 `mount()`，SDK 通道不暴露 per-阶段装配，`recompose` 仅 blank agent 有效 → 退化方案 = 已完成的 guard 全阶段工具面 + skill 灌真。**方向 C（invariants）**：SDK 可达（服务/注册/installer/事件监听全程实证），但 `fail()` 抛 InvariantError **不传导到 turn**（诊断/自证语义，非结构性拒绝）→ 定位 = 装配/配置完整性校验，与 guard 互补。**方向 D（subagent）**：SDK 不可达——`tool-subagent` 存在但 jsonrpc-demo / agent-spine-demo 未装配，模型工具面无 subagent | 第二期方向 B/C/D | 可达性结论 + 定位修正 |
 
 ---
 
