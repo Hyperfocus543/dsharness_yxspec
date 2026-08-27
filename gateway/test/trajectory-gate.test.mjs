@@ -298,6 +298,11 @@ console.log('== 16) 回滚幂等：同一 rollbackId 重复 → already，不重
   assert('回滚旧轨迹也允许（id 显式指定）', r3.ok === true && r3.already === false && r3.seq === 1, JSON.stringify(r3))
   const lines3 = readFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-001.jsonl'), 'utf8').trim().split('\n')
   assert('旧轨迹文件追加 rollback 行', lines3.length === 2, String(lines3.length))
+  // 回归：重复回滚同一条旧轨迹（显式 id）必须幂等，不得再追加审计行
+  const r4 = rollbackTrajectory('sqt_strategy', 'sqt_strategy-1', 'again-2')
+  assert('重复回滚同一旧轨迹 → already=true', r4.ok === true && r4.already === true, JSON.stringify(r4))
+  const lines4 = readFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-001.jsonl'), 'utf8').trim().split('\n')
+  assert('旧轨迹仍 2 行（幂等）', lines4.length === 2, String(lines4.length))
 }
 
 console.log('== 17) 回滚边界：未知阶段 / 无轨迹 / rollbackId 校验 ==')

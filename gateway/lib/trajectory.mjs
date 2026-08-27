@@ -118,7 +118,11 @@ export function rollbackTrajectory(stage, rollbackId = null, reason = null) {
     if (bySeq) seq = want
   }
   const id = isValidRollbackId(stage, rollbackId) ? rollbackId : `${stage}-${seq}`
-  if (target.rollbackId === id) {
+  // 幂等判定必须落在「实际回滚的那条记录」上：seq 可能因显式 rollbackId
+  // 指向旧轨迹（target 只是 latest，其 rollbackId 与本次 id 未必同 seq），
+  // 否则同一旧轨迹会被重复追加 rollback 审计行。
+  const alreadyMarked = (all.find((r) => r.seq === seq)?.rollbackId ?? null) === id
+  if (alreadyMarked) {
     // 幂等：已标记过同一 rollbackId，不再追加（审计留档唯一）
     return {
       ok: true,

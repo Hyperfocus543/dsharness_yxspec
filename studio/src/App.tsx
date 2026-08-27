@@ -25,6 +25,8 @@ import { I } from './components/ui/icons';
 import { useProjectStore } from './store/projectStore';
 import { useStageStore, findCurrentStage, STAGE_TABLE } from './store/stageStore';
 import { useToastStore } from './store/toastStore';
+import { useGatewayStore } from './store/gatewayStore';
+import { GatewayStatusBar } from './components/layout/GatewayStatusBar';
 import { useChatStore } from './store/chatStore';
 import { STAGE_ORDER } from './data/stage-mapping';
 import type { StageMapping, StageToken } from './data/types';
@@ -81,6 +83,9 @@ const App: React.FC = () => {
   React.useEffect(() => {
     loadFeatures().catch(() => {});
   }, [loadFeatures]);
+  // 网关连接指示条：挂载即启动全局探活（8s 周期），卸载停止
+  const startGatewayCheck = useGatewayStore((s) => s.start);
+  React.useEffect(() => startGatewayCheck(), [startGatewayCheck]);
   // ui-report 是否启用（feature 未加载/未找到 → 关）
   const reportEnabled = React.useMemo(
     () => features.some((f) => f.id === 'ui-report' && f.enabled),
@@ -202,6 +207,8 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* 网关连接状态指示条（全局探活，点击重探测） */}
+          <GatewayStatusBar />
           {project && (
             <span className="text-xs text-zinc-600 hidden sm:inline">
               <span className="font-mono">{project.meta.spec_id || '—'}</span>

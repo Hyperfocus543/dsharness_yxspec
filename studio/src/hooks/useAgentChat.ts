@@ -10,6 +10,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useStageStore } from '../store/stageStore';
 import { useChatStore } from '../store/chatStore';
 import { useModelStore } from '../store/modelStore';
+import { useGatewayStore } from '../store/gatewayStore';
 import { STAGE_TABLE } from '../data/stage-mapping';
 import type { ChatItem } from '../store/chatStore';
 
@@ -31,35 +32,10 @@ export function useAgentChat() {
   // 取消本轮标记：cancel() 置位后，send() 的 catch 不再报原始错误，改报"已取消"
   const cancelRef = React.useRef(false);
 
-  // 健康检查：Track B 网关暴露 /health（server.mjs）
-  // 关键：不能只在挂载时测一次——网关重启/换绑后 connState 会永远卡 err，
-  // 而派活按钮 disabled 依赖它 → 表现为"对话框没反应"。
-  // 方案：定时重试（8s），且暴露 recheckConnection 供发送前补测。
-  const [connState, setConnState] = React.useState<'checking' | 'ok' | 'err'>('checking');
-  const connStateRef = React.useRef(connState);
-  connStateRef.current = connState;
-  const checkHealth = React.useCallback(async (): Promise<boolean> => {
-    try {
-      const r = await fetch(`${GATEWAY_URL}/health`, { signal: AbortSignal.timeout(4000) });
-      const ok = r.ok;
-      setConnState(ok ? 'ok' : 'err');
-      return ok;
-    } catch {
-      setConnState('err');
-      return false;
-    }
-  }, []);
-  React.useEffect(() => {
-    let cancelled = false;
-    checkHealth();
-    const timer = setInterval(() => {
-      if (!cancelled) checkHealth();
-    }, 8000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [checkHealth]);
+  // 网关连接状态：统一走 gatewayStore（header 指示条 + 终端共用同一探活源）
+  // 定时探活由 App 启动（gatewayStore.start）；发送前补测用 store.check（幂等）。
+  const connState = useGatewayStore((s) => s.connState);
+  const checkHealth = useGatewayStore((s) => s.check);
 
   // 快速对话可用性探测：POST /api/chat 网关返回 501 → 未实现，隐藏快速按钮。
   // 网关未起/网络错误时保持 unknown（不隐藏，用户仍可用 Agent 模式）。
@@ -86,7 +62,7 @@ export function useAgentChat() {
     if (!content || loading) return;
     // 发送前补测连接：connState 可能因网关重启/换绑停在 err，导致按钮禁用但实际可达。
     // 补测成功 → 更新 connState（按钮下次可用）；仍失败 → 报错提示，不静默吞掉。
-    let connected = connStateRef.current === 'ok';
+    let connected = useGatewayStore.getState().connState === 'ok';
     if (!connected) {
       connected = await checkHealth();
     }

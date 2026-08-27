@@ -13,7 +13,7 @@ import { CostDashboard } from './CostDashboard';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { renderInline } from '../../utils/markdown';
-import { Icon, Badge } from '../ui';
+import { Icon, Badge, Skeleton } from '../ui';
 import { I } from '../ui/icons';
 
 // 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
@@ -231,10 +231,17 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
 interface CockpitProps {
   stages: Record<string, StageStatus>;
   currentStage: string | null;
+  /** 阶段状态是否仍在加载（首次拉取/网关慢）：加载中不渲染虚假的"全 pending"网格，改为骨架屏 */
+  loading?: boolean;
   onSelectStage?: (token: string) => void;
 }
 
-export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onSelectStage }) => {
+export const StageCockpit: React.FC<CockpitProps> = ({
+  stages,
+  currentStage,
+  loading,
+  onSelectStage,
+}) => {
   // 视图互斥状态机：grid / flow / gates / traj 四选一。
   // traj 为独立视图（而非覆盖在 grid 上的叠加状态）——否则会出现
   // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
@@ -260,19 +267,31 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
 
   return (
     <div className="space-y-3">
-      {/* 顶栏：整体进度条 + 当前阶段（合并紧凑，替代原两张独立大卡） */}
+      {/* 整体进度统计：加载中不兜底渲染"全 pending"（会把未拉取阶段误显示成未开始），
+          改为骨架条 + 占位数字，避免 0/25 假象后整屏突变。 */}
       <div className="bg-white rounded-lg border border-zinc-200 px-3 py-2.5 space-y-2">
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex-1 min-w-[180px]">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-semibold text-zinc-700">整体进度</span>
-              <span className="text-xs font-mono text-zinc-600">
-                {done}/{total}（{pct}%）
-              </span>
+              {loading ? (
+                <Skeleton className="w-16 h-3.5" />
+              ) : (
+                <span className="text-xs font-mono text-zinc-600">
+                  {done}/{total}（{pct}%）
+                </span>
+              )}
             </div>
             <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="整体进度">
               <div className="bg-sage-500 h-2 transition-all" style={{ width: `${pct}%` }} />
             </div>
+            {loading ? (
+              <Skeleton className="w-full h-2 rounded-full" />
+            ) : (
+              <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="整体进度">
+                <div className="bg-sage-500 h-2 transition-all duration-300" style={{ width: `${pct}%` }} />
+              </div>
+            )}
           </div>
           {/* 当前阶段（右对齐紧凑） */}
           <div className="flex items-center gap-2 shrink-0">
@@ -431,9 +450,24 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
                   <span className="px-2 py-0.5 bg-zinc-200 rounded text-xs text-zinc-600">{GROUP_LABEL[group]}</span>
                   {group}（{tokens.length} 阶段）
                 </h3>
-                {/* 面板宽 ~820px，3 列均衡；小窗回退 2 列 */}
                 <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-                  {tokens.map((token) => {
+                  {loading
+                    ? // 加载骨架：与原卡片同构（状态色块/标题/副标题/底部两行），占位稳定不跳动
+                      tokens.map((token) => (
+                        <div key={token} className="rounded-lg border-2 border-zinc-200 p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Skeleton className="w-12 h-3" />
+                            <Skeleton className="w-4 h-4" />
+                          </div>
+                          <Skeleton className="w-20 h-4" />
+                          <Skeleton className="w-28 h-3" />
+                          <div className="flex items-center justify-between pt-1">
+                            <Skeleton className="w-10 h-3" />
+                            <Skeleton className="w-14 h-3" />
+                          </div>
+                        </div>
+                      ))
+                    : tokens.map((token) => {
                     const mapping = STAGE_TABLE[token];
                     const status = stages[token] || {
                       token,
