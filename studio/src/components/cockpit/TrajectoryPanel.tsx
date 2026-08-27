@@ -90,7 +90,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
 
   const gate = view.status;
   const badge = gate ? GATE_BADGE[gate.status] : null;
-  const rows = view.rows.slice(-10).reverse(); // 最近 10 条，新→旧
+  const rows = (view.rows ?? []).slice(-10).reverse(); // 最近 10 条，新→旧
 
   return (
     <div className="space-y-3">
@@ -130,7 +130,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
 
       {/* 摘要条：执行次数 / 最近状态 / token / 耗时 */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <SummaryTile label="执行次数" value={String(view.totalRuns)} />
+        <SummaryTile label="执行次数" value={String(view.totalRuns ?? 0)} />
         <SummaryTile label="最近状态" value={gate ? (REC_STATUS[gate.status]?.label ?? gate.status) : '—'} valueCls={gate ? REC_STATUS[gate.status]?.cls : undefined} />
         <SummaryTile label="最近 Token" value={gate ? String(gate.tokens ?? 0) : '—'} />
         <SummaryTile label="工具调用" value={gate ? String(gate.toolCalls ?? 0) : '—'} />
@@ -153,12 +153,13 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
               const st = REC_STATUS[r.status] || REC_STATUS.unverified;
               const toolCalls = (r.tools ?? []).filter((t) => t.type === 'tool/call').length;
               const toolOks = (r.tools ?? []).filter((t) => t.type === 'tool/result' && t.ok).length;
+              const durMs = (r.finishedAt ?? 0) - (r.startedAt ?? 0);
               return (
                 <div key={`${r.seq}-${r.startedAt}`} className="border border-zinc-200 rounded-lg bg-white px-2.5 py-2">
                   <div className="flex items-center gap-2 text-xs flex-wrap">
                     <span className="font-mono text-zinc-500 shrink-0">#{r.seq}</span>
                     <span className={`font-medium ${st.cls}`}>{st.label}</span>
-                    <span className="text-zinc-400 shrink-0">{fmtMs((r.finishedAt ?? 0) - r.startedAt)}</span>
+                    <span className="text-zinc-400 shrink-0">{fmtMs(durMs)}</span>
                     <span className="text-zinc-400 shrink-0 tabular-nums">{r.cost?.tokens ?? 0} tok</span>
                     <span className="text-zinc-400 shrink-0 tabular-nums">T{r.turnCount ?? 0}·S{r.stepCount ?? 0}</span>
                     <span className="text-zinc-400 shrink-0 tabular-nums" title={`工具调用 ${toolCalls} 次，成功 ${toolOks} 次`}>
@@ -169,8 +170,8 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
                         {r.reason}
                       </span>
                     )}
-                    <span className="ml-auto text-[10px] text-zinc-300 font-mono truncate max-w-[120px]" title={r.sessionId}>
-                      {r.sessionId}
+                    <span className="ml-auto text-[10px] text-zinc-300 font-mono truncate max-w-[120px]" title={r.sessionId ?? ''}>
+                      {r.sessionId ?? ''}
                     </span>
                   </div>
                   {/* 工具调用瀑布（行内缩进） */}
