@@ -90,19 +90,21 @@ FIX_PROMPT='你是 yxspec-studio（React/Vite 前端 + Node 网关）的夜间�
 - vitest 脆弱断言
 - gateway lib 死分支
 - 空 catch 吞错、明显 off-by-one、错误的条件
+- 前端 UI 质量问题：无 key 列表渲染、硬编码色值/间距（应收敛到 Tailwind v4 @theme token）、缺 aria-label/focus-visible、明显重渲染
 约束：
 - 只改 gateway/ 与 studio/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓
 - 一次一件，改动最小，单 commit 单主题
 - 改完必须跑 cd studio && npx tsc --noEmit 和 cd studio && npm test，0 error 全过才算完成
 - 报告：你改了哪个文件、什么问题、怎么验证的（200 字内）'
 
-PM_PROMPT='你是 yxspec-studio（车载 ASPICE 驾驶舱，React/Vite 前端）的产品经理视角优化代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：从产品经理角度审视网页使用逻辑，找 1 处体验问题并优化。
+PM_PROMPT='你是 yxspec-studio（车载 ASPICE 驾驶舱，React/Vite + Tailwind v4 前端）的产品经理视角优化代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：从产品经理角度审视网页使用逻辑，找 1 处体验问题并优化。
 优先检查：
 - App.tsx 导航流/信息层级
 - StageCockpit 空态/加载态/错误态
 - NextCommand 建议排序/可达性
 - 状态条/进度展示的可读性
 - 组件交互（按钮 disabled、loading、空列表提示）
+- 驾驶舱整体视觉一致性（沿用 zinc/emerald 配色，硬编码色值收敛到 @theme token；动效用 CSS transition transform/opacity 200-300ms；关键交互补 aria-label 与 focus-visible）
 约束：
 - 只改 studio/src/ 下文件
 - 一次一件，视觉改动最小（沿用 zinc/emerald 配色），单 commit 单主题
@@ -114,7 +116,9 @@ FEAT_PROMPT='你是 yxspec-studio（车载 ASPICE 驾驶舱，React/Vite 前端 
 - 网关连接状态指示条（前端探活 /api/health）
 - 阶段概览导出（当前阶段/进度/产物数一键复制）
 - 成本估算角标（显示本周已用 token/费用趋势）
-- 会话历史「最近 5 个」快捷切换
+- 会话历史「最近 5 个」快捷切换（已做，可做排序/分组增强）
+- 轨迹面板增强（阶段回放/筛选/摘要）
+- 门控徽标 tooltip 详情（hover 显示门控证据细节）
 约束：
 - 前后端都可改（gateway/ 加端点需同步前端调用）
 - 一次只做 1 个功能，单 commit 单主题
