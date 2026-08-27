@@ -10,7 +10,7 @@ set -u
 ROOT="D:/Work/04_Temp/yxspec-studio-release"
 NIGHT="$ROOT/night"
 CLAUDE_BIN="/c/Users/Administrator/AppData/Roaming/npm/claude"
-MAX_ROUNDS_PER_BLOCK=6          # 每块最多轮数
+MAX_ROUNDS_PER_BLOCK=3          # 精简验证轮（确认稳定后改回 6 整晚跑）
 MAX_CONSECUTIVE_FAIL=3          # 连续失败停块
 MAX_TOTAL_MINUTES=360           # 总时长上限（6h）
 START=$(date +%s)
@@ -34,17 +34,21 @@ check_stop() {
   return 1
 }
 
-log() { echo "[$(date '+%H:%M:%S')] $*"; tee -a "$SUMMARY"; }
+log() {
+  local msg="[$(date '+%H:%M:%S')] $*"
+  echo "$msg"
+  echo "$msg" >> "$SUMMARY"
+}
 
 # 子代理提示词（每块替换 TASK 段）
 # 注意：夜间无人值守用 --dangerously-skip-permissions 全自动（不弹权限批准）
 run_agent() {
   local BLOCK="$1" ROUND="$2" PROMPT="$3" OUT="$NIGHT/log/$BLOCK-r$ROUND.out"
   log "  → 子代理 $BLOCK 第${ROUND}轮 (${OUT})"
-  "$CLAUDE_BIN" -p "$PROMPT" \
+  (cd "$ROOT" && "$CLAUDE_BIN" -p "$PROMPT" \
     --dangerously-skip-permissions \
     --output-format text \
-    2>&1 | tee "$OUT"
+    2>&1 | tee "$OUT")
   return ${PIPESTATUS[0]}
 }
 
