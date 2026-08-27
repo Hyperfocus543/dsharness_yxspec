@@ -270,7 +270,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
                 {done}/{total}（{pct}%）
               </span>
             </div>
-            <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden">
+            <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="整体进度">
               <div className="bg-sage-500 h-2 transition-all" style={{ width: `${pct}%` }} />
             </div>
           </div>
@@ -282,7 +282,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
             </span>
             {currentStage ? (
               <>
-                <span className="text-sm font-bold text-emerald-700 font-mono">{currentStage}</span>
+                <span className="text-sm font-bold text-emerald-800 font-mono">{currentStage}</span>
                 {currentMapping && <span className="text-xs text-zinc-500">（{currentMapping.aspice}）</span>}
                 {currentStatus && <Badge status={currentStatus.status} />}
               </>
@@ -305,7 +305,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
       <div className="flex items-center gap-1.5 flex-wrap">
         <div className="flex items-center gap-1 bg-zinc-100 border border-zinc-200 rounded p-0.5 w-fit">
           <button
-            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
               view === 'grid' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => setView('grid')}
@@ -315,7 +315,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
             网格
           </button>
           <button
-            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
               view === 'flow' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => setView('flow')}
@@ -325,7 +325,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
             流向
           </button>
           <button
-            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
               view === 'gates' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => setView('gates')}
@@ -335,7 +335,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
             门控
           </button>
           <button
-            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+            className={`px-3 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
               view === 'traj' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => {
@@ -356,13 +356,14 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
         </div>
         {/* 执行成本折叠开关 */}
         <button
-          className={`text-xs px-2.5 py-1.5 rounded-md border transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+          className={`text-xs px-2.5 py-1.5 rounded-md border transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
             showCost
               ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
               : 'border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300'
           }`}
           onClick={() => setShowCost(!showCost)}
           title="执行成本（审计账本聚合）"
+          aria-expanded={showCost}
         >
           <Icon name={I.chartBar} size={13} />
           成本
@@ -370,9 +371,11 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
         </button>
       </div>
 
-      {/* 执行成本（折叠区，默认收起 —— 首屏专注阶段网格） */}
+      {/* 执行成本（折叠区，默认收起 —— 首屏专注阶段网格）。
+          展开/收起用 opacity+translate 入场（ui-animation：面板 reveal 150ms），
+          prefers-reduced-motion 下退化为瞬显。 */}
       {showCost && (
-        <div className="bg-white rounded-lg border border-zinc-200 p-3">
+        <div className="bg-white rounded-lg border border-zinc-200 p-3 animate-fade-in-up">
           <CostDashboard />
         </div>
       )}
