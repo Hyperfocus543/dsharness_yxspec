@@ -168,9 +168,14 @@ export function snapshotWithFiles() {
   return snapshot()
 }
 
-/** 计算 current：第一个不是 done/skipped 的阶段。 */
+/** 计算 current：第一个不是 done/skipped 的活跃阶段。
+ * 废弃/变体阶段（swe_detail / swe_coding_verify_pc）不参与推进：
+ * 与 reconcileState / 周报口径 / /api/resume 一致，否则 swe_arch_if 完成后
+ * current 会永远卡在永不完成的 swe_detail 上。 */
 export function computeCurrent(state) {
   for (const token of Object.keys(STAGES)) {
+    const meta = STAGES[token]
+    if (meta.deprecated || meta.variant) continue
     const s = state.stages?.[token]
     if (s && s.state !== 'done' && s.state !== 'skipped') return token
   }

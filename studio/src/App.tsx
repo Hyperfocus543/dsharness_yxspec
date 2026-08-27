@@ -309,6 +309,7 @@ const App: React.FC = () => {
                     stages,
                     currentStage,
                     currentMapping,
+                    loading: loadingStages,
                     suggestNext,
                     selectedTaskFile,
                     onTaskFileChange: setSelectedTaskFile,
@@ -377,6 +378,7 @@ function renderFunctionCard(
     stages: ReturnType<typeof useStageStore.getState>['stages'];
     currentStage: string | null;
     currentMapping: StageMapping | null;
+    loading: boolean;
     suggestNext: (s: StageToken) => Promise<string | null>;
     selectedTaskFile: string;
     onTaskFileChange: (f: string) => void;
@@ -401,6 +403,7 @@ function renderFunctionCard(
           <StageCockpit
             stages={ctx.stages}
             currentStage={ctx.currentStage}
+            loading={ctx.loading}
             onSelectStage={ctx.onSelectStage}
           />
         </div>

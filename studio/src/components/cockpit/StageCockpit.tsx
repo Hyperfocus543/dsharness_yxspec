@@ -13,6 +13,9 @@ import { CostDashboard } from './CostDashboard';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { renderInline } from '../../utils/markdown';
+import { buildStageOverview } from '../../utils/stageOverview';
+import { useProjectStore } from '../../store/projectStore';
+import { useToastStore } from '../../store/toastStore';
 import { Icon, Badge, Skeleton } from '../ui';
 import { I } from '../ui/icons';
 
@@ -247,6 +250,9 @@ export const StageCockpit: React.FC<CockpitProps> = ({
   // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
   const [view, setView] = React.useState<'grid' | 'flow' | 'gates' | 'traj'>('grid');
   const [showCost, setShowCost] = React.useState(false);
+  const [copiedOverview, setCopiedOverview] = React.useState(false);
+  const specId = useProjectStore((s) => s.current?.meta?.spec_id || '');
+  const pushToast = useToastStore((s) => s.push);
   // 「轨迹」视图的选中阶段（从网格点选 / 视图内 select 切换，只读，Phase 1 不接门控写回）
   const [trajStage, setTrajStage] = React.useState<StageToken | null>(null);
 
@@ -265,6 +271,20 @@ export const StageCockpit: React.FC<CockpitProps> = ({
     : null;
   const currentStatus = currentStage ? stages[currentStage] : null;
 
+  // 一键复制阶段概览：当前阶段/整体进度/产物数 → Markdown 剪贴板（周报/群里直接粘贴）。
+  // 纯前端组装（stageOverview.ts 纯函数），不依赖网关；剪贴板不可用时静默降级。
+  const handleCopyOverview = async () => {
+    const md = buildStageOverview(stages, currentStage, { specId });
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopiedOverview(true);
+      pushToast('success', '阶段概览已复制（Markdown）');
+      window.setTimeout(() => setCopiedOverview(false), 2000);
+    } catch {
+      pushToast('warn', '复制失败：剪贴板不可用');
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* 整体进度统计：加载中不兜底渲染"全 pending"（会把未拉取阶段误显示成未开始），
@@ -282,14 +302,11 @@ export const StageCockpit: React.FC<CockpitProps> = ({
                 </span>
               )}
             </div>
-            <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="整体进度">
-              <div className="bg-sage-500 h-2 transition-all" style={{ width: `${pct}%` }} />
-            </div>
             {loading ? (
               <Skeleton className="w-full h-2 rounded-full" />
             ) : (
               <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="整体进度">
-                <div className="bg-sage-500 h-2 transition-all duration-300" style={{ width: `${pct}%` }} />
+                <div className="bg-sage-500 h-2 rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
               </div>
             )}
           </div>
@@ -310,13 +327,28 @@ export const StageCockpit: React.FC<CockpitProps> = ({
             )}
           </div>
         </div>
-        {/* 状态图例（inline，同卡片底色语义） */}
-        <div className="flex gap-2 text-xs flex-wrap">
-          <Legend color="sage" label="已完成" count={counts.completed || 0} />
-          <Legend color="amber" label="进行中" count={counts.in_progress || 0} />
-          <Legend color="orange" label="待审查" count={counts.pending_review || 0} />
-          <Legend color="red" label="被拒/阻塞" count={(counts.rejected || 0) + (counts.blocked || 0)} />
-          <Legend color="gray" label="未开始" count={counts.pending || 0} />
+        {/* 状态图例（inline，同卡片底色语义）+ 复制概览 */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-2 text-xs flex-wrap">
+            <Legend color="sage" label="已完成" count={counts.completed || 0} />
+            <Legend color="amber" label="进行中" count={counts.in_progress || 0} />
+            <Legend color="orange" label="待审查" count={counts.pending_review || 0} />
+            <Legend color="red" label="被拒/阻塞" count={(counts.rejected || 0) + (counts.blocked || 0)} />
+            <Legend color="gray" label="未开始" count={counts.pending || 0} />
+          </div>
+          {/* 一键复制阶段概览（当前阶段/进度/产物数 → Markdown，粘贴到周报/群里） */}
+          <button
+            className={`text-xs px-2 py-0.5 rounded-md border transition-all active:scale-[0.98] inline-flex items-center gap-1 ${
+              copiedOverview
+                ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                : 'border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
+            }`}
+            onClick={handleCopyOverview}
+            title="复制阶段概览（当前阶段/整体进度/产物数，Markdown）"
+          >
+            <Icon name={copiedOverview ? I.check : I.clipboard} size={12} weight="bold" />
+            {copiedOverview ? '已复制' : '复制概览'}
+          </button>
         </div>
       </div>
 
