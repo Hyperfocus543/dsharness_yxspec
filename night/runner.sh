@@ -76,7 +76,17 @@ commit_and_push() {
     echo "  - commit: $(cd "$ROOT" && git rev-parse --short HEAD) @ $(date '+%H:%M')" >> "$SUMMARY"
     return 0
   else
-    log "    ❌ commit 失败，reset 回块起始"
+    # commit 失败：先把改动保存为 patch（永不丢），再 reset 回块起始
+    # （教训：无脑 reset --hard 会把子代理的有效改动一起丢掉，靠 reflog 恢复）
+    local PATCH="$NIGHT/log/$BLOCK-r$ROUND-$(date +%H%M%S).patch"
+    (cd "$ROOT" && git diff HEAD > "$PATCH" 2>/dev/null)
+    if [ -s "$PATCH" ]; then
+      log "    ❌ commit 失败，改动已存 ${PATCH##*/}，reset 回块起始"
+      echo "  - 改动存: ${PATCH##*/}（次日 git apply 接回）" >> "$SUMMARY"
+    else
+      log "    ❌ commit 失败（无改动可存），reset 回块起始"
+      rm -f "$PATCH"
+    fi
     (cd "$ROOT" && git reset --hard "$BLOCK_START" >/dev/null 2>&1)
     return 1
   fi
