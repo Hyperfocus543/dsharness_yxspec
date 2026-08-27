@@ -22,12 +22,20 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
   const { dispatch, cancel, sending, cancelling, elapsedSec } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
 
-  // 建议命令计算：先看当前阶段自身是否完成，
+  // 建议命令计算：先看当前阶段自身状态，
+  // pending_review → 建议审查裁决（产物已齐备，重跑会覆盖待审产物）；
   // 未完成 → 推进自己；已完成 → 才考虑下游 / review。
   React.useEffect(() => {
     if (!onSuggest) return;
     setLoading(true);
     const status = stages[stage]?.status;
+    if (status === 'pending_review') {
+      // 产物已存在、等待 review：下一步是审查裁决，不是重跑本阶段
+      const reviewCmd = `/yxspec:review ${stage}`;
+      setNextCmd(reviewCmd);
+      setLoading(false);
+      return;
+    }
     if (status && status !== 'completed') {
       // 当前阶段还没完成：建议直接推进本阶段（review 是完成后才做的事）
       const ownCmd = STAGE_TABLE[stage as keyof typeof STAGE_TABLE]?.command;
