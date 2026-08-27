@@ -135,4 +135,4 @@
 
 # ---- POC: trajectory 订阅探针（临时）----
 - id: poc-trajectory-listener
-  name: 'file:///D:/Work/04_Temp/yxspec-studio-release/gateway/runtime-js/vendor/@yxspec/poc-listener.mjs'
+  name: 'file:///D:/Work/04_Temp/yxspec-studio-release/gateway/runtime-js/vendor/@yxspec/aspice-trajectory/poc-listener.mjs'

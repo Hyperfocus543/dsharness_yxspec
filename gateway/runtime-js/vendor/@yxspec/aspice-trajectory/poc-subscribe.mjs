@@ -27,8 +27,8 @@ const RUNTIME_BIN = `${HARNESS_HOME}/packages/examples/jsonrpc-demo/lib/bin.js`
 
 // 合成装配：主 cordis.yml + 本探针插件（根 ctx 订阅 session/event + 落盘）
 const VENDOR = fileURLToPath(new URL('..', import.meta.url))
-const POC_PLUGIN = `${VENDOR}/poc-listener.mjs`
-const POC_YML = `${VENDOR}/cordis-poc-trajectory.yml`
+const POC_PLUGIN = fileURLToPath(new URL('./poc-listener.mjs', import.meta.url))
+const POC_YML = fileURLToPath(new URL('../cordis-poc-trajectory.yml', import.meta.url))
 const MAIN_YML = fileURLToPath(new URL('../../../config/cordis.yml', import.meta.url))
 let main = readFileSync(MAIN_YML, 'utf8')
 main += `
@@ -56,7 +56,7 @@ const eventsSeen = []
 const started = Date.now()
 try {
   const result = await harness.run('一句话回答：1+1=？（不需要写任何文件）', {
-    sessionId: 'poc-trajectory',
+    sessionId: `poc-trajectory-${Date.now()}`,
     onNotification: (n) => {
       if (n.method === 'session.event') {
         const e = n.params.event
