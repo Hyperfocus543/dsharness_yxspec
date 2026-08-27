@@ -52,6 +52,31 @@ button:not(:disabled):focus-visible,
   }
 }
 
+/* 执行终端底部浮层滑入/滑出（ui-animation：panel reveal，move 曲线 240ms）。
+   收起态 translateY(100%) 移出主区 + visibility hidden（不再占位、不可聚焦）；
+   展开态回到原位。动画只动 transform/visibility，不触发布局重排。
+   prefers-reduced-motion 下退化为瞬显（visibility 仍即时切换，无位移动画）。 */
+.console-slide-up {
+  transform: translateY(100%);
+  visibility: hidden;
+  transition:
+    transform 240ms cubic-bezier(0.25, 1, 0.5, 1),
+    visibility 0s linear 240ms;
+}
+.console-slide-up-open {
+  transform: translateY(0);
+  visibility: visible;
+  transition:
+    transform 240ms cubic-bezier(0.25, 1, 0.5, 1),
+    visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-slide-up,
+  .console-slide-up-open {
+    transition: none;
+  }
+}
+
 /* 自定义滚动条（暖调） */
 ::-webkit-scrollbar {
   width: 8px;

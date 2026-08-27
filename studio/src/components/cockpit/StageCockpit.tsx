@@ -11,6 +11,7 @@ import { FlowView } from './FlowView';
 import { GateOverview } from './GateOverview';
 import { CostDashboard } from './CostDashboard';
 import { TrajectoryPanel } from './TrajectoryPanel';
+import { PipelinePanel } from '../pipeline/PipelinePanel';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { renderInline } from '../../utils/markdown';
 import { buildStageOverview } from '../../utils/stageOverview';
@@ -245,13 +246,15 @@ export const StageCockpit: React.FC<CockpitProps> = ({
   loading,
   onSelectStage,
 }) => {
-  // 视图互斥状态机：grid / flow / gates / traj 四选一。
+  // 视图互斥状态机：grid / flow / gates / traj / pipeline 五选一。
   // traj 为独立视图（而非覆盖在 grid 上的叠加状态）——否则会出现
   // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
-  const [view, setView] = React.useState<'grid' | 'flow' | 'gates' | 'traj'>('grid');
+  // pipeline（原独立「Pipeline」卡，信息与驾驶舱重复）已并入驾驶舱。
+  const [view, setView] = React.useState<'grid' | 'flow' | 'gates' | 'traj' | 'pipeline'>('grid');
   const [showCost, setShowCost] = React.useState(false);
   const [copiedOverview, setCopiedOverview] = React.useState(false);
   const specId = useProjectStore((s) => s.current?.meta?.spec_id || '');
+  const projectPath = useProjectStore((s) => s.current?.path || '');
   const pushToast = useToastStore((s) => s.push);
   // 「轨迹」视图的选中阶段（从网格点选 / 视图内 select 切换，只读，Phase 1 不接门控写回）
   const [trajStage, setTrajStage] = React.useState<StageToken | null>(null);
@@ -404,6 +407,17 @@ export const StageCockpit: React.FC<CockpitProps> = ({
             <Icon name={I.timer} size={14} />
             轨迹
           </button>
+          <button
+            className={`px-3 py-1 rounded text-xs font-medium transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
+              view === 'pipeline' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+            }`}
+            onClick={() => setView('pipeline')}
+            title="Pipeline 编码流水线状态（原独立「Pipeline」卡，信息与驾驶舱重复，已并入）"
+            aria-pressed={view === 'pipeline'}
+          >
+            <Icon name={I.stack} size={14} />
+            Pipeline
+          </button>
         </div>
         {/* 执行成本折叠开关 */}
         <button
@@ -435,6 +449,8 @@ export const StageCockpit: React.FC<CockpitProps> = ({
         <FlowView onSelectStage={onSelectStage} />
       ) : view === 'gates' ? (
         <GateOverview />
+      ) : view === 'pipeline' ? (
+        <PipelinePanel projectPath={projectPath} />
       ) : view === 'traj' && trajStage ? (
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">

@@ -17,7 +17,6 @@ import type {
   StageMapping,
   StageStatus,
   StageToken,
-  Task,
 } from '../data/types';
 import { STAGE_TABLE } from '../data/stage-mapping';
 
@@ -123,13 +122,6 @@ async function browserOpenProject(projectPath: string): Promise<ProjectInfo> {
     meta: parseProgressMeta(raw),
     progress_raw: raw,
   };
-}
-
-async function browserListTasks(_projectPath: string, taskFile: string): Promise<Task[]> {
-  // 裸文件名（如 task_sqt_case_design.md）→ 补 project/tasks/ 前缀（task 文件都在该目录）
-  const file = taskFile.includes('/') ? taskFile : `project/tasks/${taskFile}`;
-  const raw = await fetchText(file);
-  return parseTaskTable(raw);
 }
 
 async function browserComputeAllStatus(_projectPath: string): Promise<StageStatus[]> {
@@ -274,47 +266,6 @@ async function browserListProjects(): Promise<ProjectListItem[]> {
 export async function listProjects(): Promise<ProjectListItem[]> {
   if (isTauri) return []; // Tauri 模式暂无命令，后续可加 Rust 命令
   return browserListProjects();
-}
-
-export async function listTasks(projectPath: string, taskFile: string): Promise<Task[]> {
-  if (isTauri) {
-    const invoke = await getTauriInvoke();
-    if (invoke) return invoke<Task[]>('list_tasks', { projectPath, taskFile });
-  }
-  return browserListTasks(projectPath, taskFile);
-}
-
-export async function updateTask(
-  projectPath: string,
-  taskFile: string,
-  taskId: string,
-  newStatus: string,
-  timestamp: string,
-): Promise<string> {
-  if (isTauri) {
-    const invoke = await getTauriInvoke();
-    if (invoke) {
-      return invoke<string>('update_task', {
-        projectPath,
-        taskFile,
-        taskId,
-        newStatus,
-        timestamp,
-      });
-    }
-  }
-  // 浏览器模式：POST /yxspec/task-status，由 Vite 中间件代理写回 task_*.md
-  // （路径白名单仅 project/tasks/*.md，防穿越/越权）
-  const res = await fetch('/yxspec/task-status', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskFile, taskId, newStatus, timestamp }),
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    throw new Error(data?.error || `写回失败 HTTP ${res.status}`);
-  }
-  return data?.ok ? 'OK' : data?.message || 'OK';
 }
 
 export async function computeAllStatus(projectPath: string): Promise<StageStatus[]> {
@@ -1242,143 +1193,6 @@ function parseProgressMeta(content: string): ProjectInfo['meta'] {
     else if (key === '工期目标') meta.target_schedule = value;
   }
   return meta;
-}
-
-function parseTaskTable(content: string): Task[] {
-  const tasks: Task[] = [];
-  let inTaskSection = false;
-  let headers: string[] = [];
-
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('## 任务表') || trimmed.startsWith('## 任务列表')) {
-      inTaskSection = true;
-      continue;
-    }
-    if (inTaskSection && trimmed.startsWith('## ') && !trimmed.includes('任务')) {
-      break;
-    }
-    if (!inTaskSection || !trimmed.startsWith('|')) continue;
-
-    const cells = trimmed
-      .split('|')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-
-    if (cells.every((c) => c.split('').every((ch) => ch === '-' || ch === ' '))) continue;
-
-    if (headers.length === 0) {
-      headers = cells.map((c) => normalizeHeader(c));
-      continue;
-    }
-
-    if (cells.length < headers.length) continue;
-
-    const task: Task = {
-      id: '',
-      name: '',
-      type: '',
-      module: '',
-      action: '',
-      verify: '',
-      status: 'pending',
-      done: false,
-      started_at: null,
-      finished_at: null,
-      duration: null,
-    };
-
-    for (let i = 0; i < headers.length; i++) {
-      const val = cells[i];
-      const valOpt = val === '—' || val === '-' || val === '' ? null : val;
-      switch (headers[i]) {
-        case 'id':
-          task.id = valOpt || '';
-          break;
-        case 'name':
-          task.name = valOpt || '';
-          break;
-        case 'type':
-          task.type = valOpt || '';
-          break;
-        case 'module':
-          task.module = valOpt || '';
-          break;
-        case 'action':
-          task.action = valOpt || '';
-          break;
-        case 'verify':
-          task.verify = valOpt || '';
-          break;
-        case 'done':
-          task.done = valOpt === 'true';
-          break;
-        case 'started_at':
-          task.started_at = valOpt;
-          break;
-        case 'finished_at':
-          task.finished_at = valOpt;
-          break;
-        case 'duration':
-          task.duration = valOpt;
-          break;
-        case 'status':
-          task.status = parseTaskStatus(val);
-          break;
-      }
-    }
-
-    if (!headers.includes('status')) {
-      task.status = inferStatus(task);
-    }
-
-    tasks.push(task);
-  }
-  return tasks;
-}
-
-function normalizeHeader(s: string): string {
-  const trimmed = s.trim();
-  if (trimmed === 'ID' || trimmed === 'id') return 'id';
-  if (trimmed === '名称') return 'name';
-  if (trimmed === '类型') return 'type';
-  if (trimmed === '模块') return 'module';
-  if (trimmed === '动作') return 'action';
-  if (trimmed === '验证') return 'verify';
-  if (trimmed === '完成') return 'done';
-  if (trimmed === 'started_at' || trimmed === '开始时间') return 'started_at';
-  if (trimmed === 'finished_at' || trimmed === '结束时间') return 'finished_at';
-  if (trimmed === 'duration' || trimmed === '时长') return 'duration';
-  if (trimmed === '状态' || trimmed === 'status') return 'status';
-  return trimmed;
-}
-
-function parseTaskStatus(s: string): Task['status'] {
-  switch (s) {
-    case 'pending':
-      return 'pending';
-    case 'ready':
-      return 'ready';
-    case 'in_progress':
-      return 'in_progress';
-    case 'blocked':
-      return 'blocked';
-    case 'done':
-      return 'done';
-    case 'skipped':
-      return 'skipped';
-    case 'stale':
-      return 'stale';
-    default:
-      return 'pending';
-  }
-}
-
-function inferStatus(task: Task): Task['status'] {
-  if (task.done) return 'done';
-  if (task.started_at && !task.finished_at) return 'in_progress';
-  if (!task.started_at && !task.finished_at) return 'pending';
-  return 'ready';
 }
 
 function parseReviewFromTask(content: string): ReviewEntry['review'] {

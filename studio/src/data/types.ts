@@ -47,16 +47,6 @@ export type StageStatusType =
   | 'rejected' // 审查未通过
   | 'blocked'; // 阻塞
 
-// 任务状态机（来自 build-spec §6.1，yxspec V3 七状态）
-export type TaskStatusType =
-  | 'pending'
-  | 'ready'
-  | 'in_progress'
-  | 'blocked'
-  | 'done'
-  | 'skipped'
-  | 'stale';
-
 // 审查裁决（来自 build-spec §3.2.4）
 export type ReviewVerdict = 'approved' | 'conditional' | 'rejected';
 
@@ -144,37 +134,6 @@ export interface ReviewEntry {
   /** 签字文件相对路径（如有）*/
   signoff_file: string | null;
 }
-
-// =============================================================================
-// 任务模型（适配真实 task_*.md 表格格式）
-// =============================================================================
-export interface Task {
-  id: string;
-  name: string;
-  type: string; // parse / analyse / design / code / test / review
-  module: string;
-  action: string;
-  verify: string;
-  /** 真实 task_*.md 中"完成"列是 true/false，状态由 done + 字段推断 */
-  status: TaskStatusType;
-  done: boolean;
-  started_at: string | null;
-  finished_at: string | null;
-  duration: string | null;
-  /** P1：是否实时 todo 归并进来的孤儿任务（无静态表对应行）*/
-  realtimeOnly?: boolean;
-}
-
-// 任务状态机合法转换（来自 build-spec §6.1）
-export const VALID_TASK_TRANSITIONS: Record<TaskStatusType, TaskStatusType[]> = {
-  pending: ['ready', 'in_progress', 'skipped'],
-  ready: ['in_progress', 'pending', 'skipped'],
-  in_progress: ['done', 'blocked', 'pending'],
-  blocked: ['in_progress', 'pending', 'skipped'],
-  done: ['stale'], // done 只能变 stale
-  skipped: ['pending'], // skipped 可重做
-  stale: ['pending', 'in_progress'], // stale 重做
-};
 
 // =============================================================================
 // Pipeline 模型（适配真实 pipeline_state.json 格式：每模块直接是单一 status）

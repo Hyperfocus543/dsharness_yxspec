@@ -6,7 +6,6 @@ import { create } from 'zustand';
 import type { DshGate, DshStageEntry, DshStageState, DshState, ResumeInfo, StageStatus, StageToken } from '../data/types';
 import { STAGE_ORDER, STAGE_TABLE } from '../data/stage-mapping';
 import * as ipc from '../utils/ipc';
-import { useTaskStore } from './taskStore';
 import { now } from '../utils/time';
 
 interface StageStore {
@@ -384,19 +383,7 @@ export const useStageStore = create<StageStore>((set, get) => ({
           break;
         }
         case 'todo/write': {
-          // M2 接入实时看板：把网关下发的 todos 导入 taskStore，驾驶舱任务区即时渲染
-          const todos = data.todos;
-          if (Array.isArray(todos)) {
-            useTaskStore
-              .getState()
-              .importTodos(
-                todos.map((t: any) => ({
-                  id: typeof t?.id === 'string' ? t.id : String(t?.id ?? ''),
-                  name: typeof t?.name === 'string' ? t.name : '',
-                  status: typeof t?.status === 'string' ? t.status : 'pending',
-                })),
-              );
-          }
+          // 任务看板已移除（用户确认用不上）；todo 事件仍用于刷新 lastUpdate 时间戳
           set({ lastUpdate: now() });
           break;
         }
