@@ -5,9 +5,9 @@
 import React from 'react';
 import type { StageMapping, StageStatus } from '../../data/types';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
-import { renderInline } from '../../utils/markdown';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
+import { StageGateBar } from './StageGateBar';
 
 // 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
 // emerald(赤陶) 只留当前态/交互（ring、派活按钮、当前标签）
@@ -66,12 +66,6 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     dispatch(mapping.command);
-  };
-
-  // 门控拦截条可点击：跳到被阻塞的上游阶段（打开对应产物抽屉）；无上游则纯提示，点击无效果
-  const handleGateClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (gateUpstreams.length > 0) onSelectStage?.(gateUpstreams[0]);
   };
 
   return (
@@ -176,37 +170,12 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
           )}
         </span>
       </div>
-      {/* 门控提示条：三态区分（blocked 红警告 / pending 琥珀待补 / ok 绿正向），
-          避免把"产物已存在可进 review"这类正向提示误渲染成红色警告 */}
-      {status.gate_message && gateState && (
-        <div
-          className={`mt-2 w-full flex items-center gap-1 min-w-0 text-xs leading-tight rounded px-1.5 py-1 ${
-            gateState === 'blocked'
-              ? 'text-red-700 bg-red-50 border border-red-200 cursor-pointer hover:bg-red-100 hover:border-red-300 transition-all active:scale-[0.98]'
-              : gateState === 'pending'
-                ? 'text-amber-700 bg-amber-50 border border-amber-200'
-                : 'text-sage-700 bg-sage-50 border border-sage-200'
-          }`}
-          title={
-            gateState === 'blocked'
-              ? `点击查看上游阻塞（${gateUpstreams.join('、')}）`
-              : status.gate_message
-          }
-          onClick={handleGateClick}
-        >
-          <span className="shrink-0">
-            <Icon
-              name={gateState === 'blocked' ? I.warn : I.check}
-              size={11}
-              weight="fill"
-            />
-          </span>
-          <span className="flex-1 min-w-0 break-words">{renderInline(status.gate_message)}</span>
-          {gateUpstreams.length > 0 && (
-            <Icon name={I.arrowRight} size={10} weight="bold" className="shrink-0" />
-          )}
-        </div>
-      )}
+      {/* 门控提示条（StageGateBar 独立组件） */}
+      <StageGateBar
+        status={status}
+        gateUpstreams={gateUpstreams}
+        onUpstreamClick={(t) => onSelectStage?.(t)}
+      />
     </div>
   );
 };
