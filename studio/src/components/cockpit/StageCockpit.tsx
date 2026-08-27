@@ -5,11 +5,12 @@
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 
 import React from 'react';
-import type { StageMapping, StageStatus } from '../../data/types';
+import type { StageMapping, StageStatus, StageToken } from '../../data/types';
 import { STAGE_GROUPS, STAGE_ORDER, STAGE_TABLE } from '../../data/stage-mapping';
 import { FlowView } from './FlowView';
 import { GateOverview } from './GateOverview';
 import { CostDashboard } from './CostDashboard';
+import { TrajectoryPanel } from './TrajectoryPanel';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { renderInline } from '../../utils/markdown';
 import { Icon, Badge } from '../ui';
@@ -155,19 +156,36 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
               ? `${status.artifacts.length} 产物`
               : '暂无产物'}
         </span>
-        {status.review && (
-          <span
-            className={`px-1 rounded text-white text-xs ${
-              status.review.verdict === 'approved'
-                ? 'bg-emerald-500'
-                : status.review.verdict === 'conditional'
-                  ? 'bg-amber-500'
-                  : 'bg-red-500'
-            }`}
-          >
-            {status.review.verdict}
-          </span>
-        )}
+        <span className="flex items-center gap-1">
+          {/* 门控三态徽标（来自轨迹门控）：verified 绿 / unverified 黄 / blocked 红 */}
+          {status.gate_trajectory && (
+            <span
+              className={`px-1 rounded text-white text-xs ${
+                status.gate_trajectory === 'verified'
+                  ? 'bg-sage-500'
+                  : status.gate_trajectory === 'unverified'
+                    ? 'bg-amber-500'
+                    : 'bg-red-500'
+              }`}
+              title={`轨迹门控：${status.gate_trajectory}`}
+            >
+              {status.gate_trajectory === 'verified' ? '迹✓' : status.gate_trajectory === 'unverified' ? '迹?' : '迹✗'}
+            </span>
+          )}
+          {status.review && (
+            <span
+              className={`px-1 rounded text-white text-xs ${
+                status.review.verdict === 'approved'
+                  ? 'bg-emerald-500'
+                  : status.review.verdict === 'conditional'
+                    ? 'bg-amber-500'
+                    : 'bg-red-500'
+              }`}
+            >
+              {status.review.verdict}
+            </span>
+          )}
+        </span>
       </div>
       {/* 门控提示条：三态区分（blocked 红警告 / pending 琥珀待补 / ok 绿正向），
           避免把"产物已存在可进 review"这类正向提示误渲染成红色警告 */}
@@ -213,6 +231,8 @@ interface CockpitProps {
 export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onSelectStage }) => {
   const [view, setView] = React.useState<'grid' | 'flow' | 'gates'>('grid');
   const [showCost, setShowCost] = React.useState(false);
+  // 「轨迹」标签：从网格点选阶段打开对应轨迹面板（只读，Phase 1 不接门控写回）
+  const [trajStage, setTrajStage] = React.useState<StageToken | null>(null);
 
   // 整体进度统计（顶栏用）
   const counts: Record<string, number> = {};
@@ -302,6 +322,16 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
             <Icon name={I.shield} size={14} />
             门控
           </button>
+          <button
+            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+              trajStage ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+            }`}
+            onClick={() => setTrajStage(trajStage ? null : ((currentStage as StageToken) ?? (STAGE_ORDER[0] as StageToken)))}
+            title="阶段执行轨迹（@yxspec/aspice-trajectory）"
+          >
+            <Icon name={I.timer} size={14} />
+            轨迹
+          </button>
         </div>
         {/* 执行成本折叠开关 */}
         <button
@@ -330,6 +360,40 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
         <FlowView onSelectStage={onSelectStage} />
       ) : view === 'gates' ? (
         <GateOverview />
+      ) : trajStage ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-emerald-600">
+                <Icon name={I.timer} size={15} weight="fill" />
+              </span>
+              <span className="text-sm font-bold text-zinc-800 font-mono truncate">{trajStage}</span>
+              <span className="text-xs text-zinc-400 shrink-0">（{STAGE_TABLE[trajStage]?.aspice ?? '—'}）</span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <select
+                className="text-xs border border-zinc-200 rounded px-1.5 py-1 font-mono bg-white text-zinc-600 max-w-[180px]"
+                value={trajStage}
+                onChange={(e) => setTrajStage(e.target.value as StageToken)}
+                title="切换阶段查看轨迹"
+              >
+                {STAGE_ORDER.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="text-xs px-2 py-1 rounded border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 transition-all active:scale-[0.98]"
+                onClick={() => setTrajStage(null)}
+                title="收起轨迹面板"
+              >
+                收起
+              </button>
+            </div>
+          </div>
+          <TrajectoryPanel stage={trajStage} limit={50} />
+        </div>
       ) : (
         <div className="space-y-5">
           {Object.entries(STAGE_GROUPS).map(([group, tokens]) => {

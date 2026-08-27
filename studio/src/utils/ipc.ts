@@ -839,6 +839,105 @@ export async function fetchCost(): Promise<CostData | null> {
 }
 
 // =============================================================================
+// 阶段执行轨迹 API（网关 /api/trajectory + /api/trajectory-gate）
+// 数据源：@yxspec/aspice-trajectory 插件落盘的 runtime-data/trajectory JSONL。
+// 只读展示（Phase 1 不接门控写回）；失败一律静默降级 null，不阻塞驾驶舱。
+// =============================================================================
+
+/** 轨迹单条工具调用（瀑布行之一）。 */
+export interface TrajectoryTool {
+  type: 'tool/call' | 'tool/result';
+  name: string | null;
+  ok?: boolean;
+  error?: string | null;
+  ts?: number;
+}
+
+/** 单条阶段执行记录（JSONL 行，schema 与网关 trajectory.mjs 对齐）。 */
+export interface TrajectoryRecord {
+  stage: string;
+  seq: number;
+  sessionId: string;
+  /** passed | failed | unverified | blocked */
+  status: string;
+  startedAt: number;
+  finishedAt: number | null;
+  turnCount?: number;
+  stepCount?: number;
+  events?: string[];
+  tools?: TrajectoryTool[];
+  cost?: { tokens: number; inputTokens: number; outputTokens: number };
+  reason?: string | null;
+}
+
+/** 轨迹证据三态（门控判定用）。 */
+export interface TrajectoryGateStatus {
+  /** verified | unverified | blocked */
+  status: string;
+  hasTurnEnd: boolean;
+  toolOk: boolean;
+  toolCalls: number;
+  toolResults: number;
+  tokens: number;
+  reason: string | null;
+}
+
+/** GET /api/trajectory?stage= 响应（轨迹面板视图）。 */
+export interface TrajectoryView {
+  stage: string;
+  label: string;
+  aspice: string;
+  command: string;
+  gate_policy: string;
+  exists: boolean;
+  artifacts: { path: string; kind: string }[];
+  totalRuns: number;
+  latest: TrajectoryRecord | null;
+  status: TrajectoryGateStatus | null;
+  rows: TrajectoryRecord[];
+}
+
+/** GET /api/trajectory-gate?stage= 响应（门控判定结果）。 */
+export interface TrajectoryGate {
+  stage: string;
+  gate_policy: string;
+  artifact: { passed: boolean; files: string[] } | null;
+  trajectory: TrajectoryGateStatus | null;
+  /** verified | unverified | blocked */
+  status: string;
+  passed: boolean;
+  reason: string;
+}
+
+/** 拉取某阶段轨迹视图；失败返回 null（网关未起/无轨迹）。 */
+export async function fetchTrajectory(stage: string, limit = 50): Promise<TrajectoryView | null> {
+  try {
+    const res = await fetch(
+      `${GATEWAY_BASE}/api/trajectory?stage=${encodeURIComponent(stage)}&limit=${limit}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as TrajectoryView;
+  } catch {
+    return null;
+  }
+}
+
+/** 拉取某阶段门控判定；失败返回 null。 */
+export async function fetchTrajectoryGate(stage: string): Promise<TrajectoryGate | null> {
+  try {
+    const res = await fetch(
+      `${GATEWAY_BASE}/api/trajectory-gate?stage=${encodeURIComponent(stage)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as TrajectoryGate;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
 // 社区插件市场 API（网关 /api/community-plugins）
 // 只读浏览/筛选：数据源为 GitHub search（topic:dsh-plugin），网关缓存 6h；
 // GitHub 挂/限流时降级旧缓存(stale)或内置静态精选(static)。

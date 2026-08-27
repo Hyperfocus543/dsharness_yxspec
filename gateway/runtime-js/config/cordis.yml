@@ -132,3 +132,9 @@
 # 阶段动态解析：dsh_state.current → env YXSPEC_STAGE → config stage
 - id: yxspec-tool-guard
   name: '@yxspec/tool-guard'
+
+# ---- aspice-trajectory（阶段执行轨迹聚合 + 门控证据，POC 验证通过）----
+# 订阅 session/event（root ctx 可达，2026-08-27 实测），按阶段边界切分轨迹，
+# append-only 写 gateway/runtime-data/trajectory/<stage>/<stage>-<seq>.jsonl
+- id: aspice-trajectory
+  name: '@yxspec/aspice-trajectory'

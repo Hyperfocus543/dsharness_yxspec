@@ -78,6 +78,9 @@ export interface StageMapping {
   task_file: string | null;
   /** 是否有审查门控 */
   review_gate: 'yes' | 'no';
+  /** 门控策略（3.2 节）：artifact=产物存在即过（默认兼容旧行为）；
+   *  artifact+trajectory=产物存在 AND 轨迹证据完整才放行（review_gate:'yes' 的阶段默认此项） */
+  gate_policy?: 'artifact' | 'artifact+trajectory';
   /** 上游依赖 */
   upstream: StageToken[];
   /** 下游（仅取第一个作为"建议下一步"）*/
@@ -112,6 +115,11 @@ export interface StageStatus {
    *   undefined  → 无门控（不显示提示条）
    */
   gate_state?: 'blocked' | 'pending' | 'ok';
+  /** 轨迹门控三态（来自 GET /api/trajectory-gate 的 status 字段，Phase 1 只读展示）：
+   *   verified  → 轨迹证据完整（绿色徽标）
+   *   unverified → 轨迹存在但缺关键证据（黄色徽标）
+   *   blocked  → 轨迹失败/打回（红色徽标） */
+  gate_trajectory?: 'verified' | 'unverified' | 'blocked';
 }
 
 // 审查摘要

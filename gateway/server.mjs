@@ -33,6 +33,7 @@ import { getCommunityPlugins } from './lib/community.mjs'
 import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
+import { trajectoryView, gateStage, gateSummary } from './lib/trajectory.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
 
@@ -624,6 +625,28 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/api/gates') {
       const gates = scanGates(readState())
       return json(res, 200, gates)
+    }
+
+    // 阶段执行轨迹（@yxspec/aspice-trajectory 插件聚合，只读）：
+    //   GET /api/trajectory?stage=<token>&limit=50   → 轨迹视图（瀑布行 + 门控三态）
+    //   GET /api/trajectory-gate?stage=<token>        → 门控判定（artifact / artifact+trajectory）
+    //   不带 stage → 全阶段汇总（驾驶舱批量徽标数据源）
+    if (req.method === 'GET' && path === '/api/trajectory') {
+      const stage = url.searchParams.get('stage') ?? ''
+      const limit = Number(url.searchParams.get('limit') ?? 50)
+      const view = trajectoryView(stage, limit)
+      if (!view || !view.stage) return json(res, 400, { error: 'unknown-stage', stage })
+      return json(res, 200, view)
+    }
+
+    if (req.method === 'GET' && path === '/api/trajectory-gate') {
+      const stage = url.searchParams.get('stage')
+      if (stage) {
+        const g = gateStage(stage)
+        if (!g || g.reason === 'unknown-stage') return json(res, 400, { error: 'unknown-stage', stage })
+        return json(res, 200, g)
+      }
+      return json(res, 200, { ok: true, gates: gateSummary() })
     }
 
     // 执行成本统计：GET /api/cost

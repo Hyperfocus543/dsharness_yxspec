@@ -244,6 +244,34 @@ export const useStageStore = create<StageStore>((set, get) => ({
         lastUpdate: now(),
       }));
     }
+    // 轨迹门控汇总（Phase 1 只读徽标）：GET /api/trajectory-gate 全量 → 各阶段三态
+    // 失败静默（网关未起/无轨迹数据时不阻塞驾驶舱）
+    try {
+      const res = await fetch(`${ipc.GATEWAY_BASE}/api/trajectory-gate`);
+      if (res.ok) {
+        const data = await res.json();
+        const gates = data?.gates ?? null;
+        if (gates && typeof gates === 'object') {
+          const trajPatch: Partial<Record<StageToken, StageStatus>> = {};
+          for (const [token, g] of Object.entries(gates) as [string, any][]) {
+            const t = token as StageToken;
+            if (!STAGE_ORDER.includes(t)) continue;
+            const st = g?.status;
+            if (st === 'verified' || st === 'unverified' || st === 'blocked') {
+              trajPatch[t] = {
+                ...(get().stages[t] ?? { token: t, status: 'pending' as const, artifacts: [], review: null, last_update: now(), message: '' }),
+                gate_trajectory: st,
+              } as StageStatus;
+            }
+          }
+          if (Object.keys(trajPatch).length > 0) {
+            set((s) => ({ stages: { ...s.stages, ...trajPatch }, lastUpdate: now() }));
+          }
+        }
+      }
+    } catch (e) {
+      console.debug('[stageStore] 轨迹门控汇总不可用（网关未起或无轨迹）:', e);
+    }
     // 恢复 session 后订阅网关实时事件（先拉 /api/session 快照再 SSE；
     // 重复调用会先 disconnect 再重连，幂等安全）
     await get()

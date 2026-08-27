@@ -10,6 +10,9 @@ dist/
 .dsh/graph-memory/
 .dsh/gateway-log/
 
+# 阶段执行轨迹（append-only JSONL，运行时生成，不入库）
+gateway/runtime-data/trajectory/
+
 # night 运行时产物（编排脚本入库，日志/清单不入）
 night/log/
 night/*.out

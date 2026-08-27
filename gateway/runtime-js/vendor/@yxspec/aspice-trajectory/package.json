@@ -1,0 +1,11 @@
+{
+  "name": "@yxspec/aspice-trajectory",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "阶段执行轨迹聚合 + 门控证据：订阅 session/event，按阶段边界切分轨迹，append-only 写 runtime-data/trajectory/<stage>/<stage>-<seq>.jsonl",
+  "private": true
+}
