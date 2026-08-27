@@ -20,3 +20,7 @@ night/manifest.json
 night/SUMMARY.md
 night/stop-flag
 night/commit-msg.txt
+
+# Gateway runtime artifacts (运行时产物，不入库)
+gateway/runtime-js/runtime-data/
+gateway/runtime-js/sessions/
