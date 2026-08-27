@@ -15,5 +15,10 @@ export const PROJECT_ROOT = process.env.YXSPEC_PROJECT_ROOT || 'D:/Work/01_Proje
 export const TEMPLATES_ROOT =
   process.env.YXSPEC_TEMPLATES_ROOT ||
   'D:/Work/01_Projects/AI培训相关/yxspec_v4_tailg_linhanfei/ai_tbox/yxspec/templates'
+// COMMANDS_ROOT：阶段执行规范权威源（ai_tbox/.claude/commands/yxspec/，33 个阶段命令文件）。
+// 与 TEMPLATES_ROOT 同模式：默认指向框架侧（只读引用），可用 YXSPEC_COMMANDS_ROOT 覆盖。
+export const COMMANDS_ROOT =
+  process.env.YXSPEC_COMMANDS_ROOT ||
+  'D:/Work/01_Projects/AI培训相关/yxspec_v4_tailg_linhanfei/ai_tbox/.claude/commands/yxspec'
 export const KNOWLEDGE_INDEX = join(PROJECT_ROOT, 'project', 'knowledge', 'index.md')
 export const STATE_PATH = join(PROJECT_ROOT, '.dsh', 'dsh_state.json')

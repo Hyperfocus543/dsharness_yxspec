@@ -16,12 +16,12 @@
 import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildFeatureSections } from './features.mjs'
-import { PROJECT_ROOT, TEMPLATES_ROOT, KNOWLEDGE_INDEX } from './paths.mjs'
+import { PROJECT_ROOT, TEMPLATES_ROOT, KNOWLEDGE_INDEX, COMMANDS_ROOT } from './paths.mjs'
 
 // =============================================================================
 // 项目路径常量（唯一来源见 lib/paths.mjs；此处保留导出以向后兼容）
 // =============================================================================
-export { PROJECT_ROOT, TEMPLATES_ROOT, KNOWLEDGE_INDEX } from './paths.mjs'
+export { PROJECT_ROOT, TEMPLATES_ROOT, KNOWLEDGE_INDEX, COMMANDS_ROOT } from './paths.mjs'
 
 /** 25 阶段权威表（flow 顺序即 nextCurrent 推进顺序）。 */
 export const STAGES = {
@@ -570,6 +570,63 @@ export function hasKnowledgeIndex() {
 }
 
 // =============================================================================
+// 阶段执行规范读取（条件降级：命令文件不存在 → 返回 null）
+// 数据源：COMMANDS_ROOT/<command 去掉 /yxspec: 前缀>.md（ai_tbox 33 个权威命令文件，
+// 每个 = 该阶段完整执行规范：活动/产物/门禁/评审）。与 readTemplate 同模式。
+//
+// 注入策略：命令文件可能数百行（如 swe-unit-verify 705 行），全量注入超 token。
+// extractStageKnowledge 只提取关键段：
+//   · 标题行（阶段定位）
+//   · ## 阶段定位 / 阶段定义 / 概述 段（截 1500）
+//   · ## 执行序列 / 工作流 / 主要步骤 段（截 2000）
+//   · ## 产物 段（截 1200）
+//   · ## 完成条件 / 验收 段（截 800）
+// 其余（参数表/门禁脚本细节/示例）省略——执行时 agent 仍可读源文件。
+// =============================================================================
+export function readStageKnowledge(token) {
+  const stage = STAGES[token]
+  if (!stage) return null
+  const cmd = (stage.command || '').replace(/^\/yxspec:/, '')
+  if (!cmd) return null
+  try {
+    const abs = join(COMMANDS_ROOT, `${cmd}.md`)
+    if (!existsSync(abs)) return null
+    return readFileSync(abs, 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+/** 提取命令文件关键段（标题 + 定位/序列/产物/完成条件），限长避免超 token。 */
+export function extractStageKnowledge(token, maxLen = 6000) {
+  const raw = readStageKnowledge(token)
+  if (!raw) return null
+  const lines = raw.split('\n')
+  const want = /^#{1,3}\s*(阶段定位|阶段定义|概述|执行序列|工作流|主要步骤|产物|完成条件|验收|输出)/i
+  const out = []
+  let inSection = false
+  let budget = maxLen
+  for (const line of lines) {
+    if (want.test(line)) {
+      inSection = true
+      // 标题行本身保留（带 # 前缀），限制单段行数
+      out.push(line)
+      continue
+    }
+    if (inSection && /^#{1,3}\s/.test(line) && !want.test(line)) {
+      inSection = false
+      continue
+    }
+    if (!inSection) continue
+    if (budget <= 0) break
+    out.push(line.slice(0, budget))
+    budget -= line.length
+  }
+  if (out.length === 0) return raw.slice(0, maxLen) // 兜底：无匹配段 → 直接截断
+  return out.join('\n')
+}
+
+// =============================================================================
 // prompt 构造
 //   general=false（默认）：执行指定阶段并生成产物（模板驱动）
 //   general=true：不绑定阶段，仅读当前状态回答咨询类问题（分析/解释/进度等）
@@ -585,6 +642,11 @@ export function buildAgentPrompt({ userPrompt, token, stage, state, gates, force
 
   // 通用咨询模式：不要求生成产物，只读状态并直接回答
   if (general) {
+    // 咨询时也注入当前阶段执行规范摘要（回答"这个阶段该做什么"不再瞎编）
+    const curKnowledge = token ? extractStageKnowledge(token, 2500) : null
+    const knowledgeBlock = curKnowledge
+      ? `\n## 当前阶段执行规范（权威命令文件摘要）\n${curKnowledge.slice(0, 2500)}`
+      : ''
     return `你是 YXSpec 车载嵌入式 ASPICE 流程助理（对话式）。用户提问：${userPrompt}
 
 ## 当前全流程状态（来自 dsh_state.json）
@@ -593,7 +655,7 @@ ${stageSummary}
 ## 当前阶段
 - current: ${state.current ?? '未知'}
 - 说明：state 中 state='done' 表示已完成，'in_progress' 表示进行中，'pending' 表示未开始
-
+${knowledgeBlock}
 ## 要求
 - 直接基于上面状态回答用户的问题（分析进度、解释卡点、说明下一步等）
 - 引用具体阶段 token 和状态，不要泛泛而谈
@@ -621,6 +683,16 @@ ${stageSummary}
   parts.push(``)
   parts.push(`## 当前全流程状态（来自 dsh_state.json）`)
   parts.push(stageSummary)
+
+  // 阶段执行规范注入（权威命令文件存在才注入）：活动/产物/门禁/评审要点。
+  // 让 agent 知道"这个阶段该做什么、按什么标准产出"，不再靠通用 ASPICE 知识瞎猜。
+  // extractStageKnowledge 提取关键段（定位/序列/产物/完成条件），避免超 token。
+  const stageKnowledge = extractStageKnowledge(token)
+  if (stageKnowledge) {
+    parts.push(``)
+    parts.push(`## 阶段执行规范（权威命令文件，必须遵循）`)
+    parts.push(stageKnowledge)
+  }
 
   // 上游已完成产物清单 → 追溯链
   const upstreamDone = Object.entries(stage.upstream || {})
