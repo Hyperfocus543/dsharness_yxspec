@@ -74,6 +74,22 @@ commit_and_push() {
     (cd "$ROOT" && git reset --hard "$BLOCK_START" >/dev/null 2>&1)
     return 1
   fi
+  # 子代理可能已自行 commit（HEAD 已推进）——此时只 push，不二次 commit
+  local HEAD_NOW=$(cd "$ROOT" && git rev-parse HEAD)
+  if [ "$HEAD_NOW" != "$BLOCK_START" ]; then
+    log "    🔀 子代理已自行 commit（$HEAD_NOW 相对 $BLOCK_START），只 push 不重复 commit"
+    (cd "$ROOT" && git push origin main >/dev/null 2>&1)
+    if [ $? -eq 0 ]; then
+      log "    ✅ push 成功: $(cd "$ROOT" && git log -1 --format='%s' | head -c 50)"
+      echo "- [$BLOCK 第${ROUND}轮] 子代理自行 commit: $(cd "$ROOT" && git log -1 --format='%s' | head -c 50)" >> "$SUMMARY"
+      echo "  - commit: $(cd "$ROOT" && git rev-parse --short HEAD) @ $(date '+%H:%M')" >> "$SUMMARY"
+      return 0
+    else
+      log "    ❌ push 失败，改动在本地 HEAD 未丢，reset 回块起始"
+      (cd "$ROOT" && git reset --hard "$BLOCK_START" >/dev/null 2>&1)
+      return 1
+    fi
+  fi
   (cd "$ROOT" && git add -A)
   (cd "$ROOT" && git commit -m "$DESC" >/dev/null 2>&1)
   local CR=$?
