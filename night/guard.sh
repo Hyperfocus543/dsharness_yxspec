@@ -20,6 +20,13 @@ src-tauri/target/
 src-tauri/icons/
 \.workbuddy
 community-plugins
+night/SUMMARY\.md
+night/manifest\.json
+night/commit-msg\.txt
+night/stop-flag
+night/log/
+night/.*\.out$
+night/.*\.txt$
 "
 
 for pat in $BLOCKED_PATTERNS; do
