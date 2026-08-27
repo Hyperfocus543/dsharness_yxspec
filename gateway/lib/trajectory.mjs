@@ -127,7 +127,7 @@ export function trajectoryStatus(rec, meta) {
  */
 export function gateStage(stageToken) {
   const stage = STAGES[stageToken]
-  if (!stage) return { stage: stageToken, passed: false, reason: 'unknown-stage' }
+  if (!stage || !isStageToken(stageToken)) return { stage: stageToken, passed: false, reason: 'unknown-stage' }
 
   // 产物门（复用权威表 glob）：无 glob 阶段（如 swe_sdk_release tag）视产物过
   const globs = stage.spec_globs || []
@@ -159,8 +159,8 @@ export function gateStage(stageToken) {
       artifact,
       trajectory: null,
       status: 'unverified',
-      passed: false,
-      reason: 'no-trajectory',
+      passed: artifactPassed,
+      reason: artifactPassed ? 'artifact-passed-no-trajectory' : 'no-trajectory',
     }
   }
   const traj = trajectoryStatus(latest, stage)

@@ -115,6 +115,23 @@ console.log('== 5) 无轨迹：no-trajectory → unverified ==')
   assert('未执行过 → unverified + no-trajectory', g.status === 'unverified' && g.reason === 'no-trajectory', JSON.stringify(g))
 }
 
+console.log('== 5b) 无轨迹但产物已命中：放行不误打（产物先行场景）==')
+{
+  // sys_elicitation 的 spec_globs：project/specs/prd/prd-*.md → 造一个产物命中
+  mkdirSync(join(TMP_PROJ, 'project', 'specs', 'prd'), { recursive: true })
+  writeFileSync(join(TMP_PROJ, 'project', 'specs', 'prd', 'prd-001-需求.md'), '# PRD-001', 'utf8')
+  const g = gateStage('sys_elicitation')
+  assert('产物命中 + 无轨迹 → passed + 明确 reason', g.passed === true && g.reason === 'artifact-passed-no-trajectory', JSON.stringify(g))
+}
+
+console.log('== 5c) 未知阶段/原型属性 → unknown-stage（不是误放行）==')
+{
+  const g = gateStage('__proto__')
+  assert('unknown-stage + passed=false（属性污染防护）', g.reason === 'unknown-stage' && g.passed === false, JSON.stringify(g))
+  const g2 = gateStage('not-a-stage')
+  assert('乱 token → unknown-stage', g2.reason === 'unknown-stage', JSON.stringify(g2))
+}
+
 console.log('== 6) 最近一次执行判定（latest 语义）==')
 {
   const latest = latestTrajectory('sys_analysis')
