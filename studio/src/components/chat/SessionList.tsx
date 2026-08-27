@@ -44,6 +44,11 @@ export const SessionList: React.FC = () => {
   const listRef = React.useRef<HTMLDivElement | null>(null);
 
   const current = sessions.find((s) => s.id === currentId);
+  // 最近 5 个会话（含当前）—— 快捷切换区数据源（纯函数，可单测）
+  const recent = React.useMemo(
+    () => recentSessions(sessions, currentId, 5),
+    [sessions, currentId],
+  );
 
   // 点击外部关闭下拉
   React.useEffect(() => {
@@ -156,6 +161,30 @@ export const SessionList: React.FC = () => {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* 最近会话快捷切换：最近 5 个一键直达，免开下拉 */}
+      {recent.length > 1 && (
+        <div className="mt-1 flex items-center gap-1 max-w-[240px] overflow-x-auto">
+          <span className="text-zinc-400 shrink-0"><Icon name={I.clock} size={12} /></span>
+          {recent.map((s) => {
+            const active = s.id === currentId;
+            return (
+              <button
+                key={s.id}
+                className={`shrink-0 max-w-[120px] text-xs px-2 py-0.5 rounded-full border truncate transition-colors active:scale-[0.98] ${
+                  active
+                    ? 'bg-emerald-600 text-white border-emerald-600 font-medium'
+                    : 'bg-white text-zinc-600 border-zinc-300 hover:border-emerald-300 hover:bg-emerald-50/40 hover:text-emerald-700'
+                }`}
+                onClick={() => switchTo(s.id)}
+                title={`切换到会话：${s.title}`}
+              >
+                {s.title}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
