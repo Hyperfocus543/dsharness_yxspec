@@ -9,3 +9,10 @@ dist/
 # 运行时产物（本地生成，不提交）
 .dsh/graph-memory/
 .dsh/gateway-log/
+
+# night 运行时产物（编排脚本入库，日志/清单不入）
+night/log/
+night/*.out
+night/manifest.json
+night/SUMMARY.md
+night/stop-flag
