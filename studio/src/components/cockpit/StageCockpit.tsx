@@ -100,8 +100,10 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
       }`}
     >
       {isCurrent && (
+        // 「当前」徽标放左上角，与右上角悬浮派活按钮错开：
+        // 同角（-top-2 -right-2）会被按钮盖住，hover/派活中"当前"标识消失。
         <span
-          className="absolute -top-2 -right-2 px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-medium shadow-sm inline-flex items-center gap-0.5"
+          className="absolute -top-2 -left-2 px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-medium shadow-sm inline-flex items-center gap-0.5"
           title="当前阶段"
         >
           <Icon name={I.gauge} size={10} weight="fill" />
@@ -109,7 +111,8 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
         </span>
       )}
       {/* 悬浮"一键派活"按钮（hover 显示；派活中常驻显示可点击的取消按钮，点击终止 runtime）。
-          空闲时 pointer-events-none，避免隐形按钮挡在卡片右上角拦截点击冒泡。 */}
+          空闲时 pointer-events-none，避免隐形按钮挡在卡片右上角拦截点击冒泡。
+          固定在右上角（-top-2 -right-2），与左上角"当前"徽标互不重叠。 */}
       <span
         className={`absolute -top-2 -right-2 px-1.5 py-1 rounded-full text-white shadow-sm inline-flex items-center gap-1 transition-all active:scale-[0.98] ${
           busy
