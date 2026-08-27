@@ -48,9 +48,11 @@ interface StageNodeProps {
   isCurrent: boolean;
   /** 点击卡片时打开产物抽屉（grid 外层包了一层 onClick） */
   onSelectStage?: (token: string) => void;
+  /** 点击轨迹徽标 → 跳到该阶段轨迹视图（StageCockpit 传 setTrajStage+handleView） */
+  onViewTrajectory?: (token: string) => void;
 }
 
-export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage }) => {
+export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage, onViewTrajectory }) => {
   const color = STATUS_COLOR[status.status] || STATUS_COLOR.pending;
   const IconComp = STATUS_ICON[status.status] || STATUS_ICON.pending;
   const iconTone = STATUS_ICON_TONE[status.status] || 'text-zinc-400';
@@ -66,6 +68,12 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     dispatch(mapping.command);
+  };
+
+  // 轨迹徽标点击 → 跳转该阶段轨迹视图（阻止冒泡避免误触产物抽屉）
+  const handleTrajClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onViewTrajectory?.(token);
   };
 
   return (
@@ -134,29 +142,35 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
               : '暂无产物'}
         </span>
         <span className="flex items-center gap-1">
-          {/* 轨迹门控三态徽标（仅 artifact+trajectory 策略显示）：
+          {/* 轨迹门控徽标（仅 artifact+trajectory 策略显示；可点击查看轨迹）：
               verified 绿 / unverified 黄 / blocked 红。
-              纯 artifact 策略的阶段门=产物存在即可，不标「迹」（避免满屏
-              「迹✓」误导——轨迹证据只在轨迹门策略下才被要求）。
-              Phase 2 徽标联动：派活被门控打回后，gate_reason 带打回原因，
-              title 展示原因文案（'迹✗' 常驻显示打回状态）。 */}
+              文案直白：轨迹完整 / 轨迹缺失 / 轨迹异常——不猜「迹✓」缩写。
+              点击 → 跳到该阶段轨迹视图（onViewTrajectory）。 */}
           {status.gate_trajectory && status.gate_policy === 'artifact+trajectory' && (
-            <span
-              className={`px-1 rounded text-white text-xs ${
+            <button
+              type="button"
+              onClick={handleTrajClick}
+              className={`px-1.5 py-0.5 rounded text-white text-xs font-medium inline-flex items-center gap-1 transition-all active:scale-[0.96] ${
                 status.gate_trajectory === 'verified'
-                  ? 'bg-sage-500'
+                  ? 'bg-sage-500 hover:bg-sage-600'
                   : status.gate_trajectory === 'unverified'
-                    ? 'bg-amber-500'
-                    : 'bg-red-500'
+                    ? 'bg-amber-500 hover:bg-amber-600'
+                    : 'bg-red-500 hover:bg-red-600'
               }`}
               title={
-                status.gate_reason
-                  ? `轨迹门控：${status.gate_trajectory}（派活打回：${status.gate_reason}）`
-                  : `轨迹门控：${status.gate_trajectory}`
+                status.gate_trajectory === 'verified'
+                  ? '轨迹证据完整 · 点击查看该阶段执行轨迹'
+                  : status.gate_trajectory === 'unverified'
+                    ? `轨迹缺失：${status.gate_reason ?? '该阶段尚未执行或轨迹证据不完整'} · 点击查看轨迹`
+                    : `轨迹异常：${status.gate_reason ?? '轨迹失败或被打回'} · 点击查看轨迹`
               }
             >
-              {status.gate_trajectory === 'verified' ? '迹✓' : status.gate_trajectory === 'unverified' ? '迹?' : '迹✗'}
-            </span>
+              {status.gate_trajectory === 'verified'
+                ? '轨迹完整'
+                : status.gate_trajectory === 'unverified'
+                  ? '轨迹缺失'
+                  : '轨迹异常'}
+            </button>
           )}
           {status.review && (
             <span

@@ -96,6 +96,12 @@ export const StageCockpit: React.FC<CockpitProps> = ({
     setView(v);
   };
 
+  // 网格卡片上的轨迹徽标点击 → 设选中阶段并切到轨迹视图
+  const openTrajectory = (token: string) => {
+    setTrajStage(token as StageToken);
+    setView('traj');
+  };
+
   return (
     <div className="space-y-3">
       {/* 视图切换 + 成本折叠 */}
@@ -148,6 +154,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({
           currentStage={currentStage}
           loading={loading}
           onSelectStage={onSelectStage}
+          onViewTrajectory={openTrajectory}
         />
       )}
     </div>

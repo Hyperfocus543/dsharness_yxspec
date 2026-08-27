@@ -25,10 +25,12 @@ interface StageGridProps {
   /** 阶段状态是否仍在加载（首次拉取/网关慢）：加载中不渲染虚假的"全 pending"网格，改为骨架屏 */
   loading?: boolean;
   onSelectStage?: (token: string) => void;
+  /** 点击轨迹徽标 → 跳到该阶段轨迹视图（StageCockpit 传入） */
+  onViewTrajectory?: (token: string) => void;
 }
 
 /** 驾驶舱网格视图：整体进度统计（顶栏）+ 25 阶段分组卡片网格 */
-export const StageGrid: React.FC<StageGridProps> = ({ stages, currentStage, loading, onSelectStage }) => {
+export const StageGrid: React.FC<StageGridProps> = ({ stages, currentStage, loading, onSelectStage, onViewTrajectory }) => {
   return (
     <div className="space-y-3">
       <StageHeader stages={stages} currentStage={currentStage} loading={loading} />
@@ -83,6 +85,7 @@ export const StageGrid: React.FC<StageGridProps> = ({ stages, currentStage, load
                         status={status}
                         isCurrent={currentStage === token}
                         onSelectStage={onSelectStage}
+                        onViewTrajectory={onViewTrajectory}
                       />
                     </div>
                   );
