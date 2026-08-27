@@ -4,16 +4,16 @@
 //     阶段网格列数适配右侧面板宽度（820px 下 3 列）；NextCommand/ResumeBanner 独立紧凑条。
 // v4（架构重构）：视图体拆独立组件（StageGrid/StageFlow/StageGates/StageTraj + 成本 tab），
 //     本文件只留视图切换状态机 + 数据透传（组合壳，<200 行）。
+// v5：grid/flow/vmodel 三视图合并为「全景」（StagePanorama：左开发右验证 V 形，
+//     富卡片 + 顺序链 + 镜像联动），驾驶舱 tab 收敛为 全景/gates/traj/pipeline/batch/review 六选一。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 
 import React from 'react';
 import type { StageStatus, StageToken } from '../../data/types';
 import { STAGE_ORDER } from '../../data/stage-mapping';
-import { StageGrid } from './StageGrid';
-import { StageFlow } from './StageFlow';
+import { StagePanorama } from './StagePanorama';
 import { StageGates } from './StageGates';
 import { StageTraj } from './StageTraj';
-import { StageVModel } from './StageVModel';
 import { CostDashboard } from './CostDashboard';
 import { PipelinePanel } from '../pipeline/PipelinePanel';
 import { BatchQueue } from './BatchQueue';
@@ -22,30 +22,29 @@ import { useProjectStore } from '../../store/projectStore';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
 
-// 视图互斥状态机：grid / flow / gates / traj / pipeline / batch / review / vmodel 八选一。
+// 视图互斥状态机：panorama / gates / traj / pipeline / batch / review 六选一。
 // traj 为独立视图（而非覆盖在 grid 上的叠加状态）——否则会出现
 // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
 // pipeline（原独立「Pipeline」卡）、batch（原「批处理」卡）、review（原「审查中心」卡）
 // 均已并入驾驶舱——驾驶舱=看+跑+审一体的操作中心。
-// vmodel：ASPICE V+ 全景视图（左开发右验证，与 ASPICE 体系通话的独立功能页）。
-type View = 'grid' | 'flow' | 'gates' | 'traj' | 'pipeline' | 'batch' | 'review' | 'vmodel';
+// panorama：原「网格 / 流向 / V 模型」三视图合并——V 形布局承载顺序与镜像对应，
+// 富卡片承载状态与操作，互不重复。
+type View = 'panorama' | 'gates' | 'traj' | 'pipeline' | 'batch' | 'review';
 
 interface ViewTabProps {
   view: View;
   onView: (v: View) => void;
 }
 
-/** 视图切换条（网格 / 流向 / 门控 / 轨迹 / pipeline） */
+/** 视图切换条（全景 / 门控 / 轨迹 / pipeline） */
 const ViewTabs: React.FC<ViewTabProps> = ({ view, onView }) => {
   const tabs: { id: View; label: string; icon: React.ElementType; title?: string }[] = [
-    { id: 'grid', label: '网格', icon: I.squares },
-    { id: 'flow', label: '流向', icon: I.swap },
+    { id: 'panorama', label: '全景', icon: I.squares, title: '左开发右验证 V 形全景（原「网格/流向/V 模型」三视图合并）' },
     { id: 'gates', label: '门控', icon: I.shield },
     { id: 'traj', label: '轨迹', icon: I.timer, title: '阶段执行轨迹（@yxspec/aspice-trajectory）' },
     { id: 'pipeline', label: 'Pipeline', icon: I.stack, title: '编码流水线状态（原独立「Pipeline」卡，信息与驾驶舱重复，已并入）' },
     { id: 'batch', label: '批次', icon: I.listChecks, title: '多选阶段一键串行派活（原独立「批处理」卡，已并入驾驶舱）' },
     { id: 'review', label: '审查', icon: I.shield, title: '审查报告汇总 + 待审裁决（原独立「审查中心」卡，已并入驾驶舱）' },
-    { id: 'vmodel', label: 'V 模型', icon: I.branch, title: 'ASPICE V+ 全景：左开发链右验证链，逐行镜像对应（独立功能页）' },
   ];
   return (
     <div className="flex items-center gap-1 bg-zinc-100 border border-zinc-200 rounded p-0.5 w-fit">
@@ -81,11 +80,11 @@ export const StageCockpit: React.FC<CockpitProps> = ({
   loading,
   onSelectStage,
 }) => {
-  // 视图互斥状态机：grid / flow / gates / traj / pipeline 五选一。
+  // 视图互斥状态机：panorama / gates / traj / pipeline / batch / review 六选一。
   // traj 为独立视图（而非覆盖在 grid 上的叠加状态）——否则会出现
   // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
   // pipeline（原独立「Pipeline」卡，信息与驾驶舱重复）已并入驾驶舱。
-  const [view, setView] = React.useState<View>('grid');
+  const [view, setView] = React.useState<View>('panorama');
   const [showCost, setShowCost] = React.useState(false);
   const projectPath = useProjectStore((s) => s.current?.path || '');
   // 「轨迹」视图的选中阶段（从网格点选 / 视图内 select 切换，只读，Phase 1 不接门控写回）
@@ -93,8 +92,8 @@ export const StageCockpit: React.FC<CockpitProps> = ({
 
   const handleView = (v: View) => {
     if (v === 'traj' && view === 'traj') {
-      // 轨迹视图下再点「轨迹」= 收起回网格（与原行为一致）
-      setView('grid');
+      // 轨迹视图下再点「轨迹」= 收起回全景（与原行为一致）
+      setView('panorama');
       setTrajStage(null);
       return;
     }
@@ -141,9 +140,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({
         </div>
       )}
 
-      {view === 'flow' ? (
-        <StageFlow onSelectStage={onSelectStage} />
-      ) : view === 'gates' ? (
+      {view === 'gates' ? (
         <StageGates />
       ) : view === 'pipeline' ? (
         <PipelinePanel projectPath={projectPath} />
@@ -151,23 +148,17 @@ export const StageCockpit: React.FC<CockpitProps> = ({
         <BatchQueue />
       ) : view === 'review' ? (
         <ReviewCenter projectPath={projectPath} />
-      ) : view === 'vmodel' ? (
-        <StageVModel
-          stages={stages}
-          currentStage={currentStage}
-          onSelectStage={onSelectStage}
-        />
       ) : view === 'traj' && trajStage ? (
         <StageTraj
           stage={trajStage}
           onStageChange={setTrajStage}
           onClose={() => {
-            setView('grid');
+            setView('panorama');
             setTrajStage(null);
           }}
         />
       ) : (
-        <StageGrid
+        <StagePanorama
           stages={stages}
           currentStage={currentStage}
           loading={loading}
