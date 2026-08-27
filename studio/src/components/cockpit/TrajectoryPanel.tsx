@@ -63,6 +63,7 @@ const ROLLBACK_REASON_TEXT: Record<string, string> = {
 export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ stage, limit = 50 }) => {
   const [view, setView] = React.useState<TrajectoryView | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<'export' | 'rollback' | null>(null);
   const [rollbackMsg, setRollbackMsg] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState(false);
@@ -70,6 +71,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
 
   const reload = React.useCallback(() => {
     setLoading(true);
+    setLoadError(null);
     fetchTrajectory(stage, limit)
       .then((v) => setView(v))
       .catch(() => {})
@@ -79,11 +81,17 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
   React.useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     fetchTrajectory(stage, limit)
       .then((v) => {
         if (!cancelled) setView(v);
       })
-      .catch(() => {})
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setView(null);
+          setLoadError(e instanceof Error ? e.message : String(e));
+        }
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -134,13 +142,29 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
     }
   }, [stage, confirming, reload]);
 
-  // 空态：加载中 / 网关未起 / 从未执行过
+  // 空态：加载中（骨架，带 aria-busy）/ 加载失败（错误态）/ 网关未起或从未执行
   if (loading) {
     return (
-      <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2">
+      <div
+        className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2"
+        role="status"
+        aria-busy="true"
+        aria-label="正在加载轨迹数据"
+      >
         <div className="h-4 bg-zinc-200 rounded animate-pulse w-1/3" />
         <div className="h-3 bg-zinc-100 rounded animate-pulse w-2/3" />
         <div className="h-3 bg-zinc-100 rounded animate-pulse w-1/2" />
+      </div>
+    );
+  }
+  if (loadError) {
+    return (
+      <div className="border border-zinc-200 rounded-lg bg-white">
+        <EmptyState
+          icon={I.warn}
+          title="轨迹数据加载失败"
+          hint={loadError}
+        />
       </div>
     );
   }
@@ -222,7 +246,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
 
       {/* Phase 3：回滚结果 / 回滚指令（git 提示，对齐 guard.sh 块起始语义；网关不执行 git） */}
       {rollbackMsg && (
-        <div className="border border-red-200 bg-red-50 rounded-lg px-2.5 py-2 text-xs text-red-700 space-y-1">
+        <div className="border border-red-200 bg-red-50 rounded-lg px-2.5 py-2 text-xs text-red-700 space-y-1 animate-fade-in-up" role="status">
           {rollbackMsg.split('\n').map((l, i) => (
             <div key={i} className={l.startsWith('git ') ? 'font-mono bg-white/60 rounded px-1.5 py-0.5 border border-red-100' : 'font-medium'}>
               {l}

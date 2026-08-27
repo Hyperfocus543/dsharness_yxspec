@@ -269,10 +269,13 @@ export const LLMConsole: React.FC = () => {
         )}
       </div>
 
-      {/* 事件级流式：agent 实时工具动作（边跑边看它在做什么） */}
+      {/* 事件级流式：agent 实时工具动作（边跑边看它在做什么）。
+          工具动作切换频繁：150ms 快速入场（ui-animation 高频率 UI 快速进入），reduced-motion 降级。 */}
       {toolStatus && (
         <div
-          className={`mb-2 px-2.5 py-1.5 rounded border text-xs flex items-center gap-2 min-w-0 ${
+          role="status"
+          aria-live="polite"
+          className={`mb-2 px-2.5 py-1.5 rounded border text-xs flex items-center gap-2 min-w-0 animate-fade-in-up ${
             toolStatus.kind === 'call'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
               : toolStatus.kind === 'result'
@@ -319,7 +322,8 @@ export const LLMConsole: React.FC = () => {
         ) : (
           chat.map((m, i) => (
             <div
-              key={i}
+              // 稳定 key：chatStore 消息无 id，用 index 兜底（追加式流式，列表只增不改序）
+              key={`${m.role}-${i}`}
               className={`max-w-[85%] min-w-0 p-2.5 rounded-md text-sm break-words ${
                 m.role === 'user'
                   ? 'bg-emerald-600 text-white ml-auto whitespace-pre-wrap shadow-sm'
@@ -355,6 +359,8 @@ export const LLMConsole: React.FC = () => {
           className="flex-1 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
           rows={2}
           placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
+          aria-label="派活指令输入框"
+          aria-expanded={slashOpen}
           value={prompt}
           onChange={(e) => onPromptChange(e.target.value)}
           onKeyDown={onInputKeyDown}

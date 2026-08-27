@@ -75,12 +75,12 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
   return (
     <div className="px-3 py-2.5 bg-white rounded-lg border border-zinc-200 flex items-center gap-3 flex-wrap">
       <div className="flex items-center gap-2 text-sm text-zinc-700 min-w-0">
-        <span className="text-zinc-400 shrink-0"><Icon name={I.arrowRight} size={13} /></span>
-        <span className="shrink-0">建议下一步</span>
+        <span className="text-zinc-400 shrink-0" aria-hidden="true"><Icon name={I.arrowRight} size={13} /></span>
+        <span className="shrink-0" id="next-command-label">建议下一步</span>
         {loading ? (
-          <span className="text-xs text-zinc-400">计算中…</span>
+          <span className="text-xs text-zinc-400" role="status">计算中…</span>
         ) : hasCommand ? (
-          <strong className="font-mono text-emerald-700 truncate" title={nextCmd}>{nextCmd}</strong>
+          <strong className="font-mono text-emerald-800 truncate" title={nextCmd} aria-live="polite">{nextCmd}</strong>
         ) : (
           <span className="text-xs text-zinc-400" title={nextCmd}>{nextCmd}</span>
         )}

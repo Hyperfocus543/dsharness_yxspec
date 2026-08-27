@@ -50,14 +50,21 @@ export const SessionList: React.FC = () => {
     [sessions, currentId],
   );
 
-  // 点击外部关闭下拉
+  // 点击外部关闭下拉 + Esc 关闭（键盘可达性：下拉打开后 Esc 可关）
   React.useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
       if (listRef.current && !listRef.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   const fmtTime = (iso: string) => {
@@ -77,6 +84,8 @@ export const SessionList: React.FC = () => {
         className="flex items-center gap-1.5 max-w-[240px] text-xs px-2 py-1 bg-white border border-zinc-300 rounded-md hover:bg-zinc-50 transition-colors active:scale-[0.98]"
         onClick={() => setOpen((v) => !v)}
         title="会话管理"
+        aria-expanded={open}
+        aria-haspopup="listbox"
       >
         <span className="text-zinc-400"><Icon name={I.chat} size={12} /></span>
         <span className="truncate text-zinc-700">{current?.title || '新会话'}</span>
@@ -85,7 +94,7 @@ export const SessionList: React.FC = () => {
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1 w-[280px] bg-white border border-zinc-200 rounded-lg shadow-lg z-[65] overflow-hidden">
+        <div className="absolute left-0 top-full mt-1 w-[280px] bg-white border border-zinc-200 rounded-lg shadow-lg z-[65] overflow-hidden animate-fade-in-up">
           {/* 新建 */}
           <button
             className="w-full px-3 py-2 text-sm text-emerald-600 hover:bg-emerald-50 flex items-center gap-2 border-b border-zinc-200 transition-colors active:scale-[0.98]"
@@ -98,12 +107,14 @@ export const SessionList: React.FC = () => {
           </button>
 
           {/* 会话列表 */}
-          <div className="max-h-[300px] overflow-y-auto">
+          <div className="max-h-[300px] overflow-y-auto" role="listbox" aria-label="会话列表">
             {sessions.map((s) => {
               const active = s.id === currentId;
               return (
                 <div
                   key={s.id}
+                  role="option"
+                  aria-selected={active}
                   className={`group flex items-center gap-1 px-2 py-1.5 border-b border-zinc-100 cursor-pointer transition-colors ${
                     active ? 'bg-emerald-50' : 'hover:bg-zinc-50'
                   }`}
@@ -135,23 +146,44 @@ export const SessionList: React.FC = () => {
                       </span>
                       {active && <span className="text-emerald-600 shrink-0"><Icon name={I.check} size={14} /></span>}
                       <span
-                        className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-emerald-600 cursor-pointer transition-all shrink-0"
+                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 text-zinc-400 hover:text-emerald-600 cursor-pointer transition-all shrink-0"
                         onClick={(e) => {
                           e.stopPropagation();
                           setRenamingId(s.id);
                           setRenameVal(s.title);
                         }}
                         title="重命名"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`重命名会话：${s.title}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setRenamingId(s.id);
+                            setRenameVal(s.title);
+                          }
+                        }}
                       >
                         <Icon name={I.edit} size={14} />
                       </span>
                       <span
-                        className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-600 cursor-pointer transition-all shrink-0"
+                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 text-zinc-400 hover:text-red-600 cursor-pointer transition-all shrink-0"
                         onClick={(e) => {
                           e.stopPropagation();
                           remove(s.id);
                         }}
                         title="删除会话"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`删除会话：${s.title}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            remove(s.id);
+                          }
+                        }}
                       >
                         <Icon name={I.trash} size={14} />
                       </span>
@@ -180,6 +212,7 @@ export const SessionList: React.FC = () => {
                 }`}
                 onClick={() => switchTo(s.id)}
                 title={`切换到会话：${s.title}`}
+                aria-pressed={active}
               >
                 {s.title}
               </button>
