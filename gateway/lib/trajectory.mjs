@@ -319,3 +319,175 @@ export function gateSummary() {
   return out
 }
 
+// =============================================================================
+// OTel GenAI 语义约定导出（3.4 节；Langfuse/LangSmith 可消费）
+// 手写 JSON 映射，零依赖（不引入 OTel SDK）。span 命名遵循 gen_ai 语义：
+//   gen_ai.system      → turn/start    （阶段回合边界，span_id = `<seq>.turn<N>`）
+//   gen_ai.message     → assistant/message（token 用量：gen_ai.usage.input_tokens /
+//                        output_tokens / cache_read_input_tokens / cache_creation_input_tokens）
+//   gen_ai.tool        → tool/call + tool/result 成对（call 带 gen_ai.tool.name +
+//                        gen_ai.tool.input；result 带 gen_ai.tool.output + 状态）
+// 公共属性：resource（service.name=yxspec-studio, gen_ai.trace.id）、trace_id=stage、
+// span_id=seq（tool 追加 .callId 去重）、start_time/unix_nano 自 startedAt。
+// rolled_back 轨迹在 resource 标注 `yxspec.trajectory.status=rolled_back` 供审计筛选。
+// =============================================================================
+const NANO = 1e6
+
+/** 事件类型 → gen_ai span kind（OTel 语义约定）。 */
+const GENAI_KIND = {
+  'gen_ai.system': 'client',
+  'gen_ai.message': 'client',
+  'gen_ai.tool': 'client',
+}
+
+function truncatePayload(v, max = 2000) {
+  if (v === undefined || v === null) return v
+  let s = typeof v === 'string' ? v : JSON.stringify(v)
+  if (s.length > max) s = s.slice(0, max) + '…'
+  return s
+}
+
+/** 工具结果内容提取：tool/result 的 message.content[] 拼接（截断防爆）。 */
+function toolResultText(t) {
+  const blocks = Array.isArray(t?.message?.content) ? t.message.content : []
+  const texts = []
+  for (const b of blocks) {
+    if (b && typeof b === 'object') {
+      if (typeof b.text === 'string') texts.push(b.text)
+      else if (b.type === 'tool-result' && b.content != null) texts.push(String(b.content))
+    }
+  }
+  return truncatePayload(texts.join('\n'))
+}
+
+/**
+ * OTel GenAI 导出（GET /api/trajectory/:stage/export）。
+ * @returns {object|null} { resource, trace_id, stage, span_count, spans }；未知阶段/无轨迹 → null
+ */
+export function exportOtelGenAi(stage) {
+  if (!isStageToken(stage)) return null
+  const all = listTrajectories(stage)
+  if (all.length === 0) return null
+
+  const resource = {
+    'service.name': 'yxspec-studio',
+    'service.version': '0.1.0',
+    'gen_ai.trace.id': stage,
+    'gen_ai.trace.name': `${STAGES[stage]?.label ?? stage}（${stage}）`,
+    'gen_ai.provider.name': 'deepseek-harness',
+  }
+  const latest = all[all.length - 1]
+  if (all.some((r) => r.rolled_back)) {
+    resource['yxspec.trajectory.status'] = 'rolled_back'
+    if (latest.rollbackId) resource['yxspec.trajectory.rollback_id'] = latest.rollbackId
+  }
+
+  const spans = []
+  for (const rec of all) {
+    const t0 = rec.startedAt ?? 0
+    const t1 = rec.finishedAt ?? Date.now()
+    const seq = rec.seq ?? 0
+
+    // turn/start：回合边界（阶段执行一次 = 一条 gen_ai.system span，含整体 token 汇总）
+    const model = null // 轨迹聚合未记录模型名（request/header 事件未聚合），置 null
+    spans.push({
+      name: 'turn/start',
+      kind: GENAI_KIND['gen_ai.system'],
+      trace_id: stage,
+      span_id: `${seq}.turn1`,
+      parent_span_id: null,
+      start_time_unix_nano: t0 * NANO,
+      end_time_unix_nano: Math.max(t1, t0) * NANO,
+      attributes: {
+        'gen_ai.system': 'deepseek-harness',
+        'gen_ai.trace.id': stage,
+        'gen_ai.trace.name': resource['gen_ai.trace.name'],
+        'yxspec.trajectory.status': rec.rolled_back ? 'rolled_back' : rec.status,
+        'yxspec.trajectory.seq': seq,
+        'yxspec.trajectory.rollback_id': rec.rollbackId ?? null,
+        'gen_ai.usage.input_tokens': rec.cost?.inputTokens ?? 0,
+        'gen_ai.usage.output_tokens': rec.cost?.outputTokens ?? 0,
+        'gen_ai.usage.cache_read_input_tokens': rec.cost?.cacheReadTokens ?? 0,
+        'gen_ai.usage.cache_creation_input_tokens': rec.cost?.cacheWriteTokens ?? 0,
+        'gen_ai.usage.total_tokens': rec.cost?.tokens ?? 0,
+      },
+      model,
+    })
+
+    // assistant/message：模型输出 + 单消息 token 用量
+    if (Array.isArray(rec.events) && rec.events.includes('assistant/message')) {
+      spans.push({
+        name: 'assistant/message',
+        kind: GENAI_KIND['gen_ai.message'],
+        trace_id: stage,
+        span_id: `${seq}.msg`,
+        parent_span_id: `${seq}.turn1`,
+        start_time_unix_nano: t0 * NANO,
+        end_time_unix_nano: Math.max(t1, t0) * NANO,
+        attributes: {
+          'gen_ai.trace.id': stage,
+          'gen_ai.usage.input_tokens': rec.cost?.inputTokens ?? 0,
+          'gen_ai.usage.output_tokens': rec.cost?.outputTokens ?? 0,
+          'gen_ai.usage.cache_read_input_tokens': rec.cost?.cacheReadTokens ?? 0,
+          'gen_ai.usage.cache_creation_input_tokens': rec.cost?.cacheWriteTokens ?? 0,
+          'gen_ai.usage.total_tokens': rec.cost?.tokens ?? 0,
+        },
+        model,
+      })
+    }
+
+    // tool/call + tool/result 成对（按顺序消费 tools 数组）
+    const tools = Array.isArray(rec.tools) ? rec.tools : []
+    let callIdx = 0
+    const pendingCalls = []
+    for (const t of tools) {
+      if (t.type === 'tool/call') {
+        pendingCalls.push(t)
+      } else if (t.type === 'tool/result') {
+        const call = pendingCalls.length > 0 ? pendingCalls.shift() : null
+        const callName = call?.name ?? t.name ?? null
+        const callId = call?.callId ?? null
+        const n = ++callIdx
+        const ts = t.ts ?? t0
+        // call span：工具名 + 输入（arguments）
+        spans.push({
+          name: `tool/${callName ?? 'unknown'}`,
+          kind: GENAI_KIND['gen_ai.tool'],
+          trace_id: stage,
+          span_id: `${seq}.tool${n}`,
+          parent_span_id: `${seq}.turn1`,
+          start_time_unix_nano: ts * NANO,
+          end_time_unix_nano: (t.ts ?? t0) * NANO,
+          attributes: {
+            'gen_ai.trace.id': stage,
+            'gen_ai.tool.name': callName,
+            'gen_ai.tool.call_id': callId,
+            'gen_ai.tool.input': truncatePayload(call?.arguments ?? null),
+          },
+          model,
+        })
+        // result span：结果 + 成败状态
+        spans.push({
+          name: `tool/${callName ?? 'unknown'}/result`,
+          kind: GENAI_KIND['gen_ai.tool'],
+          trace_id: stage,
+          span_id: `${seq}.tool${n}.result`,
+          parent_span_id: `${seq}.tool${n}`,
+          start_time_unix_nano: ts * NANO,
+          end_time_unix_nano: (t.ts ?? t0) * NANO,
+          attributes: {
+            'gen_ai.trace.id': stage,
+            'gen_ai.tool.name': callName,
+            'gen_ai.tool.call_id': callId,
+            'gen_ai.tool.error': t.ok === false ? (t.error ?? 'tool_failed') : null,
+            'yxspec.trajectory.ok': t.ok === true,
+            'gen_ai.tool.output': toolResultText(t),
+          },
+          model,
+        })
+      }
+    }
+  }
+
+  return { resource, trace_id: stage, stage, span_count: spans.length, spans }
+}

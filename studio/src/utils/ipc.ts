@@ -868,6 +868,11 @@ export interface TrajectoryRecord {
   tools?: TrajectoryTool[];
   cost?: { tokens: number; inputTokens: number; outputTokens: number };
   reason?: string | null;
+  /** Phase 3：回滚协议 —— 该条被标记 rolled_back 时由网关合并进记录 */
+  rollbackId?: string | null;
+  rolled_back?: boolean;
+  rollbackAt?: number;
+  rollbackReason?: string | null;
 }
 
 /** 轨迹证据三态（门控判定用）。 */
@@ -935,6 +940,96 @@ export async function fetchTrajectoryGate(stage: string): Promise<TrajectoryGate
   } catch {
     return null;
   }
+}
+
+// =============================================================================
+// 阶段轨迹回滚 + OTel 导出 API（Phase 3：回滚协议 + 导出）
+// 回滚 = 网关侧把该阶段最新轨迹标记 rolled_back（JSONL 尾部追加审计行），
+//       并返回回滚指令（含 git 提示，对齐 guard.sh 块起始语义）——网关不执行 git。
+// 导出 = GET /api/trajectory/:stage/export → OTel GenAI spans（Langfuse/LangSmith 可消费）。
+// =============================================================================
+
+/** POST /api/trajectory/:stage/rollback 响应（回滚指令）。 */
+export interface TrajectoryRollbackResult {
+  ok: boolean;
+  /** 幂等命中（同一 rollbackId 已标记过）时 true */
+  already?: boolean;
+  rollbackId?: string;
+  seq?: number;
+  targetStatus?: string;
+  /** 该阶段执行前的 HEAD commit（可 git reset --hard 到此处）；null = 无记录 */
+  rollbackCommit?: string | null;
+  instructions: string[];
+  command?: string | null;
+  error?: string;
+}
+
+/**
+ * 标记该阶段最新轨迹回滚（确认后调用）。网关只发指令留档，不执行 git。
+ * 成功 → 返回回滚指令；失败抛错（未知阶段/无轨迹/写盘失败）。
+ */
+export async function markTrajectoryRollback(
+  stage: string,
+  reason?: string,
+): Promise<TrajectoryRollbackResult> {
+  const res = await fetch(`${GATEWAY_BASE}/api/trajectory/${encodeURIComponent(stage)}/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+  const data = (await res.json().catch(() => null)) as TrajectoryRollbackResult | null;
+  if (!res.ok) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  return data || { ok: false, instructions: [] };
+}
+
+/** GET /api/trajectory/:stage/export 响应（OTel GenAI spans）。 */
+export interface OtelExportResponse {
+  resource: Record<string, string>;
+  trace_id: string;
+  stage: string;
+  span_count: number;
+  spans: OtelSpan[];
+}
+
+/** 单条 OTel span（gen_ai 语义约定，Langfuse/LangSmith 可消费）。 */
+export interface OtelSpan {
+  name: string;
+  kind: 'client';
+  trace_id: string;
+  span_id: string;
+  parent_span_id: string | null;
+  start_time_unix_nano: number;
+  end_time_unix_nano: number;
+  attributes: Record<string, unknown>;
+  model: string | null;
+}
+
+/**
+ * 导出该阶段 OTel GenAI spans（下载 JSON）。
+ * 无轨迹 → 返回 null（前端禁用按钮）；网络错误抛错。
+ */
+export async function fetchTrajectoryOtelExport(stage: string): Promise<OtelExportResponse | null> {
+  const res = await fetch(
+    `${GATEWAY_BASE}/api/trajectory/${encodeURIComponent(stage)}/export`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (!res.ok) return null;
+  return (await res.json()) as OtelExportResponse;
+}
+
+/** 触发浏览器下载 JSON 文件（OTel 导出 + 回滚指令共用）。 */
+export function downloadJson(filename: string, obj: unknown): void {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // =============================================================================

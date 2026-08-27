@@ -27,7 +27,7 @@ process.env.YXSPEC_TRAJECTORY_ROOT = TMP_TRAJ
 mkdirSync(join(TMP_PROJ, 'project', 'specs', 'sys'), { recursive: true })
 writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sys', 'sys-req-01-测试.md'), '# SR-001', 'utf8')
 
-const { gateStage, latestTrajectory, listTrajectories, rollbackTrajectory, isValidRollbackId } = await import(
+const { gateStage, latestTrajectory, listTrajectories, rollbackTrajectory, exportOtelGenAi, isValidRollbackId } = await import(
   pathToFileURL(join(process.cwd(), 'lib', 'trajectory.mjs')).href
 )
 const { checkDispatchGate, gateAction, gateEnforceEnabled } = await import(
@@ -347,7 +347,94 @@ console.log('== 20) 回滚降级指令：无 git 起始 commit → re-run 提示
   assert('指令含 re-run 命令提示', r.instructions.some((i) => i.includes('/yxspec:swe-integration-verify')), JSON.stringify(r.instructions))
 }
 
+// =============================================================================
+// OTel GenAI 导出（3.4 节）：Langfuse/LangSmith 可消费格式
+// 用未回滚的 sqt_tr（verified）做干净样本：turn + assistant/message + 工具对
+// =============================================================================
+console.log('== 21) OTel 导出：spans 结构（gen_ai 语义约定）==')
+{
+  const out = exportOtelGenAi('sqt_tr')
+  assert('导出非空 + trace_id=stage', out !== null && out.trace_id === 'sqt_tr', JSON.stringify(out?.trace_id))
+  assert('resource.service.name=yxspec-studio', out.resource['service.name'] === 'yxspec-studio', JSON.stringify(out.resource))
+  assert('span_count > 0', out.span_count > 0, String(out.span_count))
+  const kinds = new Set(out.spans.map((s) => s.kind))
+  assert('span kind ∈ {client}', [...kinds].every((k) => k === 'client'), JSON.stringify([...kinds]))
+  const ids = out.spans.map((s) => s.span_id)
+  assert('span_id 唯一', new Set(ids).size === ids.length, ids.join(','))
+  const t0 = out.spans[0]
+  assert('span 时间戳为 unix_nano', typeof t0.start_time_unix_nano === 'number' && Number.isFinite(t0.start_time_unix_nano), String(t0.start_time_unix_nano))
+  // 必要字段断言（Langfuse 可消费）：name/kind/trace_id/span_id/attributes
+  for (const s of out.spans) {
+    assert(`span 必要字段（${s.name}）`, typeof s.name === 'string' && s.kind && s.trace_id === 'sqt_tr' && typeof s.span_id === 'string' && s.attributes && typeof s.attributes === 'object', JSON.stringify(s).slice(0, 120))
+  }
+}
+
+console.log('== 22) OTel 导出：turn/start 含 token 用量 ==')
+{
+  const out = exportOtelGenAi('sqt_tr')
+  const turn = out.spans.find((s) => s.name === 'turn/start')
+  assert('turn/start span 存在', Boolean(turn), JSON.stringify(out.spans.map((s) => s.name)))
+  assert('gen_ai.usage.input_tokens=80', turn.attributes['gen_ai.usage.input_tokens'] === 80, JSON.stringify(turn.attributes))
+  assert('gen_ai.usage.output_tokens=20', turn.attributes['gen_ai.usage.output_tokens'] === 20, JSON.stringify(turn.attributes))
+  assert('gen_ai.usage.total_tokens=100', turn.attributes['gen_ai.usage.total_tokens'] === 100, JSON.stringify(turn.attributes))
+  assert('yxspec.trajectory.status=passed', turn.attributes['yxspec.trajectory.status'] === 'passed', JSON.stringify(turn.attributes))
+  assert('turn span parent=null（根）', turn.parent_span_id === null, String(turn.parent_span_id))
+}
+
+console.log('== 23) OTel 导出：assistant/message span ==')
+{
+  const out = exportOtelGenAi('sqt_tr')
+  const msg = out.spans.find((s) => s.name === 'assistant/message')
+  assert('assistant/message span 存在', Boolean(msg), JSON.stringify(out.spans.map((s) => s.name)))
+  assert('message span parent=turn/start', msg.parent_span_id === '1.turn1', String(msg.parent_span_id))
+  assert('usage 属性在 message span', msg.attributes['gen_ai.usage.input_tokens'] === 80, JSON.stringify(msg.attributes))
+}
+
+console.log('== 24) OTel 导出：tool/call + tool/result 成对 ==')
+{
+  const out = exportOtelGenAi('sqt_tr')
+  const tools = out.spans.filter((s) => s.name.startsWith('tool/'))
+  assert('工具 span 存在（call + result 成对）', tools.length === 2, JSON.stringify(tools.map((s) => s.name)))
+  const call = tools.find((s) => s.name === 'tool/create_goal')
+  const result = tools.find((s) => s.name === 'tool/create_goal/result')
+  assert('gen_ai.tool.name=create_goal', call?.attributes['gen_ai.tool.name'] === 'create_goal', JSON.stringify(call?.attributes))
+  assert('result parent=tool call span', result?.parent_span_id === call?.span_id, `${result?.parent_span_id} vs ${call?.span_id}`)
+  assert('result 属性带 yxspec.trajectory.ok=true', result?.attributes['yxspec.trajectory.ok'] === true, JSON.stringify(result?.attributes))
+  assert('call 属性含 tool.input（arguments）', call?.attributes['gen_ai.tool.input'] !== undefined, JSON.stringify(call?.attributes))
+}
+
+console.log('== 25) OTel 导出：回滚轨迹标注 + 失败工具 + 多阶段隔离 ==')
+{
+  const out = exportOtelGenAi('sqt_strategy') // 该阶段回滚过（seq1/2 回滚 + seq3 通过）
+  assert('rolled_back 轨迹 → resource 标注', out.resource['yxspec.trajectory.status'] === 'rolled_back', JSON.stringify(out.resource))
+  const rows = out.spans.filter((s) => s.name.startsWith('turn/'))
+  assert('每个执行记录一条 turn span（seq1/2 回滚 + seq3 通过 = 3）', rows.length === 3, String(rows.length))
+  // 回滚记录的 turn span 属性带 rollback_id
+  const rolledTurn = rows.find((s) => s.span_id === '2.turn1')
+  assert('回滚 seq2 turn span 带 yxspec.trajectory.rollback_id', rolledTurn?.attributes['yxspec.trajectory.rollback_id'] === 'sqt_strategy-2', JSON.stringify(rolledTurn?.attributes))
+  assert('回滚 seq2 turn span 状态标注 rolled_back', rolledTurn?.attributes['yxspec.trajectory.status'] === 'rolled_back', JSON.stringify(rolledTurn?.attributes))
+  // 失败工具结果：构造一条 ok=false 的工具对 → gen_ai.tool.error 属性
+  mkdirSync(join(TMP_TRAJ, 'swe_unit_verify'), { recursive: true })
+  writeFileSync(join(TMP_TRAJ, 'swe_unit_verify', 'swe_unit_verify-001.jsonl'), JSON.stringify({
+    stage: 'swe_unit_verify', seq: 1, sessionId: 't', status: 'failed', reason: 'error',
+    startedAt: 1730000200000, finishedAt: 1730000205000, turnCount: 1, stepCount: 1,
+    events: ['turn/start', 'assistant/message', 'tool/call', 'tool/result', 'turn/end'],
+    tools: [
+      { type: 'tool/call', name: 'bash', callId: 'c1', ts: 1730000200100 },
+      { type: 'tool/result', name: 'bash', ok: false, error: 'EACCES', ts: 1730000200200 },
+    ],
+    cost: { tokens: 5, inputTokens: 3, outputTokens: 2 },
+    reason: 'error',
+  }) + '\n', 'utf8')
+  const failed = exportOtelGenAi('swe_unit_verify')
+  const res = failed.spans.find((s) => s.name === 'tool/bash/result')
+  assert('失败工具 result 带 gen_ai.tool.error', res?.attributes['gen_ai.tool.error'] === 'EACCES', JSON.stringify(res?.attributes))
+  const other = exportOtelGenAi('sys_analysis') // 未回滚阶段
+  assert('未回滚阶段 resource 无 rolled_back 标注', other.resource['yxspec.trajectory.status'] === undefined, JSON.stringify(other.resource))
+  assert('未知阶段 → null', exportOtelGenAi('not-a-stage') === null, String(exportOtelGenAi('not-a-stage')))
+  assert('无轨迹阶段 → null', exportOtelGenAi('sys_arch') === null, String(exportOtelGenAi('sys_arch')))
+}
+
 rmSync(TMP, { recursive: true, force: true })
-console.log(`
-结果: ${pass} 通过, ${fail} 失败`)
+console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 process.exit(fail > 0 ? 1 : 0)

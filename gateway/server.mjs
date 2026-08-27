@@ -33,7 +33,7 @@ import { getCommunityPlugins } from './lib/community.mjs'
 import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
-import { trajectoryView, gateStage, gateSummary, rollbackTrajectory } from './lib/trajectory.mjs'
+import { trajectoryView, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
@@ -675,6 +675,17 @@ const server = createServer(async (req, res) => {
         return json(res, 200, g)
       }
       return json(res, 200, { ok: true, gates: gateSummary() })
+    }
+
+    // OTel GenAI 语义导出（3.4 节）：GET /api/trajectory/:stage/export
+    // → JSON spans（gen_ai.* 属性，Langfuse/LangSmith 可消费；手写映射零依赖）
+    if (req.method === 'GET' && path.startsWith('/api/trajectory/') && path.endsWith('/export')) {
+      const stage = decodeURIComponent(path.slice('/api/trajectory/'.length, -'/export'.length))
+      const out = exportOtelGenAi(stage)
+      if (!out) return json(res, 404, { error: out === null ? 'no-trajectory' : 'unknown-stage', stage })
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(out, null, 2))
+      return
     }
 
     // 回滚协议（3.3 节）：POST /api/trajectory/:stage/rollback { rollbackId?, reason? }
