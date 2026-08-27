@@ -13,6 +13,7 @@ CLAUDE_BIN="/c/Users/Administrator/AppData/Roaming/npm/claude"
 MAX_ROUNDS_PER_BLOCK=3          # 精简验证轮（确认稳定后改回 6 整晚跑）
 MAX_CONSECUTIVE_FAIL=3          # 连续失败停块
 MAX_TOTAL_MINUTES=360           # 总时长上限（6h）
+END_AT="${END_AT:-}"            # 可选：到点自动停（HH:MM 24h），如 END_AT=13:30
 START=$(date +%s)
 STOP_FLAG="$NIGHT/stop-flag"
 MANIFEST="$NIGHT/manifest.json"
@@ -31,6 +32,13 @@ elapsed() { echo $(( $(now) - START )); }
 check_stop() {
   [ -f "$STOP_FLAG" ] && return 0
   [ "$(elapsed)" -gt $((MAX_TOTAL_MINUTES * 60)) ] && return 0
+  # 到点自动停：END_AT=HH:MM（24h），当前时间 ≥ 目标时间即停
+  if [ -n "$END_AT" ]; then
+    local now_hm=$(date +%H:%M) end_hm="$END_AT"
+    if [ "$now_hm" \> "$end_hm" ] || [ "$now_hm" = "$end_hm" ]; then
+      return 0
+    fi
+  fi
   return 1
 }
 
