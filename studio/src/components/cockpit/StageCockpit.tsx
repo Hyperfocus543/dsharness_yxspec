@@ -111,8 +111,9 @@ export const StageCockpit: React.FC<CockpitProps> = ({
 
   return (
     <div className="space-y-3">
-      {/* 视图切换 + 成本折叠 */}
-      <div className="flex items-center gap-1.5 flex-wrap">
+      {/* 视图切换 + 成本折叠（sticky：驾驶舱内容下滚时功能条持续显示，
+          不随滚动滚出视野；-mb-3 抵消 space-y 间距，滚动时无漏缝） */}
+      <div className="sticky top-0 z-20 bg-zinc-50 -mb-3 pt-1 pb-1 flex items-center gap-1.5 flex-wrap border-b border-zinc-200/70">
         <ViewTabs view={view} onView={handleView} />
         {/* 执行成本折叠开关 */}
         <button
