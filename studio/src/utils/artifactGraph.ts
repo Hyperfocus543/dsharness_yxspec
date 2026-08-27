@@ -11,7 +11,7 @@
 // =============================================================================
 
 import type { Node, Edge } from '@xyflow/react';
-import { STAGE_TABLE, STAGE_ORDER, STAGE_GROUPS } from '../data/stage-mapping';
+import { STAGE_TABLE, STAGE_ORDER } from '../data/stage-mapping';
 import { ARTIFACT_NODE_META } from '../data/artifact-map';
 import type { StageStatus, StageToken } from '../data/types';
 
