@@ -142,34 +142,18 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
               : '暂无产物'}
         </span>
         <span className="flex items-center gap-1">
-          {/* 轨迹门控徽标（仅 artifact+trajectory 策略显示；可点击查看轨迹）：
-              verified 绿 / unverified 黄 / blocked 红。
-              文案直白：轨迹完整 / 轨迹缺失 / 轨迹异常——不猜「迹✓」缩写。
-              点击 → 跳到该阶段轨迹视图（onViewTrajectory）。 */}
-          {status.gate_trajectory && status.gate_policy === 'artifact+trajectory' && (
+          {/* 轨迹入口图标：点击查看该阶段执行轨迹。
+              不做三态预判（完整/缺失/异常）——执行记录与真实状态在轨迹
+              面板里一目了然，卡片上预判无实际意义，统一一个入口即可。 */}
+          {onViewTrajectory && (
             <button
               type="button"
               onClick={handleTrajClick}
-              className={`px-1.5 py-0.5 rounded text-white text-xs font-medium inline-flex items-center gap-1 transition-all active:scale-[0.96] ${
-                status.gate_trajectory === 'verified'
-                  ? 'bg-sage-500 hover:bg-sage-600'
-                  : status.gate_trajectory === 'unverified'
-                    ? 'bg-amber-500 hover:bg-amber-600'
-                    : 'bg-red-500 hover:bg-red-600'
-              }`}
-              title={
-                status.gate_trajectory === 'verified'
-                  ? '轨迹证据完整 · 点击查看该阶段执行轨迹'
-                  : status.gate_trajectory === 'unverified'
-                    ? `轨迹缺失：${status.gate_reason ?? '该阶段尚未执行或轨迹证据不完整'} · 点击查看轨迹`
-                    : `轨迹异常：${status.gate_reason ?? '轨迹失败或被打回'} · 点击查看轨迹`
-              }
+              className="px-1.5 py-0.5 rounded text-zinc-400 hover:text-emerald-700 hover:bg-emerald-50 border border-transparent hover:border-emerald-200 transition-all active:scale-[0.96]"
+              title="查看该阶段执行轨迹"
+              aria-label={`查看 ${mapping.command} 执行轨迹`}
             >
-              {status.gate_trajectory === 'verified'
-                ? '轨迹完整'
-                : status.gate_trajectory === 'unverified'
-                  ? '轨迹缺失'
-                  : '轨迹异常'}
+              <Icon name={I.timer} size={13} />
             </button>
           )}
           {status.review && (
