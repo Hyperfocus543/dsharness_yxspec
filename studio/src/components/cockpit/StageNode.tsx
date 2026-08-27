@@ -134,10 +134,13 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
               : '暂无产物'}
         </span>
         <span className="flex items-center gap-1">
-          {/* 门控三态徽标（来自轨迹门控）：verified 绿 / unverified 黄 / blocked 红。
+          {/* 轨迹门控三态徽标（仅 artifact+trajectory 策略显示）：
+              verified 绿 / unverified 黄 / blocked 红。
+              纯 artifact 策略的阶段门=产物存在即可，不标「迹」（避免满屏
+              「迹✓」误导——轨迹证据只在轨迹门策略下才被要求）。
               Phase 2 徽标联动：派活被门控打回后，gate_reason 带打回原因，
               title 展示原因文案（'迹✗' 常驻显示打回状态）。 */}
-          {status.gate_trajectory && (
+          {status.gate_trajectory && status.gate_policy === 'artifact+trajectory' && (
             <span
               className={`px-1 rounded text-white text-xs ${
                 status.gate_trajectory === 'verified'

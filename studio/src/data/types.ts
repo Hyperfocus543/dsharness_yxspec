@@ -110,6 +110,10 @@ export interface StageStatus {
    *   unverified → 轨迹存在但缺关键证据（黄色徽标）
    *   blocked  → 轨迹失败/打回（红色徽标） */
   gate_trajectory?: 'verified' | 'unverified' | 'blocked';
+  /** 门控策略（来自 /api/trajectory-gate 的 gate_policy 字段）：
+   *   artifact             → 产物存在即过，不要求轨迹证据（不显示「迹」徽标）
+   *   artifact+trajectory  → 轨迹证据参与门控（仅此策略显示「迹」徽标） */
+  gate_policy?: 'artifact' | 'artifact+trajectory';
   /** 派活被门控打回的原因（Phase 2：读取 /api/agent 拦截响应的 reason 字段）：
    *   trajectory-blocked / no-trajectory / artifact-passed-no-trajectory /
    *   trajectory-unverified（警告） / upstream-blocked / artifact-missing */

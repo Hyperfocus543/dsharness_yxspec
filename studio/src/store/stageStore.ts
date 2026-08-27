@@ -259,7 +259,9 @@ export const useStageStore = create<StageStore>((set, get) => ({
             if (st === 'verified' || st === 'unverified' || st === 'blocked') {
               trajPatch[t] = {
                 ...(get().stages[t] ?? { token: t, status: 'pending' as const, artifacts: [], review: null, last_update: now(), message: '' }),
+                gate_policy: g?.gate_policy ?? undefined,
                 gate_trajectory: st,
+                gate_reason: g?.reason ?? undefined,
               } as StageStatus;
             }
           }
