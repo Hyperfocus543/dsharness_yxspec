@@ -22,6 +22,10 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
   const { dispatch, cancel, sending, cancelling, elapsedSec } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
 
+  // 真实可执行命令均以 /yxspec: 开头；「无下游，建议收口或人工决断」等占位提示
+  // 不是命令 —— 禁止复制/派活（否则会把占位文案 POST 给网关）
+  const hasCommand = nextCmd.startsWith('/yxspec:');
+
   // 建议命令计算：先看当前阶段自身状态，
   // pending_review → 建议审查裁决（产物已齐备，重跑会覆盖待审产物）；
   // 未完成 → 推进自己；已完成 → 才考虑下游 / review。
@@ -49,7 +53,7 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
   }, [stage, onSuggest, stages]);
 
   const handleFill = () => {
-    if (!nextCmd) return;
+    if (!hasCommand) return;
     pushToast(
       'info',
       `已推荐命令：${nextCmd}（受受限链式调用约束，需手动确认执行）`,
@@ -64,7 +68,7 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
   // 逻辑已抽到共享 hook useStageDispatch（门控检查 + 回填对话流 + session 订阅），
   // NextCommand 与 StageNode 卡片共用同一份派活实现。
   const handleDispatch = async () => {
-    if (!nextCmd || sending) return;
+    if (!hasCommand || sending) return;
     await dispatch(nextCmd);
   };
 
@@ -75,8 +79,10 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
         <span className="shrink-0">建议下一步</span>
         {loading ? (
           <span className="text-xs text-zinc-400">计算中…</span>
-        ) : (
+        ) : hasCommand ? (
           <strong className="font-mono text-emerald-700 truncate" title={nextCmd}>{nextCmd}</strong>
+        ) : (
+          <span className="text-xs text-zinc-400" title={nextCmd}>{nextCmd}</span>
         )}
         <span className="text-xs text-zinc-400">（当前 {stage}）</span>
       </div>
@@ -85,7 +91,7 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
           variant="secondary"
           size="sm"
           onClick={handleFill}
-          disabled={!nextCmd || loading}
+          disabled={!hasCommand || loading}
           title="复制命令到剪贴板"
         >
           <Icon name={I.clipboard} size={13} />
@@ -112,7 +118,7 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
             variant="primary"
             size="sm"
             onClick={handleDispatch}
-            disabled={!nextCmd || loading}
+            disabled={!hasCommand || loading}
             title="直接经网关驱动当前阶段 agent 执行（门控通过才放行）"
           >
             <Icon name={I.play} size={13} weight="fill" />
