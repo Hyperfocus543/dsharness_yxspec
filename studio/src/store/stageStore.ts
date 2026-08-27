@@ -24,6 +24,9 @@ interface StageStore {
   costData: ipc.CostData | null;
   /** 事件级流式：agent 最近一次工具动作（tool/call 或 tool/result），实时渲染"正在做…" */
   toolStatus: { kind: 'call' | 'result' | 'end'; name?: string; args?: string; error?: string | null } | null;
+  /** 工具调用链累积缓冲（当前正在执行的 turn）：turn/start 清空，tool/result 追加，
+   *  turn/end 交给对话流（pushAssistantWithTools）封存为消息内联轨迹 */
+  toolTrace: { name: string; ok: boolean; error?: string | null; ts?: string }[];
   /** 手动回退：正则解析 PROGRESS.md / Tauri 命令 */
   refresh: (projectPath: string) => Promise<void>;
   /** SQT 演示：读取 .dsh/dsh_state.json 并把 SQT 6 子阶段合并进 stages */
@@ -36,11 +39,16 @@ interface StageStore {
   connectEvents: (projectPath: string) => Promise<void>;
   /** 取消订阅并释放 EventSource */
   disconnectEvents: () => void;
+  /** 取走当前 turn 累积的工具链并清空缓冲（对话流 pushAssistant 时绑定到消息）*/
+  consumeToolTrace: () => { name: string; ok: boolean; error?: string | null; ts?: string }[];
   suggestNext: (stage: StageToken) => Promise<string | null>;
 }
 
 /** 当前 SSE 订阅的取消函数（模块级持有，避免挂到 store 对象上）*/
 let eventsCancel: (() => void) | null = null;
+
+/** tool/call → tool/result 配对用的待定名（网关 result 只带 callId 不带 name）*/
+let pendingToolName: string | null = null;
 
 /** 兜底导入 STAGE_TABLE 的 token 别名列表：goal 名（如 "swe_coding_do"/"sys.5"）与
  *  command/token 的匹配函数，见下方 matchStageByGoal */
@@ -187,6 +195,7 @@ export const useStageStore = create<StageStore>((set, get) => ({
   resumeInfo: null,
   costData: null,
   toolStatus: null,
+  toolTrace: [],
 
   refresh: async (projectPath: string) => {
     set({ loading: true });
@@ -392,23 +401,34 @@ export const useStageStore = create<StageStore>((set, get) => ({
         case 'tool/call': {
           // 事件级流式：agent 正在调用某工具 → 前端实时渲染"正在做…"
           const args = typeof data?.args === 'string' ? data.args : JSON.stringify(data?.args ?? '');
+          // 记住本次调用名（网关 tool/result 只带 callId 不带 name，靠 pending 配对补名）
+          const name = String(data?.name ?? 'tool');
+          pendingToolName = name;
           set({
-            toolStatus: { kind: 'call', name: String(data?.name ?? ''), args: args.slice(0, 300) },
+            toolStatus: { kind: 'call', name, args: args.slice(0, 300) },
             lastUpdate: now(),
           });
           break;
         }
         case 'tool/result': {
           const err = data?.error;
-          set({
+          // 配对 tool/call 的名字（串行闸门：一一对应）；无 pending 时用 callId 兜底
+          const name = pendingToolName || String(data?.callId ?? 'tool');
+          pendingToolName = null;
+          set((s) => ({
             toolStatus: {
               kind: 'result',
               name: data?.callId ? `#${data.callId}` : undefined,
               args: undefined,
               error: typeof err === 'string' ? err : err ? String(err) : null,
             },
+            // 累积进当前 turn 的工具链（对话流内联轨迹数据源）
+            toolTrace: [
+              ...s.toolTrace,
+              { name, ok: !err, error: typeof err === 'string' ? err : err ? String(err) : null, ts: now() },
+            ],
             lastUpdate: now(),
-          });
+          }));
           break;
         }
         case 'stage/update': {
@@ -452,7 +472,9 @@ export const useStageStore = create<StageStore>((set, get) => ({
           break;
         }
         case 'turn/end': {
-          // turn 结束 → 清空流式工具状态（本轮动作渲染结束）
+          // turn 结束 → 清空流式工具状态（本轮动作渲染结束）；工具链留待对话流
+          // 在 pushAssistant 时用 consumeToolTrace() 取走并绑定到消息（避免重复追加）
+          pendingToolName = null;
           set({ toolStatus: null, lastUpdate: now() });
           break;
         }
@@ -474,6 +496,12 @@ export const useStageStore = create<StageStore>((set, get) => ({
     }
     eventsCancel = null;
     set({ eventsConnected: false });
+  },
+
+  consumeToolTrace: () => {
+    const trace = get().toolTrace;
+    set({ toolTrace: [] });
+    return trace;
   },
 
   suggestNext: async (stage: StageToken) => {

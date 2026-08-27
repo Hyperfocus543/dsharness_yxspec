@@ -10,6 +10,7 @@ import { useAgentChat } from '../../hooks/useAgentChat';
 import { useStageStore, findCurrentStage } from '../../store/stageStore';
 import { STAGE_TABLE, STAGE_ORDER } from '../../data/stage-mapping';
 import { SessionList } from '../chat/SessionList';
+import { ToolTraceInline } from '../chat/ToolTraceInline';
 import { renderMarkdown } from '../../utils/markdown';
 import { Icon, StatusDot, Button, EmptyState, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
@@ -176,22 +177,85 @@ export const LLMConsole: React.FC = () => {
 
   const connTone = connState === 'ok' ? 'ok' : connState === 'err' ? 'err' : 'idle';
   const connLabel = connState === 'ok' ? '已连接执行网关' : connState === 'err' ? '网关未连接' : '检查连接…';
+  // 快捷指令模板：默认收起（顶部信息收敛），点「快捷」展开
+  const [templatesOpen, setTemplatesOpen] = React.useState(false);
 
   return (
     <div className="flex flex-col h-full">
-      {/* 顶部：会话管理 + 连接状态 + 快捷指令 */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2">
+      {/* 顶栏一行：会话管理 + 连接状态 + 模式切换 + 快捷指令（信息收敛为单行） */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
         <SessionList />
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex items-center gap-1.5 text-xs">
           <StatusDot tone={connTone} />
-          <span className="text-zinc-600">{connLabel}</span>
-          <span className="text-xs text-zinc-400 font-mono truncate">{GATEWAY_URL}</span>
+          <span className="text-zinc-500">{connLabel}</span>
         </div>
+        {/* 模式切换（紧凑分段控件） */}
+        <div className="flex items-center gap-0.5 bg-zinc-100 border border-zinc-200 rounded p-0.5">
+          <button
+            className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all active:scale-[0.98] ${
+              mode === 'agent'
+                ? 'bg-white text-emerald-700 shadow-sm'
+                : 'text-zinc-500 hover:bg-white/50'
+            }`}
+            onClick={() => setMode('agent')}
+            title="经 harness runtime 跑完整 agent 编排（工具/多步）"
+          >
+            Agent
+          </button>
+          {!chatUnavailable && (
+            <button
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all active:scale-[0.98] ${
+                mode === 'chat'
+                  ? 'bg-white text-emerald-700 shadow-sm'
+                  : 'text-zinc-500 hover:bg-white/50'
+              }`}
+              onClick={() => setMode('chat')}
+              title="直连网关快速对话"
+            >
+              对话
+            </button>
+          )}
+        </div>
+        {/* 快捷指令折叠开关 */}
+        <button
+          className={`text-[11px] px-2 py-0.5 rounded border transition-all active:scale-[0.98] inline-flex items-center gap-1 ${
+            templatesOpen
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+              : 'border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
+          }`}
+          onClick={() => setTemplatesOpen((o) => !o)}
+          aria-expanded={templatesOpen}
+          title="快捷指令模板"
+        >
+          <Icon name={I.bolt} size={12} />
+          快捷
+          <Icon name={templatesOpen ? I.caretDown : I.caretRight} size={10} />
+        </button>
       </div>
 
-      {/* 目标阶段上下文条（P0-②） */}
+      {/* 快捷指令模板（折叠区，默认收起） */}
+      {templatesOpen && (
+        <div className="mb-1.5 flex flex-wrap gap-1">
+          <Chip onClick={() => handleTemplate('请分析当前仓库的 25 个 ASPICE 阶段进度，看看现在卡在哪')}>阶段进度分析</Chip>
+          {currentStage && (
+            <>
+              <Chip onClick={() => handleTemplate(`请推进当前阶段 ${currentStage}，按门控要求生成产物`)}>
+                推进 {currentStage}
+              </Chip>
+              <Chip onClick={() => handleTemplate(`请解释 ${currentStage} 阶段的审查要点与产物要求`)}>
+                阶段解读
+              </Chip>
+            </>
+          )}
+          {STAGE_ORDER.length > 0 && (
+            <Chip onClick={() => handleTemplate('请生成 SQT 测试用例设计的任务骨架（Markdown）')}>生成任务骨架</Chip>
+          )}
+        </div>
+      )}
+
+      {/* 目标阶段上下文条（P0-②）：当前阶段 + 门控，一行紧凑 */}
       {currentStage && (
-        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1.5 bg-zinc-50 border border-zinc-200 rounded text-xs">
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1 bg-zinc-50 border border-zinc-200 rounded text-xs">
           <span className="text-zinc-600">
             目标阶段：
             <strong className="font-mono text-zinc-900 ml-1">{currentStage}</strong>
@@ -214,60 +278,6 @@ export const LLMConsole: React.FC = () => {
           )}
         </div>
       )}
-
-      {/* 模式切换：Agent 完整闭环 vs 快速对话 */}
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <button
-          className={`px-3 py-1 rounded-md border text-xs font-medium transition-all active:scale-[0.98] ${
-            mode === 'agent'
-              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-              : 'bg-white text-zinc-600 border-zinc-300 hover:bg-zinc-50'
-          }`}
-          onClick={() => setMode('agent')}
-          title="经 harness runtime 跑完整 agent 编排（工具/多步）"
-        >
-          Agent 完整闭环
-        </button>
-        {chatUnavailable ? (
-          <button
-            className="px-3 py-1 rounded-md border text-xs font-medium bg-zinc-100 text-zinc-400 border-zinc-200 cursor-not-allowed"
-            disabled
-            title="网关未实现快速对话（/api/chat 501），请使用 Agent 模式"
-          >
-            快速对话（未实现）
-          </button>
-        ) : (
-          <button
-            className={`px-3 py-1 rounded-md border text-xs font-medium transition-all active:scale-[0.98] ${
-              mode === 'chat'
-                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                : 'bg-white text-zinc-600 border-zinc-300 hover:bg-zinc-50'
-            }`}
-            onClick={() => setMode('chat')}
-            title="直连网关快速对话"
-          >
-            快速对话
-          </button>
-        )}
-      </div>
-
-      {/* 快捷指令模板：按当前阶段动态生成 */}
-      <div className="mb-2 flex flex-wrap gap-1">
-        <Chip onClick={() => handleTemplate('请分析当前仓库的 25 个 ASPICE 阶段进度，看看现在卡在哪')}>阶段进度分析</Chip>
-        {currentStage && (
-          <>
-            <Chip onClick={() => handleTemplate(`请推进当前阶段 ${currentStage}，按门控要求生成产物`)}>
-              推进 {currentStage}
-            </Chip>
-            <Chip onClick={() => handleTemplate(`请解释 ${currentStage} 阶段的审查要点与产物要求`)}>
-              阶段解读
-            </Chip>
-          </>
-        )}
-        {STAGE_ORDER.length > 0 && (
-          <Chip onClick={() => handleTemplate('请生成 SQT 测试用例设计的任务骨架（Markdown）')}>生成任务骨架</Chip>
-        )}
-      </div>
 
       {/* 事件级流式：agent 实时工具动作（边跑边看它在做什么）。
           工具动作切换频繁：150ms 快速入场（ui-animation 高频率 UI 快速进入），reduced-motion 降级。 */}
@@ -332,7 +342,17 @@ export const LLMConsole: React.FC = () => {
                     : 'bg-zinc-100 text-zinc-500 whitespace-pre-wrap'
               }`}
             >
-              {m.role === 'assistant' ? renderMarkdown(m.content) : m.content}
+              {m.role === 'assistant' ? (
+                <>
+                  {renderMarkdown(m.content)}
+                  {/* 执行轨迹内联（参照 DSH 官方 ChatView turn 尾）：折叠展开工具链 */}
+                  {m.role === 'assistant' && m.tools && m.tools.length > 0 && (
+                    <ToolTraceInline tools={m.tools} />
+                  )}
+                </>
+              ) : (
+                m.content
+              )}
             </div>
           ))
         )}

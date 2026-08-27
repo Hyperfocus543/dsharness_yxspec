@@ -24,6 +24,7 @@ export function useAgentChat() {
   const chat = useChatStore((s) => s.chat);
   const pushUser = useChatStore((s) => s.pushUser);
   const pushAssistant = useChatStore((s) => s.pushAssistant);
+  const pushAssistantWithTools = useChatStore((s) => s.pushAssistantWithTools);
   const pushSystem = useChatStore((s) => s.pushSystem);
   const [loading, setLoading] = React.useState(false);
   const [mode, setMode] = React.useState<ChatMode>('agent');
@@ -56,6 +57,16 @@ export function useAgentChat() {
       cancelled = true;
     };
   }, []);
+
+  // 带轨迹推送：回复文本 + 本轮工具链（turn 期间 SSE 累积，消费后清空）
+  const pushReply = (content: string) => {
+    const tools = useStageStore.getState().consumeToolTrace();
+    if (tools && tools.length > 0) {
+      pushAssistantWithTools(content, tools);
+    } else {
+      pushAssistant(content);
+    }
+  };
 
   const send = async (text: string) => {
     const content = text.trim();
@@ -121,7 +132,7 @@ export function useAgentChat() {
         }
         const reply = replyData?.final_response || '(空回复)';
         const extra = replyData?.error ? `\n\n⚠️ agent 诊断: ${JSON.stringify(replyData.error)}` : '';
-        pushAssistant(reply + extra);
+        pushReply(reply + extra);
         return;
       } catch (e: any) {
         if (cancelRef.current) {
@@ -204,7 +215,7 @@ export function useAgentChat() {
         }
         reply = data?.reply || '(空回复)';
       }
-      pushAssistant(reply + extra);
+      pushReply(reply + extra);
     } catch (e: any) {
       if (cancelRef.current) {
         pushAssistant('已取消本轮执行');

@@ -16,6 +16,10 @@ import { create } from 'zustand';
 export interface ChatItem {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** 该条 assistant 消息的执行轨迹（工具调用链，SSE tool/call+result 事件累积，
+   *  turn/end 封存；对话流内联折叠渲染，参照 DSH 官方 ChatView 的 turn 尾）：
+   *   { name, ok, error?, ts } 按调用顺序，ts 为 YYYY-MM-DD HH:mm:ss */
+  tools?: { name: string; ok: boolean; error?: string | null; ts?: string }[];
 }
 
 export interface ChatSession {
@@ -100,6 +104,8 @@ interface ChatStore {
   pushUser: (content: string) => void;
   pushAssistant: (content: string) => void;
   pushSystem: (content: string) => void;
+  /** 追加带执行轨迹的 assistant 消息（tools = 工具调用链）*/
+  pushAssistantWithTools: (content: string, tools: ChatItem['tools']) => void;
 }
 
 export const useChatStore = create<ChatStore>((set, get) => {
@@ -208,6 +214,23 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const updated = st.sessions.map((s) => {
           if (s.id !== st.currentSessionId) return s;
           const messages = [...s.messages, { role: 'assistant' as const, content }];
+          return { ...s, messages, updatedAt: new Date().toISOString() };
+        });
+        const cur = updated.find((s) => s.id === st.currentSessionId);
+        return { sessions: updated, chat: cur?.messages ?? [] };
+      });
+      persistNow();
+    },
+
+    pushAssistantWithTools: (content, tools) => {
+      if (!get().currentSessionId) get().newSession();
+      set((st) => {
+        const updated = st.sessions.map((s) => {
+          if (s.id !== st.currentSessionId) return s;
+          const messages = [
+            ...s.messages,
+            { role: 'assistant' as const, content, tools: tools ?? [] },
+          ];
           return { ...s, messages, updatedAt: new Date().toISOString() };
         });
         const cur = updated.find((s) => s.id === st.currentSessionId);
