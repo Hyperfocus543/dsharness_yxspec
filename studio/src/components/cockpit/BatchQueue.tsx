@@ -129,7 +129,7 @@ export const BatchQueue: React.FC = () => {
   };
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="space-y-4">
       {/* 标题 + 说明 */}
       <div>
         <h3 className="text-sm font-bold text-zinc-800 flex items-center gap-2">

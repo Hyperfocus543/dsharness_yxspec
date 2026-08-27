@@ -10,7 +10,6 @@ import type { FunctionCard } from './navigation';
 import { StageCockpit } from './components/cockpit/StageCockpit';
 import { NextCommand } from './components/cockpit/NextCommand';
 import { ResumeBanner } from './components/cockpit/ResumeBanner';
-import { BatchQueue } from './components/cockpit/BatchQueue';
 // ReportExport 由 FE-2 子 agent 实现（零 props，导出名 ReportExport）。
 import { ReportExport } from './components/cockpit/ReportExport';
 import { ReviewCenter } from './components/review/ReviewCenter';
@@ -70,8 +69,6 @@ export function renderFunctionCard(card: FunctionCard, ctx: FunctionCardCtx) {
       );
     case 'reviews':
       return <ReviewCenter projectPath={ctx.projectPath} />;
-    case 'batch':
-      return <BatchQueue />;
     case 'report':
       return <ReportExport />;
     case 'plugins':
