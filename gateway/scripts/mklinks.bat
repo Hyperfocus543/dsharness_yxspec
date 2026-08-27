@@ -1,7 +1,11 @@
 @echo off
 chcp 65001 >nul
-set "GW=D:\Work\01_Projects\Aima_X1_BCM\.dsh\gateway\runtime-js\node_modules"
-set "SRC=D:\AI\deepseek-harness-master\examples\node_modules\@deepseek-ai"
+rem 基础 16 个 junction（examples/node_modules 源）。
+rem 路径可经环境变量覆盖：YXSPEC_GATEWAY_NODE_MODULES / HARNESS_HOME（缺省回落本机开发路径）
+if "%YXSPEC_GATEWAY_NODE_MODULES%"=="" set "YXSPEC_GATEWAY_NODE_MODULES=D:\Work\01_Projects\Aima_X1_BCM\.dsh\gateway\runtime-js\node_modules"
+if "%HARNESS_HOME%"=="" set "HARNESS_HOME=D:\AI\deepseek-harness-master"
+set "GW=%YXSPEC_GATEWAY_NODE_MODULES%"
+set "SRC=%HARNESS_HOME%\examples\node_modules\@deepseek-ai"
 
 if not exist "%GW%\@deepseek-ai" mkdir "%GW%\@deepseek-ai"
 

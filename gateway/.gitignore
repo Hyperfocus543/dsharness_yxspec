@@ -4,6 +4,11 @@
 dispatch_final.txt
 sse_final.txt
 
-# 配置备份与冒烟产物（不进仓库）
-runtime-js/config/*.bak*
-test/gm-smoke-*
+# 运行时产物（不提交）：junction 重建后生成 / 本地缓存 / 数据库
+runtime-js/node_modules/
+runtime-js/poc-session-query/
+.dsh/graph-memory/
+community-plugins-cache.json
+community-plugins-test.json
+test/gm-smoke-20260825/
+cordis.synth.yml

@@ -1,3 +1,4 @@
+// UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 // ArtifactDrawer — 产物详情抽屉（需求 3）
 // 点击驾驶舱阶段节点 → 右侧抽屉列出该阶段全部产物文件；
@@ -11,6 +12,8 @@ import * as ipc from '../../utils/ipc';
 import { useProjectStore } from '../../store/projectStore';
 import type { DshArtifact, StageToken } from '../../data/types';
 import { renderMarkdown } from '../../utils/markdown';
+import { Icon } from '../ui';
+import { I } from '../ui/icons';
 
 interface ArtifactDrawerProps {
   open: boolean;
@@ -20,11 +23,11 @@ interface ArtifactDrawerProps {
   onClose: () => void;
 }
 
-const KIND_ICON: Record<string, string> = {
-  markdown: '📄',
-  gherkin: '🧪',
-  json: '📊',
-  file: '📎',
+const KIND_ICON: Record<string, React.ElementType> = {
+  markdown: I.fileText,
+  gherkin: I.bolt,
+  json: I.stack,
+  file: I.link,
 };
 
 function fmtSize(bytes: number): string {
@@ -116,7 +119,7 @@ export const ArtifactDrawer: React.FC<ArtifactDrawerProps> = ({
         if (!cancelled) setContent(text || '(空文件或读取失败)');
       })
       .catch(() => {
-        if (!cancelled) setContent('⚠️ 读取失败');
+        if (!cancelled) setContent('读取失败');
       })
       .finally(() => {
         if (!cancelled) setLoadingContent(false);
@@ -140,7 +143,7 @@ export const ArtifactDrawer: React.FC<ArtifactDrawerProps> = ({
       onClick={onClose}
     >
       <div
-        className="relative h-full bg-white shadow-2xl flex flex-col"
+        className="relative h-full bg-white shadow-xl border-l border-zinc-200 flex flex-col"
         style={{ width: panelWidth }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -156,46 +159,53 @@ export const ArtifactDrawer: React.FC<ArtifactDrawerProps> = ({
           }}
           title="拖动调整产物详情宽度"
         >
-          <div className="w-1 h-full mx-auto bg-transparent group-hover:bg-blue-300 group-active:bg-blue-500 transition-colors" />
+          <div className="w-1 h-full mx-auto bg-transparent group-hover:bg-emerald-400 group-active:bg-emerald-600 transition-colors" />
         </div>
         {/* 头部 */}
-        <div className="bg-gray-800 text-white px-4 py-3 flex items-center justify-between shrink-0">
+        <div className="bg-zinc-800 text-white px-4 py-3 flex items-center justify-between shrink-0">
           <div>
-            <div className="text-sm font-bold">📂 产物详情 · {label}</div>
+            <div className="text-sm font-semibold flex items-center gap-2">
+              <Icon name={I.database} size={16} className="text-emerald-400" />
+              <span>产物详情 · {label}</span>
+            </div>
             <div className="text-xs opacity-70 font-mono">{token}</div>
           </div>
           <button
-            className="w-8 h-8 rounded hover:bg-gray-600 flex items-center justify-center text-xl"
+            className="w-8 h-8 rounded-md hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors"
             onClick={onClose}
             title="关闭"
           >
-            ✕
+            <Icon name={I.close} size={14} />
           </button>
         </div>
 
         <div className="flex flex-1 overflow-hidden">
           {/* 左侧：文件列表 */}
-          <div className="w-72 shrink-0 border-r overflow-y-auto bg-gray-50">
+          <div className="w-72 shrink-0 border-r border-zinc-200 overflow-y-auto bg-zinc-50">
             {items.length === 0 ? (
-              <div className="p-4 text-xs text-gray-400">暂无产物</div>
+              <div className="p-4 text-xs text-zinc-400">暂无产物</div>
             ) : (
               items.map((it) => {
                 const name = it.path.split('/').pop() || it.path;
-                const icon = it.kind ? KIND_ICON[it.kind] || '📎' : '📎';
+                const icon = it.kind ? KIND_ICON[it.kind] || I.link : I.link;
                 const active = selected === it.path;
                 return (
                   <button
                     key={it.path}
-                    className={`w-full text-left px-3 py-2 border-b flex items-center gap-2 hover:bg-blue-50 transition-colors ${
-                      active ? 'bg-blue-100' : ''
+                    className={`w-full text-left px-3 py-2 border-b border-zinc-100 flex items-center gap-2 transition-colors ${
+                      active ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-zinc-100'
                     }`}
                     onClick={() => setSelected(it.path)}
                     title={it.path}
                   >
-                    <span>{icon}</span>
-                    <span className="text-xs truncate flex-1">{name}</span>
+                    <span className={active ? 'text-emerald-600' : 'text-zinc-400'}>
+                      <Icon name={icon} size={14} />
+                    </span>
+                    <span className={`text-xs truncate flex-1 ${active ? 'text-zinc-900' : 'text-zinc-700'}`}>
+                      {name}
+                    </span>
                     {it.size !== undefined && (
-                      <span className="text-[10px] text-gray-400 shrink-0">
+                      <span className="text-xs text-zinc-400 shrink-0">
                         {fmtSize(it.size)}
                       </span>
                     )}
@@ -208,22 +218,22 @@ export const ArtifactDrawer: React.FC<ArtifactDrawerProps> = ({
           {/* 右侧：内容预览 */}
           <div className="flex-1 overflow-auto bg-white">
             {!selected ? (
-              <div className="p-8 text-center text-sm text-gray-400">
+              <div className="p-8 text-center text-sm text-zinc-400">
                 点击左侧文件查看内容
               </div>
             ) : loadingContent ? (
-              <div className="p-8 text-center text-sm text-blue-500 animate-pulse">
+              <div className="p-8 text-center text-sm text-amber-500 animate-pulse">
                 加载中…
               </div>
             ) : (
               <div className="p-4">
-                <div className="mb-2 text-xs text-gray-400 font-mono break-all">
+                <div className="mb-2 text-xs text-zinc-400 font-mono break-all">
                   {selected}
                   {items.find((i) => i.path === selected)?.mtime
                     ? ` · ${fmtTime(items.find((i) => i.path === selected)!.mtime!)}`
                     : ''}
                 </div>
-                <div className="markdown-body text-sm text-gray-800 leading-relaxed">
+                <div className="markdown-body text-sm text-zinc-800 leading-relaxed">
                   {renderMarkdown(content)}
                 </div>
               </div>

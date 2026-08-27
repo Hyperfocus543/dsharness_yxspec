@@ -1,3 +1,4 @@
+// UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // M2 任务状态机看板
 // 7 状态分组 + 任务卡 + 自动计时（启动记 started_at / 完成算 duration）
 
@@ -13,25 +14,37 @@ import {
 } from '../../store/taskStore';
 import { useToastStore } from '../../store/toastStore';
 import { useAgentChat } from '../../hooks/useAgentChat';
+import { Icon, StatusDot } from '../ui';
+import { I } from '../ui/icons';
 
 const STATUS_LABELS: Record<TaskStatusType, string> = {
-  pending: '⏳ 待启动',
-  ready: '🟢 就绪',
-  in_progress: '🔵 进行中',
-  blocked: '🔴 阻塞',
-  done: '✅ 完成',
-  skipped: '⏭ 跳过',
-  stale: '🟣 过期',
+  pending: '待启动',
+  ready: '就绪',
+  in_progress: '进行中',
+  blocked: '阻塞',
+  done: '完成',
+  skipped: '跳过',
+  stale: '过期',
 };
 
 const STATUS_COLORS: Record<TaskStatusType, string> = {
-  pending: 'border-gray-300 bg-gray-50',
-  ready: 'border-green-300 bg-green-50',
-  in_progress: 'border-blue-400 bg-blue-50',
+  pending: 'border-zinc-200 bg-zinc-50',
+  ready: 'border-emerald-300 bg-emerald-50',
+  in_progress: 'border-amber-400 bg-amber-50',
   blocked: 'border-red-400 bg-red-50',
-  done: 'border-emerald-400 bg-emerald-50',
-  skipped: 'border-gray-400 bg-gray-100',
+  done: 'border-sage-300 bg-sage-50',
+  skipped: 'border-zinc-300 bg-zinc-100',
   stale: 'border-purple-400 bg-purple-50',
+};
+
+const STATUS_DOT: Record<TaskStatusType, string> = {
+  pending: 'bg-zinc-400',
+  ready: 'bg-emerald-500',
+  in_progress: 'bg-amber-500',
+  blocked: 'bg-red-500',
+  done: 'bg-sage-500',
+  skipped: 'bg-zinc-300',
+  stale: 'bg-purple-500',
 };
 
 interface TaskCardProps {
@@ -54,33 +67,39 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, overlayStatus, onUpdate, onDi
     : STATUS_COLORS[task.status];
 
   return (
-    <div className={`rounded border-2 ${colorCls} p-3 mb-2`}>
+    <div className={`rounded-lg border-2 ${colorCls} p-3 mb-2`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-gray-500">{task.id}</span>
+            <span className="font-mono text-xs text-zinc-500">{task.id}</span>
             {task.realtimeOnly && (
-              <span className="text-[10px] px-1 py-0.5 bg-red-100 text-red-700 rounded-full">
+              <span className="text-xs px-1 py-0.5 bg-red-100 text-red-700 rounded-full">
                 实时
               </span>
             )}
-            {task.done && <span className="text-xs text-emerald-600">done</span>}
+            {task.done && (
+              <span className="text-xs text-sage-600 inline-flex items-center gap-1">
+                <Icon name={I.check} size={12} />
+                done
+              </span>
+            )}
             {overlayStatus && (
-              <span className="text-[10px] px-1 py-0.5 bg-amber-200 text-amber-800 rounded-full">
+              <span className="text-xs px-1 py-0.5 bg-amber-200 text-amber-800 rounded-full inline-flex items-center gap-1">
+                <span className={`inline-block w-2 h-2 rounded-full ${STATUS_DOT[overlayStatus]}`} />
                 agent:{STATUS_LABELS[overlayStatus]}
               </span>
             )}
           </div>
-          <div className="text-sm font-medium mt-1 truncate" title={task.name}>
+          <div className="text-sm font-medium mt-1 truncate text-zinc-800" title={task.name}>
             {task.name || '（无名称）'}
           </div>
-          <div className="flex gap-2 mt-1 text-xs text-gray-500">
+          <div className="flex gap-2 mt-1 text-xs text-zinc-500">
             <span>{task.type || '—'}</span>
             <span>·</span>
             <span>{task.module || '—'}</span>
           </div>
           {(task.started_at || task.duration) && (
-            <div className="text-xs text-gray-400 mt-1">
+            <div className="text-xs text-zinc-400 mt-1">
               {task.started_at && (
                 <span>开始 {task.started_at.split(' ')[1]}</span>
               )}
@@ -93,16 +112,21 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, overlayStatus, onUpdate, onDi
         <div className="flex flex-col gap-1 shrink-0">
           {onDispatch && !task.realtimeOnly && (
             <button
-              className="text-xs px-2 py-0.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1 text-xs px-2 py-0.5 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
               onClick={() => onDispatch(task)}
               disabled={dispatchBusy}
               title="把该任务派给模型执行"
             >
-              {dispatchBusy ? '…' : '🚀 派活'}
+              {dispatchBusy ? '…' : (
+                <>
+                  <Icon name={I.rocket} size={12} />
+                  派活
+                </>
+              )}
             </button>
           )}
           <button
-            className="text-xs text-blue-500 hover:underline"
+            className="text-xs text-emerald-600 hover:text-emerald-700 hover:underline transition-colors active:scale-[0.98]"
             onClick={() => setOpen(!open)}
           >
             {open ? '收起' : '改状态'}
@@ -111,25 +135,26 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, overlayStatus, onUpdate, onDi
       </div>
 
       {open && validTargets.length > 0 && (
-        <div className="mt-2 pt-2 border-t flex flex-wrap gap-1">
+        <div className="mt-2 pt-2 border-t border-zinc-200 flex flex-wrap gap-1.5">
           {validTargets.map((t) => (
             <button
               key={t}
-              className="text-xs px-2 py-0.5 bg-white border border-gray-300 rounded hover:bg-blue-50"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-white border border-zinc-300 rounded-md hover:bg-zinc-50 transition-colors active:scale-[0.98]"
               onClick={() => {
                 setOpen(false);
                 onUpdate(t);
               }}
             >
-              → {STATUS_LABELS[t]}
+              <Icon name={I.arrowRight} size={12} className="text-zinc-400" />
+              {STATUS_LABELS[t]}
             </button>
           ))}
         </div>
       )}
 
       {open && (
-        <details className="mt-2 text-xs text-gray-600">
-          <summary className="cursor-pointer">详情</summary>
+        <details className="mt-2 text-xs text-zinc-600">
+          <summary className="cursor-pointer hover:text-zinc-900">详情</summary>
           <div className="mt-1 pl-2 space-y-1">
             <div>
               <span className="font-semibold">动作：</span>
@@ -162,12 +187,15 @@ const RealtimeTodoSection: React.FC<{
   return (
     <div className="mb-4 border border-red-300 bg-red-50/50 rounded-lg overflow-hidden">
       <div className="bg-red-500 text-white px-3 py-1.5 text-xs font-bold flex items-center justify-between">
-        <span>🔴 Agent 实时任务</span>
-        <span className="bg-white/20 px-1.5 rounded-full text-[10px]">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full bg-white" />
+          Agent 实时任务
+        </span>
+        <span className="bg-white/20 px-1.5 rounded-full text-xs">
           {overlayCount + orphanTodos.length}
         </span>
       </div>
-      <div className="px-3 py-1.5 text-xs text-gray-700">
+      <div className="px-3 py-1.5 text-xs text-zinc-700">
         {overlayCount > 0 && (
           <span>已并入网格 {overlayCount} 个（状态与静态表不同，卡片已高亮）</span>
         )}
@@ -233,30 +261,31 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({ projectPath, taskFile, tit
     <div className="p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h3 className="font-bold text-lg">
+          <h3 className="font-bold text-lg text-zinc-800">
             {title || taskFile}
           </h3>
-          <div className="text-xs text-gray-500 mt-1">
+          <div className="text-xs text-zinc-500 mt-1">
             {loading ? '加载中…' : `${stats.done}/${stats.total} 完成（${stats.pct}%）`}
           </div>
         </div>
         <button
-          className="text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+          className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-white border border-zinc-300 rounded-md hover:bg-zinc-50 transition-colors active:scale-[0.98]"
           onClick={() => load(projectPath, taskFile)}
         >
-          🔄 刷新
+          <Icon name={I.refresh} size={12} />
+          刷新
         </button>
       </div>
 
-      <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
+      <div className="w-full bg-zinc-200 rounded-full h-2 mb-4">
         <div
-          className="bg-emerald-500 h-2 rounded-full transition-all"
+          className="bg-sage-500 h-2 rounded-full transition-all"
           style={{ width: `${stats.pct}%` }}
         />
       </div>
 
       {/* P3 双口径说明 */}
-      <div className="text-[11px] text-gray-400 mb-2">
+      <div className="text-xs text-zinc-400 mb-2">
         进度按状态 done={stats.done}（完成列 true={stats.doneFlag}）· 进行中 {stats.in_progress} · 阻塞 {stats.blocked} · 跳过 {stats.skipped} · 过期 {stats.stale}
       </div>
 
@@ -266,10 +295,13 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({ projectPath, taskFile, tit
         {(Object.keys(STATUS_LABELS) as TaskStatusType[]).map((status) => {
           const items = grouped[status] || [];
           return (
-            <div key={status} className="bg-white rounded p-2 border">
+            <div key={status} className="bg-white rounded-lg p-2 border border-zinc-200">
               <div className="text-xs font-semibold mb-2 flex items-center justify-between">
-                <span>{STATUS_LABELS[status]}</span>
-                <span className="bg-gray-100 px-1.5 rounded-full text-gray-600">
+                <span className="flex items-center gap-1.5 text-zinc-700">
+                  <span className={`inline-block w-2 h-2 rounded-full ${STATUS_DOT[status]}`} />
+                  {STATUS_LABELS[status]}
+                </span>
+                <span className="bg-zinc-100 px-1.5 rounded-full text-zinc-600">
                   {items.length}
                 </span>
               </div>
@@ -285,7 +317,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({ projectPath, taskFile, tit
                   />
                 ))}
                 {items.length === 0 && (
-                  <div className="text-xs text-gray-400 text-center py-2">—</div>
+                  <div className="text-xs text-zinc-400 text-center py-2">—</div>
                 )}
               </div>
             </div>
@@ -293,10 +325,18 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({ projectPath, taskFile, tit
         })}
       </div>
 
-      <div className="mt-4 text-xs text-gray-500">
-        ℹ️ 改状态会自动写回 <code className="bg-gray-100 px-1 rounded">{taskFile}</code>
-        ：启动任务记 started_at、完成任务自动算 duration（按 yxspec §1.3 规则省略高位零）。
-        {realtimeTodos.length > 0 && ' 🔴 Agent 实时任务已并入网格（黄色高亮 = 状态漂移）。'}
+      <div className="mt-4 text-xs text-zinc-500 flex items-start gap-1.5">
+        <Icon name={I.info} size={13} className="text-zinc-400 mt-0.5 shrink-0" />
+        <span>
+          改状态会自动写回 <code className="bg-zinc-100 px-1 rounded">{taskFile}</code>
+          ：启动任务记 started_at、完成任务自动算 duration（按 yxspec §1.3 规则省略高位零）。
+          {realtimeTodos.length > 0 && (
+            <span className="inline-flex items-center gap-1 ml-1 text-red-600">
+              <StatusDot tone="err" />
+              Agent 实时任务已并入网格（黄色高亮 = 状态漂移）。
+            </span>
+          )}
+        </span>
       </div>
     </div>
   );

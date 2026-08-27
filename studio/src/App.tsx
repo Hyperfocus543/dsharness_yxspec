@@ -7,13 +7,21 @@
 import React from 'react';
 import { StageCockpit } from './components/cockpit/StageCockpit';
 import { NextCommand } from './components/cockpit/NextCommand';
+import { ResumeBanner } from './components/cockpit/ResumeBanner';
+import { BatchQueue } from './components/cockpit/BatchQueue';
+// ReportExport 由 FE-2 子 agent 实现（零 props，导出名 ReportExport）。
+import { ReportExport } from './components/cockpit/ReportExport';
 import { TaskBoard } from './components/taskboard/TaskBoard';
 import { ReviewCenter } from './components/review/ReviewCenter';
 import { PipelinePanel } from './components/pipeline/PipelinePanel';
 import { ArtifactDrawer } from './components/artifacts/ArtifactDrawer';
 import { ModelSettings } from './components/settings/ModelSettings';
+import { PluginCenter } from './components/plugin/PluginCenter';
+import { useFeatureStore } from './store/featureStore';
 import { LLMConsole } from './components/exec/LLMConsole';
 import { ProjectSwitcher } from './components/layout/ProjectSwitcher';
+import { Icon } from './components/ui';
+import { I } from './components/ui/icons';
 import { useProjectStore } from './store/projectStore';
 import { useStageStore, findCurrentStage, STAGE_TABLE } from './store/stageStore';
 import { useToastStore } from './store/toastStore';
@@ -22,14 +30,25 @@ import { STAGE_ORDER } from './data/stage-mapping';
 import type { StageMapping, StageToken } from './data/types';
 
 /** 功能卡 id：除执行终端外的辅助功能（产物图谱已并入驾驶舱流向视图） */
-type FunctionCard = 'cockpit' | 'tasks' | 'reviews' | 'pipeline' | 'settings';
+type FunctionCard =
+  | 'cockpit'
+  | 'tasks'
+  | 'reviews'
+  | 'pipeline'
+  | 'plugins'
+  | 'settings'
+  | 'batch'
+  | 'report';
 
-const FUNCTION_CARDS: { id: FunctionCard; label: string; icon: string; hint: string }[] = [
-  { id: 'cockpit', label: '流程驾驶舱', icon: '🎛️', hint: '阶段进度 · 门控 · 流向' },
-  { id: 'tasks', label: '任务看板', icon: '📋', hint: '阶段任务状态机' },
-  { id: 'reviews', label: '审查中心', icon: '✅', hint: 'Review 裁决' },
-  { id: 'pipeline', label: 'Pipeline', icon: '📊', hint: '编码流水线' },
-  { id: 'settings', label: '设置', icon: '⚙️', hint: '模型管理 · 网关' },
+const FUNCTION_CARDS: { id: FunctionCard; label: string; icon: React.ElementType; hint: string }[] = [
+  { id: 'cockpit', label: '流程驾驶舱', icon: I.gauge, hint: '阶段进度 · 门控 · 流向' },
+  { id: 'tasks', label: '任务看板', icon: I.listChecks, hint: '阶段任务状态机' },
+  { id: 'reviews', label: '审查中心', icon: I.shield, hint: 'Review 裁决' },
+  { id: 'batch', label: '批处理', icon: I.bolt, hint: '多阶段一键连跑' },
+  { id: 'report', label: '周报', icon: I.fileText, hint: '进度导出' },
+  { id: 'pipeline', label: 'Pipeline', icon: I.stack, hint: '编码流水线' },
+  { id: 'plugins', label: '插件中心', icon: I.plugs, hint: '功能开关 · 社区插件' },
+  { id: 'settings', label: '设置', icon: I.gear, hint: '模型管理 · 网关' },
 ];
 
 const DEFAULT_TASKS_FILES = [
@@ -51,15 +70,38 @@ const App: React.FC = () => {
   const dshState = useStageStore((s) => s.dshState);
   const refreshStages = useStageStore((s) => s.refresh);
   const loadDshState = useStageStore((s) => s.loadDshState);
+  const loadResume = useStageStore((s) => s.loadResume);
   const suggestNext = useStageStore((s) => s.suggestNext);
   const loadingStages = useStageStore((s) => s.loading);
-  const lastUpdate = useStageStore((s) => s.lastUpdate);
   const toasts = useToastStore((s) => s.toasts);
+  // 功能商店订阅：ui-report（周报）是纯 UI 插件，启用才显示左侧「周报」功能卡
+  const features = useFeatureStore((s) => s.features);
+  const loadFeatures = useFeatureStore((s) => s.load);
+  // 首次挂载加载功能列表（决定周报卡是否显示）
+  React.useEffect(() => {
+    loadFeatures().catch(() => {});
+  }, [loadFeatures]);
+  // ui-report 是否启用（feature 未加载/未找到 → 关）
+  const reportEnabled = React.useMemo(
+    () => features.some((f) => f.id === 'ui-report' && f.enabled),
+    [features],
+  );
+  // 可显示的左侧功能卡：周报仅当 ui-report 启用时出现
+  const visibleCards = React.useMemo(
+    () => FUNCTION_CARDS.filter((c) => c.id !== 'report' || reportEnabled),
+    [reportEnabled],
+  );
 
   const [activeCard, setActiveCard] = React.useState<FunctionCard | null>('cockpit');
   const [selectedTaskFile, setSelectedTaskFile] = React.useState<string>(
     'task_sqt_case_design.md',
   );
+  // 周报插件被关闭时，若当前正停在周报页 → 自动切回驾驶舱（避免面板悬在已隐藏的功能上）
+  React.useEffect(() => {
+    if (!reportEnabled && activeCard === 'report') {
+      setActiveCard('cockpit');
+    }
+  }, [reportEnabled, activeCard]);
   // 可拖拽面板宽度（功能面板，右侧并排）—— 记住上次拖的大小（localStorage 持久化）
   const [panelWidth, setPanelWidth] = React.useState<number>(() => {
     try {
@@ -115,15 +157,22 @@ const App: React.FC = () => {
   }, []);
 
   // 项目加载后：先读 dsh_state.json（SQT 演示真相文件）→ 静态刷一次阶段 → 订阅网关实时事件
-  // 同时初始化对话会话（按项目隔离）
+  // loadDshState 内部会恢复 localStorage 里的 sessionId 并 connectEvents（幂等），
+  // 因此无需在 App 里重复订阅。
+  // 同时初始化对话会话（按项目隔离）；并拉取 /api/resume 断点恢复信息（网关重启/休眠后提示续跑）。
   React.useEffect(() => {
+    // 项目切换时先清空旧项目的断点恢复信息（避免 A 项目提示条闪现在 B 项目上）
+    useStageStore.setState({ resumeInfo: null });
     if (!project) return;
     useChatStore.getState().setProject(project.path);
     let cancelled = false;
     (async () => {
       await refreshStages(project.path);
       await loadDshState(project.path);
+      await loadResume(project.path); // 幂等；项目切换时重新拉（resumeInfo 随项目走）
+      await useStageStore.getState().loadCost();
       if (!cancelled) {
+        // loadDshState 已负责订阅；此处保留 connectEvents 为幂等兜底（重复调用会先 disconnect 再重连，安全）
         await useStageStore
           .getState()
           .connectEvents(project.path)
@@ -143,16 +192,18 @@ const App: React.FC = () => {
   const currentMapping = currentStage ? STAGE_TABLE[currentStage] : null;
 
   return (
-    <div className="h-[100dvh] flex flex-col bg-gray-50 overflow-hidden">
+    <div className="h-[100dvh] flex flex-col bg-zinc-50 overflow-hidden">
       {/* Header */}
-      <header className="bg-white border-b px-4 py-2.5 flex items-center justify-between shrink-0">
+      <header className="bg-white border-b border-zinc-200 px-4 py-2.5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="text-xl font-bold text-blue-700">🛰️ YXSpec Studio</div>
-          <span className="text-xs text-gray-500">对话驱动驾驶舱</span>
+          <div className="text-xl font-bold text-zinc-900 flex items-center gap-2">
+            <span className="text-emerald-600"><Icon name={I.cube} size={22} weight="fill" /></span>
+            YXSpec Studio
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {project && (
-            <span className="text-xs text-gray-600 hidden sm:inline">
+            <span className="text-xs text-zinc-600 hidden sm:inline">
               <span className="font-mono">{project.meta.spec_id || '—'}</span>
               {' · '}
               {project.meta.product || '—'}
@@ -163,29 +214,8 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* 项目状态条 */}
-      {project && (
-        <div className="bg-blue-50 border-b border-blue-200 px-4 py-1.5 text-xs shrink-0">
-          <div className="flex flex-wrap gap-x-6 gap-y-0.5">
-            <span>
-              <strong>路径：</strong>
-              <code className="bg-white px-1 rounded">{project.path}</code>
-            </span>
-            <span>
-              <strong>分支：</strong>
-              <code className="bg-white px-1 rounded">{project.meta.git_branch || '—'}</code>
-            </span>
-            <span>
-              <strong>工期：</strong>
-              {project.meta.target_schedule || '—'}
-            </span>
-            <span>
-              <strong>阶段计算：</strong>
-              {lastUpdate || '—'}
-            </span>
-          </div>
-        </div>
-      )}
+      {/* 项目状态条 — 已删除：分支/工期数据源（PROGRESS.md 元信息）恒空、阶段计算仅为刷新时间戳，
+          无信息量；spec_id+product 已在 header 右上显示，路径在 ProjectSwitcher。 */}
 
       {/* 主区域：左侧功能卡栏 + 对话终端(工作台占满) + 功能面板(右侧抽屉覆盖) */}
       <main className="flex-1 min-w-0 flex overflow-hidden relative">
@@ -197,52 +227,48 @@ const App: React.FC = () => {
           <>
             {/* 左侧：功能卡栏 */}
             <aside className="w-52 shrink-0 border-r bg-white flex flex-col p-2 gap-1.5 overflow-y-auto">
-              <div className="px-1 py-1 text-[11px] text-gray-400 uppercase tracking-wide">
-                功能面板
-              </div>
-              {FUNCTION_CARDS.map((card) => {
+              {visibleCards.map((card) => {
                 const active = activeCard === card.id;
                 return (
                   <button
                     key={card.id}
-                    className={`rounded-lg border p-2.5 text-left transition-all ${
+                    className={`rounded-lg border p-2.5 text-left transition-all active:scale-[0.98] ${
                       active
-                        ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-200'
-                        : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/40'
+                        ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-200'
+                        : 'border-zinc-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/40'
                     }`}
                     onClick={() => setActiveCard(active ? null : card.id)}
                     title={active ? '收起面板' : card.hint}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-lg">{card.icon}</span>
+                      <span className={`shrink-0 ${active ? 'text-emerald-600' : 'text-zinc-400'}`}>
+                        <Icon name={card.icon} size={18} />
+                      </span>
                       <div>
-                        <div className="text-sm font-semibold text-gray-700">{card.label}</div>
-                        <div className="text-[11px] text-gray-400">{card.hint}</div>
+                        <div className={`text-sm font-semibold ${active ? 'text-emerald-800' : 'text-zinc-700'}`}>{card.label}</div>
+                        <div className="text-xs text-zinc-400">{card.hint}</div>
                       </div>
-                      {active && <span className="ml-auto text-blue-500 text-xs">◂</span>}
+                      {active && <span className="ml-auto text-emerald-500 text-xs">◂</span>}
                     </div>
                   </button>
                 );
               })}
-              <div className="mt-auto px-1 py-1 text-[11px] text-gray-400">
-                💬 对话在中央常驻，随时派活
-              </div>
             </aside>
 
             {/* 中央：执行终端（工作台，占满剩余宽度） */}
-            <section className="flex-1 min-w-0 bg-gray-50 flex flex-col">
-              <div className="px-3 py-2 border-b bg-white flex items-center justify-between shrink-0">
+            <section className="flex-1 min-w-0 bg-zinc-50 flex flex-col">
+              <div className="px-3 py-2 border-b border-zinc-200 bg-white flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-base">⚡</span>
-                  <span className="text-sm font-bold text-gray-700">执行终端</span>
-                  <span className="text-[11px] text-gray-400">对话驱动 · 主入口</span>
+                  <span className="text-emerald-600"><Icon name={I.terminal} size={16} /></span>
+                  <span className="text-sm font-bold text-zinc-800">执行终端</span>
                 </div>
                 {activeCard && (
                   <button
-                    className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-600"
+                    className="text-xs px-2 py-1 bg-zinc-100 hover:bg-zinc-200 rounded text-zinc-600 flex items-center gap-1"
                     onClick={() => setActiveCard(null)}
                   >
-                    ⇤ 收右面板
+                    <Icon name={I.doubleLeft} size={14} />
+                    收右面板
                   </button>
                 )}
               </div>
@@ -265,11 +291,11 @@ const App: React.FC = () => {
                   }}
                   title="拖动调整面板宽度"
                 >
-                  <div className="w-1 h-full mx-auto bg-transparent group-hover:bg-blue-300 group-active:bg-blue-500 transition-colors" />
+                  <div className="w-1 h-full mx-auto bg-transparent group-hover:bg-emerald-300 group-active:bg-emerald-500 transition-colors" />
                 </div>
                 <section
                   ref={panelRef}
-                  className="flex-1 border-l bg-gray-50 overflow-y-auto"
+                  className="flex-1 border-l border-zinc-200 bg-zinc-50 overflow-y-auto"
                 >
                   {renderFunctionCard(activeCard, {
                     projectPath: project.path,
@@ -318,7 +344,7 @@ const App: React.FC = () => {
                 : t.level === 'warn'
                   ? 'bg-amber-500'
                   : t.level === 'success'
-                    ? 'bg-emerald-500'
+                    ? 'bg-sage-500'
                     : 'bg-blue-500'
             }`}
           >
@@ -328,10 +354,8 @@ const App: React.FC = () => {
       </div>
 
       {/* Footer */}
-      <footer className="bg-white border-t px-4 py-1.5 text-xs text-gray-500 flex items-center justify-between shrink-0">
-        <span>
-          YXSpec Studio · 对话驱动 · 功能面板辅助 · 受限链式调用（仅推荐不自动执行）
-        </span>
+      <footer className="bg-white border-t border-zinc-200 px-4 py-1.5 text-xs text-zinc-500 flex items-center justify-between shrink-0">
+        <span>YXSpec Studio</span>
         <span>共 {STAGE_ORDER.length} 阶段</span>
       </footer>
     </div>
@@ -355,7 +379,9 @@ function renderFunctionCard(
   switch (card) {
     case 'cockpit':
       return (
-        <div className="p-4 space-y-4">
+        <div className="p-3 space-y-2.5">
+          {/* 断点续跑（驾驶舱顶部，建议下一步之前）：网关重启/休眠后提示「已恢复到 X 阶段」+ 一键续跑 */}
+          <ResumeBanner />
           {/* 建议下一步（驾驶舱顶端，整体进度/当前阶段之后） */}
           {ctx.currentStage && ctx.currentMapping && (
             <NextCommand
@@ -376,7 +402,7 @@ function renderFunctionCard(
       return (
         <div className="p-4">
           <div className="mb-3 flex items-center gap-2">
-            <span className="text-xs text-gray-600">任务文件：</span>
+            <span className="text-xs text-zinc-600">任务文件：</span>
             <select
               className="text-xs border rounded px-2 py-1 font-mono"
               value={ctx.selectedTaskFile}
@@ -398,8 +424,14 @@ function renderFunctionCard(
       );
     case 'reviews':
       return <ReviewCenter projectPath={ctx.projectPath} />;
+    case 'batch':
+      return <BatchQueue />;
+    case 'report':
+      return <ReportExport />;
     case 'pipeline':
       return <PipelinePanel projectPath={ctx.projectPath} />;
+    case 'plugins':
+      return <PluginCenter />;
     case 'settings':
       return <ModelSettings />;
     default:
@@ -407,20 +439,16 @@ function renderFunctionCard(
   }
 }
 
-const EmptyState: React.FC<{ loading: boolean }> = ({ loading }) => (
-  <div className="flex items-center justify-center h-full">
+const EmptyState: React.FC<{ loading: boolean }> = ({ loading }) => (  <div className="flex items-center justify-center h-full">
     <div className="text-center max-w-lg p-8">
-      <div className="text-6xl mb-4">🛰️</div>
-      <h2 className="text-2xl font-bold mb-2 text-gray-700">YXSpec Studio</h2>
-      <p className="text-sm text-gray-500 mb-5">
-        把 yxspec V3 流程驾驶舱化的桌面工具。在下方选择或输入 yxspec 项目路径打开。
+      <div className="mb-4 flex justify-center text-emerald-600"><Icon name={I.cube} size={56} weight="fill" /></div>
+      <h2 className="text-2xl font-bold mb-2 text-zinc-800">YXSpec Studio</h2>
+      <p className="text-sm text-zinc-500 mb-5">
+        选择或输入 yxspec 项目路径打开
       </p>
       <div className="flex justify-center">
         <ProjectSwitcher currentPath={null} loading={loading} />
       </div>
-      <p className="text-xs text-gray-400 mt-4">
-        也可通过 URL 参数 <code className="bg-gray-100 px-1 rounded">?project=&ltpath&gt;</code> 注入
-      </p>
     </div>
   </div>
 );

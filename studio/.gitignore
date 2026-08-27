@@ -13,5 +13,3 @@ src-tauri/icons/
 
 # Local config
 *.local.json
-# WorkBuddy automation memory (contains credentials — never commit)
-.workbuddy/

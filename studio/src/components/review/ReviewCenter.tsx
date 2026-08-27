@@ -1,20 +1,30 @@
+// UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // M3 审查中心 - review-*.md 聚合 + verdict + 签字追踪
 
 import React from 'react';
 import type { ReviewEntry, ReviewVerdict } from '../../data/types';
 import { countByVerdict, useReviewStore } from '../../store/reviewStore';
 import { STAGE_TABLE } from '../../data/stage-mapping';
+import { I } from '../ui/icons';
+import { Button, Icon, Panel } from '../ui';
+import { ReviewQueue } from './ReviewQueue';
 
 const VERDICT_COLORS: Record<ReviewVerdict, string> = {
-  approved: 'border-emerald-500 bg-emerald-50',
-  conditional: 'border-amber-500 bg-amber-50',
-  rejected: 'border-red-500 bg-red-50',
+  approved: 'border-l-sage-500',
+  conditional: 'border-l-amber-500',
+  rejected: 'border-l-red-500',
 };
 
 const VERDICT_LABELS: Record<ReviewVerdict, string> = {
-  approved: '✅ approved',
-  conditional: '⚠️ conditional',
-  rejected: '❌ rejected',
+  approved: 'approved',
+  conditional: 'conditional',
+  rejected: 'rejected',
+};
+
+const VERDICT_ACCENT: Record<ReviewVerdict, { icon: React.ElementType; text: string }> = {
+  approved: { icon: I.check, text: 'text-sage-600' },
+  conditional: { icon: I.warn, text: 'text-amber-600' },
+  rejected: { icon: I.xCircle, text: 'text-red-600' },
 };
 
 interface ReviewCardProps {
@@ -26,67 +36,82 @@ const ReviewCard: React.FC<ReviewCardProps> = ({ entry }) => {
 
   if (!entry.review) {
     return (
-      <div className="rounded border-2 border-gray-300 bg-gray-50 p-3">
+      <Panel className="border-l-4 border-l-zinc-300 p-3">
         <div className="flex items-center gap-2 mb-1">
-          <span className="font-mono text-xs text-gray-500">{mapping?.aspice || '—'}</span>
-          <span className="text-sm font-semibold">{entry.stage}</span>
+          <span className="font-mono text-xs text-zinc-500">{mapping?.aspice || '—'}</span>
+          <span className="text-sm font-semibold text-zinc-800">{entry.stage}</span>
         </div>
-        <div className="text-xs text-gray-500">⏳ 无审查报告（pending）</div>
-      </div>
+        <div className="flex items-center gap-1 text-xs text-zinc-500">
+          <Icon name={I.clock} size={14} className="text-zinc-400" />
+          无审查报告（pending）
+        </div>
+      </Panel>
     );
   }
 
   const color = VERDICT_COLORS[entry.review.verdict];
+  const accent = VERDICT_ACCENT[entry.review.verdict];
 
   return (
-    <div className={`rounded border-2 ${color} p-3`}>
+    <Panel className={`border-l-4 ${color} p-3`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs text-gray-500">{mapping?.aspice || '—'}</span>
-          <span className="text-sm font-semibold">{entry.stage}</span>
+          <span className="font-mono text-xs text-zinc-500">{mapping?.aspice || '—'}</span>
+          <span className="text-sm font-semibold text-zinc-800">{entry.stage}</span>
         </div>
-        <span className="text-xs font-bold">{VERDICT_LABELS[entry.review.verdict]}</span>
+        <span className={`inline-flex items-center gap-1 text-xs font-semibold ${accent.text}`}>
+          <Icon name={accent.icon} size={14} />
+          {VERDICT_LABELS[entry.review.verdict]}
+        </span>
       </div>
 
-      <div className="space-y-1 text-xs text-gray-600">
+      <div className="space-y-1 text-xs text-zinc-600">
         {entry.review.tech_lead && (
           <div>
-            <span className="font-semibold">技术负责人：</span>
+            <span className="font-semibold text-zinc-700">技术负责人：</span>
             {entry.review.tech_lead}
           </div>
         )}
         {entry.review.quality_lead && (
           <div>
-            <span className="font-semibold">质量负责人：</span>
+            <span className="font-semibold text-zinc-700">质量负责人：</span>
             {entry.review.quality_lead}
           </div>
         )}
         {entry.review.date && (
           <div>
-            <span className="font-semibold">审查日期：</span>
+            <span className="font-semibold text-zinc-700">审查日期：</span>
             {entry.review.date}
           </div>
         )}
-        <div className="flex items-center gap-2">
-          <span className="font-semibold">人工签字：</span>
+        <div className="flex items-center gap-1">
+          <span className="font-semibold text-zinc-700">人工签字：</span>
           {entry.review.signoff ? (
-            <span className="text-emerald-600">✓ 已签署</span>
+            <span className="inline-flex items-center gap-1 text-sage-600">
+              <Icon name={I.check} size={14} />
+              已签署
+            </span>
           ) : (
-            <span className="text-amber-600">⚠ 待签</span>
+            <span className="inline-flex items-center gap-1 text-amber-600">
+              <Icon name={I.warn} size={14} />
+              待签
+            </span>
           )}
         </div>
         {entry.signoff_file && (
-          <div className="text-gray-400 truncate" title={entry.signoff_file}>
-            📎 {entry.signoff_file.split('/').pop()}
+          <div className="flex items-center gap-1 text-zinc-400 truncate" title={entry.signoff_file}>
+            <Icon name={I.link} size={14} />
+            {entry.signoff_file.split('/').pop()}
           </div>
         )}
         {entry.review.file && (
-          <div className="text-gray-400 truncate" title={entry.review.file}>
-            📄 {entry.review.file.split('/').pop()}
+          <div className="flex items-center gap-1 text-zinc-400 truncate" title={entry.review.file}>
+            <Icon name={I.fileText} size={14} />
+            {entry.review.file.split('/').pop()}
           </div>
         )}
       </div>
-    </div>
+    </Panel>
   );
 };
 
@@ -109,35 +134,41 @@ export const ReviewCenter: React.FC<ReviewCenterProps> = ({ projectPath }) => {
   return (
     <div className="p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-bold text-lg">审查中心</h3>
-        <button
-          className="text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
-          onClick={() => load(projectPath)}
-        >
-          🔄 刷新
-        </button>
+        <h3 className="text-lg font-semibold text-zinc-800">审查中心</h3>
+        <Button variant="secondary" size="sm" onClick={() => load(projectPath)}>
+          <Icon name={I.refresh} size={14} />
+          刷新
+        </Button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <Stat label="approved" value={counts.approved} color="emerald" />
+      {/* D1 审批队列：顶部待审批区块（读 dshState.stages 找 review pending / pending_review） */}
+      <div className="mb-4">
+        <ReviewQueue />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-4">
+        <Stat label="approved" value={counts.approved} color="sage" />
         <Stat label="conditional" value={counts.conditional} color="amber" />
         <Stat label="rejected" value={counts.rejected} color="red" />
         <Stat label="无审查报告" value={counts.none} color="gray" />
       </div>
 
       {loading ? (
-        <div className="text-center text-gray-500 py-8">加载中…</div>
+        <div className="py-8 text-center text-zinc-500">加载中…</div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {entries.map((entry) => (
             <ReviewCard key={entry.stage} entry={entry} />
           ))}
         </div>
       )}
 
-      <div className="mt-4 text-xs text-gray-500">
-        ℹ️ 审查裁决 verdict 合法值：approved / conditional / rejected。
-        conditional 在 build-spec §5.2 中视为 completed（ASPICE 留痕）。
+      <div className="mt-4 flex items-start gap-1 text-xs text-zinc-500">
+        <Icon name={I.info} size={14} className="mt-0.5 shrink-0 text-zinc-400" />
+        <span>
+          审查裁决 verdict 合法值：approved / conditional / rejected。
+          conditional 在 build-spec §5.2 中视为 completed（ASPICE 留痕）。
+        </span>
       </div>
     </div>
   );
@@ -149,15 +180,16 @@ const Stat: React.FC<{ label: string; value: number; color: string }> = ({
   color,
 }) => {
   const bg = {
-    emerald: 'bg-emerald-100 text-emerald-800',
-    amber: 'bg-amber-100 text-amber-800',
-    red: 'bg-red-100 text-red-800',
-    gray: 'bg-gray-100 text-gray-800',
+    sage: 'bg-sage-50 text-sage-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    amber: 'bg-amber-50 text-amber-700',
+    red: 'bg-red-50 text-red-700',
+    gray: 'bg-zinc-100 text-zinc-600',
   }[color];
   return (
-    <div className={`rounded p-3 ${bg}`}>
-      <div className="text-xs">{label}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
+    <div className={`rounded-lg border border-zinc-200 p-3 ${bg}`}>
+      <div className="text-xs text-zinc-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
     </div>
   );
 };

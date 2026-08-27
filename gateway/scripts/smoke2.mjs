@@ -1,19 +1,23 @@
 // Smoke 2: verify goal/change + todo/write + turn/end events stream.
 // Prompt asks the agent to use todo_write and goal_create.
 import { pathToFileURL } from 'node:url'
-const sdkClient = await import(pathToFileURL('D:/AI/deepseek-harness-master/packages/sdk/client/lib/index.js').href)
+import { fileURLToPath } from 'node:url'
+// 路径 env 化：HARNESS_HOME（harness 主仓根）/ YXSPEC_WORKSPACE_CWD（项目根）
+const HARNESS_HOME = process.env.HARNESS_HOME ?? 'D:/AI/deepseek-harness-master'
+const WORKSPACE = process.env.YXSPEC_WORKSPACE_CWD ?? 'D:/Work/01_Projects/Aima_X1_BCM'
+const sdkClient = await import(pathToFileURL(`${HARNESS_HOME}/packages/sdk/client/lib/index.js`).href)
 const { DeepSeekHarness } = sdkClient
 
-const RUNTIME_BIN = 'D:/AI/deepseek-harness-master/packages/examples/jsonrpc-demo/lib/bin.js'
-const CONFIG = 'D:/Work/01_Projects/Aima_X1_BCM/.dsh/gateway/runtime-js/config/cordis.yml'
-const CWD = 'D:/Work/01_Projects/Aima_X1_BCM'
+const RUNTIME_BIN = `${HARNESS_HOME}/packages/examples/jsonrpc-demo/lib/bin.js`
+const CONFIG = process.env.YXSPEC_CORDIS_CONFIG ? fileURLToPath(new URL(process.env.YXSPEC_CORDIS_CONFIG)) : `${WORKSPACE}/.dsh/gateway/runtime-js/config/cordis.yml`
+const CWD = WORKSPACE
 
 const eventsSeen = []
 const harness = new DeepSeekHarness({
   launch: {
     command: process.execPath,
     args: [RUNTIME_BIN, CONFIG],
-    cwd: 'D:/AI/deepseek-harness-master',
+    cwd: HARNESS_HOME,
     env: { ...process.env },
   },
   cwd: CWD,

@@ -1,0 +1,93 @@
+# YXSpec SQT 会话网关 — POC：session-query 最小组合（无 weknora/graph-memory/tool-guard）
+# 目的：最小干扰下验证 @deepseek-ai/dsh-session-query 三件套真实可执行。
+# 只保留 agent 主脊 + session 持久化 + session-query(sqlite 后端) + 模型侧工具。
+
+- id: sdk-jsonrpc-server
+  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+  config:
+    maxTokensAsSuccess: true
+
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+
+- id: settings
+  name: '@deepseek-ai/dsh-settings-file'
+
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+
+# agent 主脊：提供 ctx.sessions / ctx.sessionTitle / ctx.tools / ctx.systemPrompt
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'
+    workspaceContext: false
+    skills:
+      enabled: false
+    toolBash:
+      enableRunInBackground: false
+    toolJobs: false
+    goals:
+      domain: {}
+      tool: {}
+
+# session 持久化（jsonl）→ ctx.sessions 的 persisted 来源
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+    compression: 'none'
+
+- id: session-checkpoints
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
+- id: bash
+  name: '@deepseek-ai/dsh-bash-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    timeoutMs: 60000
+
+- id: fs-local
+  name: '@deepseek-ai/dsh-fs-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: fs-observation-policy
+  name: '@deepseek-ai/dsh-fs-observation-policy'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
+
+# ---- POC: session-query 三件套 ----
+# 1) ctx.sessionQuery 具体后端（SQLite FTS5）；openAt=first-search 避免启动期 SQLite 警告
+- id: session-query-sqlite
+  name: '@deepseek-ai/dsh-session-query-sqlite'
+  config:
+    path: !!js "process.env.SESSION_QUERY_DB ?? 'D:/Work/01_Projects/Aima_X1_BCM/.dsh/gateway/runtime-js/poc-session-query/poc-session-query.db'"
+    openAt: 'first-search'
+
+# 2) 模型侧工具：session_search / session_event_search / session_trace / session_event_trace / session_event_read
+- id: tool-session-query
+  name: '@deepseek-ai/dsh-tool-session-query'

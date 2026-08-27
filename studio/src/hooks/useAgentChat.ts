@@ -10,6 +10,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useStageStore } from '../store/stageStore';
 import { useChatStore } from '../store/chatStore';
 import { useModelStore } from '../store/modelStore';
+import { STAGE_TABLE } from '../data/stage-mapping';
 import type { ChatItem } from '../store/chatStore';
 
 export type ChatMode = 'agent' | 'chat';
@@ -24,7 +25,6 @@ export function useAgentChat() {
   const pushAssistant = useChatStore((s) => s.pushAssistant);
   const pushSystem = useChatStore((s) => s.pushSystem);
   const [loading, setLoading] = React.useState(false);
-  const [connState, setConnState] = React.useState<'checking' | 'ok' | 'err'>('checking');
   const [mode, setMode] = React.useState<ChatMode>('agent');
   // 快速对话可用性：网关 501(not_implemented)=未实现 → 前端隐藏快速按钮
   const [chatUnavailable, setChatUnavailable] = React.useState(false);
@@ -32,19 +32,34 @@ export function useAgentChat() {
   const cancelRef = React.useRef(false);
 
   // 健康检查：Track B 网关暴露 /health（server.mjs）
+  // 关键：不能只在挂载时测一次——网关重启/换绑后 connState 会永远卡 err，
+  // 而派活按钮 disabled 依赖它 → 表现为"对话框没反应"。
+  // 方案：定时重试（8s），且暴露 recheckConnection 供发送前补测。
+  const [connState, setConnState] = React.useState<'checking' | 'ok' | 'err'>('checking');
+  const connStateRef = React.useRef(connState);
+  connStateRef.current = connState;
+  const checkHealth = React.useCallback(async (): Promise<boolean> => {
+    try {
+      const r = await fetch(`${GATEWAY_URL}/health`, { signal: AbortSignal.timeout(4000) });
+      const ok = r.ok;
+      setConnState(ok ? 'ok' : 'err');
+      return ok;
+    } catch {
+      setConnState('err');
+      return false;
+    }
+  }, []);
   React.useEffect(() => {
     let cancelled = false;
-    fetch(`${GATEWAY_URL}/health`)
-      .then((r) => {
-        if (!cancelled) setConnState(r.ok ? 'ok' : 'err');
-      })
-      .catch(() => {
-        if (!cancelled) setConnState('err');
-      });
+    checkHealth();
+    const timer = setInterval(() => {
+      if (!cancelled) checkHealth();
+    }, 8000);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
-  }, []);
+  }, [checkHealth]);
 
   // 快速对话可用性探测：POST /api/chat 网关返回 501 → 未实现，隐藏快速按钮。
   // 网关未起/网络错误时保持 unknown（不隐藏，用户仍可用 Agent 模式）。
@@ -69,6 +84,82 @@ export function useAgentChat() {
   const send = async (text: string) => {
     const content = text.trim();
     if (!content || loading) return;
+    // 发送前补测连接：connState 可能因网关重启/换绑停在 err，导致按钮禁用但实际可达。
+    // 补测成功 → 更新 connState（按钮下次可用）；仍失败 → 报错提示，不静默吞掉。
+    let connected = connStateRef.current === 'ok';
+    if (!connected) {
+      connected = await checkHealth();
+    }
+    if (!connected) {
+      pushUser(content);
+      pushAssistant('⚠️ 执行网关不可达，请确认网关已启动（server.mjs，端口 8787）。');
+      return;
+    }
+    // 命令识别即时反馈：输入以 /yxspec: 开头时，识别具体阶段并先报一条"正在执行"，
+    // 避免长任务（分钟级）期间只有弱 loading 圈、看起来像"没反应"。
+    const stageMatch = content.match(/^\/yxspec:(\S+)/);
+    if (stageMatch) {
+      const cmdName = stageMatch[1];
+      const mapEntry = Object.entries(STAGE_TABLE).find(([, m]) => m.command_name === cmdName);
+      pushUser(content);
+      pushAssistant(
+        `已识别命令 \`/yxspec:${cmdName}\` → 正在执行阶段 **${mapEntry ? mapEntry[0] : cmdName}**${
+          mapEntry ? `（${mapEntry[1].aspice}）` : ''
+        }，模型在 harness 里真实跑，请稍候…`,
+      );
+      setPrompt('');
+      setLoading(true);
+      cancelRef.current = false;
+      try {
+        const sid = useStageStore.getState().sessionId;
+        const realSid = sid && sid.startsWith('bcm-') ? sid : undefined;
+        const modelId = useModelStore.getState().defaultModelId || undefined;
+        const data = await ipc.runAgent(content, {
+          system: ipc.YXSPEC_SYSTEM_PROMPT,
+          sessionId: realSid,
+          model: modelId,
+        });
+        if (data?.error && data.final_response === undefined) {
+          throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+        }
+        const sessionId: string | null = data?.session_id || null;
+        let replyData: any = data;
+        if (data?.task_id) {
+          if (sessionId) {
+            useStageStore.setState({ sessionId });
+            const projectPath = useProjectStore.getState().current?.path || '';
+            ipc.setStoredSessionId(projectPath, sessionId);
+          }
+          const projectPath = useProjectStore.getState().current?.path || '';
+          await useStageStore
+            .getState()
+            .connectEvents(projectPath)
+            .catch((e) => console.warn('[useAgentChat] connectEvents 失败:', e));
+          const task = await ipc.pollTask(data.task_id as string, {
+            timeoutMs: 20 * 60 * 1000,
+          });
+          if (!task) {
+            throw new Error('任务超时或网关已重启（任务丢失），请重试');
+          }
+          replyData = task.result;
+        }
+        const reply = replyData?.final_response || '(空回复)';
+        const extra = replyData?.error ? `\n\n⚠️ agent 诊断: ${JSON.stringify(replyData.error)}` : '';
+        pushAssistant(reply + extra);
+        return;
+      } catch (e: any) {
+        if (cancelRef.current) {
+          pushAssistant('已取消本轮执行');
+        } else {
+          pushAssistant(`⚠️ 网关调用失败: ${e?.message || e}`);
+        }
+        return;
+      } finally {
+        setLoading(false);
+        cancelRef.current = false;
+      }
+    }
+    // 普通输入：走原逻辑
     pushUser(content);
     setPrompt('');
     setLoading(true);
@@ -83,24 +174,38 @@ export function useAgentChat() {
         const realSid = sid && sid.startsWith('bcm-') ? sid : undefined;
         const modelId = useModelStore.getState().defaultModelId || undefined;
         const data = await ipc.runAgent(content, {
-          system: '你是 yxspec 车载嵌入式 ASPICE 流程助理，回复简洁准确。',
+          system: ipc.YXSPEC_SYSTEM_PROMPT,
           sessionId: realSid,
           model: modelId,
         });
         if (data?.error && data.final_response === undefined) {
           throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
         }
+        // 后端 202 后台任务 → 轮询到终态；否则是门控拦截等即时结果
         const sessionId: string | null = data?.session_id || null;
-        if (sessionId) {
-          useStageStore.setState({ sessionId });
+        let replyData: any = data;
+        if (data?.task_id) {
+          if (sessionId) {
+            useStageStore.setState({ sessionId });
+            const projectPath = useProjectStore.getState().current?.path || '';
+            // 持久化 sessionId（按项目隔离，刷新后恢复）
+            ipc.setStoredSessionId(projectPath, sessionId);
+          }
           const projectPath = useProjectStore.getState().current?.path || '';
           await useStageStore
             .getState()
             .connectEvents(projectPath)
             .catch((e) => console.warn('[useAgentChat] connectEvents 失败:', e));
+          const task = await ipc.pollTask(data.task_id as string, {
+            timeoutMs: 20 * 60 * 1000, // 长阶段最多 20 分钟
+          });
+          if (!task) {
+            throw new Error('任务超时或网关已重启（任务丢失），请重试');
+          }
+          replyData = task.result;
         }
-        reply = data?.final_response || '(空回复)';
-        extra = data?.error ? `\n\n⚠️ agent 诊断: ${JSON.stringify(data.error)}` : '';
+        reply = replyData?.final_response || '(空回复)';
+        extra = replyData?.error ? `\n\n⚠️ agent 诊断: ${JSON.stringify(replyData.error)}` : '';
       } else {
         // chat 模式：直连网关快速对话（网关 501 = 未实现）
         const res = await fetch(`${GATEWAY_URL}/api/chat`, {
@@ -108,7 +213,7 @@ export function useAgentChat() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt: content,
-            system: '你是 yxspec 车载嵌入式 ASPICE 流程助理，回复简洁准确。',
+            system: ipc.YXSPEC_SYSTEM_PROMPT,
             max_tokens: 512,
           }),
         });
@@ -164,6 +269,7 @@ export function useAgentChat() {
     chat,
     loading,
     connState,
+    recheckConnection: checkHealth,
     mode,
     setMode,
     send,

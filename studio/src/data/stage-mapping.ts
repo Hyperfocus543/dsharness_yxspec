@@ -78,13 +78,13 @@ export const STAGE_TABLE: Record<StageToken, StageMapping> = {
     order: 4,
   },
 
-  // ===== HWE.1 阶段 5（无 slash 命令，由 yxspec-hwe-analysis agent 触发）=====
+  // ===== HWE.1 阶段 5（无原生 slash 命令，网关层合成 /yxspec:hwe-analysis，经 yxspec-hwe-analysis agent 触发）=====
   hwe_analysis: {
     token: 'hwe_analysis',
-    command: '（yxspec-hwe-analysis agent）',
-    command_name: 'yxspec-hwe-analysis',
+    command: '/yxspec:hwe-analysis',
+    command_name: 'hwe-analysis',
     aspice: 'HWE.1',
-    spec_globs: ['project/specs/hw-*/*.md'],
+    spec_globs: ['project/specs/sys/hw-analyse-*.md'],
     task_file: null,
     review_gate: 'yes',
     upstream: ['sys_arch'],
@@ -362,11 +362,11 @@ export const STAGE_TABLE: Record<StageToken, StageMapping> = {
     order: 22,
   },
 
-  // ===== SUP.1 阶段 21（合规检查，无 slash 命令）=====
+  // ===== SUP.1 阶段 21（合规检查，网关层合成 /yxspec:comp）=====
   comp: {
     token: 'comp',
-    command: '（yxspec-comp agent）',
-    command_name: 'yxspec-comp',
+    command: '/yxspec:comp',
+    command_name: 'comp',
     aspice: 'SUP.1',
     spec_globs: ['project/specs/comp-report-*.md'],
     task_file: null,
@@ -377,11 +377,11 @@ export const STAGE_TABLE: Record<StageToken, StageMapping> = {
     order: 23,
   },
 
-  // ===== SUP.2 阶段 22（追溯矩阵，无 slash 命令）=====
+  // ===== SUP.2 阶段 22（追溯矩阵，网关层合成 /yxspec:traceability）=====
   traceability: {
     token: 'traceability',
-    command: '（yxspec-traceability agent）',
-    command_name: 'yxspec-traceability',
+    command: '/yxspec:traceability',
+    command_name: 'traceability',
     aspice: 'SUP.2',
     spec_globs: ['project/traceability/traceability-report-*.md'],
     task_file: 'task_traceability.md',

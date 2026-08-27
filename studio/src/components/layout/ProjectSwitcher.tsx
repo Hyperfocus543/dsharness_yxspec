@@ -1,3 +1,4 @@
+// UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 // ProjectSwitcher — 全局项目切换器（P0-①）
 // header 右上常驻：无论是否已打开项目都能切换。
@@ -13,6 +14,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { useStageStore } from '../../store/stageStore';
 import { useToastStore } from '../../store/toastStore';
 import type { ProjectListItem } from '../../utils/ipc';
+import { Icon } from '../ui';
+import { I } from '../ui/icons';
 
 const RECENT_KEY = 'yxspec-studio.recent-projects';
 const MAX_RECENT = 5;
@@ -95,7 +98,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
   };
 
   const menuItemCls =
-    'w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center gap-2 transition-colors';
+    'w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 flex items-center gap-2 transition-colors';
 
   // ---------- 未打开项目：内联控件 ----------
   if (!currentPath) {
@@ -103,7 +106,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
       <div className="flex items-center gap-2">
         {projects.length > 0 && (
           <select
-            className="text-xs px-2 py-1 border rounded font-mono max-w-[220px]"
+            className="text-xs px-2 py-1 border border-zinc-300 rounded-md bg-white font-mono max-w-[220px]"
             value=""
             onChange={(e) => {
               const p = e.target.value;
@@ -111,7 +114,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
             }}
             title="选择预置项目（D:/Work/01_Projects）"
           >
-            <option value="">⬇ 选择预置项目…</option>
+            <option value="">选择预置项目…</option>
             {projects.map((p) => (
               <option key={p.path} value={p.path}>
                 {p.name}
@@ -120,7 +123,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
           </select>
         )}
         <input
-          className="text-xs px-2 py-1 border rounded w-80 font-mono"
+          className="text-xs px-2 py-1 border border-zinc-300 rounded-md w-80 font-mono"
           placeholder="yxspec 项目路径（含 PROGRESS.md）"
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -129,7 +132,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
           }}
         />
         <button
-          className="text-xs px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+          className="text-xs px-3 py-1 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={handleEnter}
           disabled={loading || !input.trim()}
         >
@@ -143,23 +146,25 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
   return (
     <div className="relative">
       <button
-        className="flex items-center gap-2 text-xs px-2.5 py-1 border rounded bg-white hover:bg-gray-50 max-w-[300px]"
+        className="flex items-center gap-2 text-xs px-2.5 py-1 border border-zinc-300 rounded-md bg-white hover:bg-zinc-50 max-w-[300px]"
         onClick={() => setOpen((v) => !v)}
         title="切换 / 管理当前项目"
       >
         <span className="font-mono truncate">{currentPath}</span>
-        <span className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`}>▾</span>
+        <span className={`text-zinc-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+          <Icon name={I.caretDown} size={14} />
+        </span>
       </button>
 
       {open && (
         <>
           {/* 点击外部关闭 */}
           <div className="fixed inset-0 z-[58]" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 w-[340px] bg-white border rounded-lg shadow-xl z-[60] overflow-hidden">
+          <div className="absolute right-0 top-full mt-1 w-[340px] bg-white border border-zinc-200 rounded-lg shadow-xl z-[60] overflow-hidden">
             {/* 手动输入 + 打开 */}
-            <div className="p-2 border-b bg-gray-50 flex gap-1.5">
+            <div className="p-2 border-b border-zinc-200 bg-zinc-50 flex gap-1.5">
               <input
-                className="flex-1 text-xs px-2 py-1 border rounded font-mono"
+                className="flex-1 text-xs px-2 py-1 border border-zinc-300 rounded-md font-mono"
                 placeholder="输入其他项目路径…"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -168,7 +173,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
                 }}
               />
               <button
-                className="text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+                className="text-xs px-2 py-1 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={handleEnter}
                 disabled={loading || !input.trim()}
               >
@@ -178,13 +183,19 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
 
             {/* 最近打开 */}
             {recent.length > 0 && (
-              <div className="py-1 border-b">
-                <div className="px-3 py-1 text-[11px] text-gray-400">最近打开</div>
+              <div className="py-1 border-b border-zinc-200">
+                <div className="px-3 py-1 text-xs text-zinc-400">最近打开</div>
                 {recent.map((p) => (
                   <button key={p} className={menuItemCls} onClick={() => openWith(p)}>
-                    <span className="text-xs text-gray-400">🕘</span>
+                    <span className="text-zinc-400">
+                      <Icon name={I.clock} size={14} />
+                    </span>
                     <span className="font-mono text-xs truncate">{p}</span>
-                    {p === currentPath && <span className="ml-auto text-emerald-600 text-xs">✓</span>}
+                    {p === currentPath && (
+                      <span className="ml-auto text-emerald-600 text-xs">
+                        <Icon name={I.check} size={14} />
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -192,14 +203,18 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
 
             {/* 预置项目 */}
             {projects.length > 0 && (
-              <div className="py-1 border-b">
-                <div className="px-3 py-1 text-[11px] text-gray-400">预置项目</div>
+              <div className="py-1 border-b border-zinc-200">
+                <div className="px-3 py-1 text-xs text-zinc-400">预置项目</div>
                 {projects.map((p) => (
                   <button key={p.path} className={menuItemCls} onClick={() => openWith(p.path)}>
-                    <span className="text-xs text-gray-400">📁</span>
+                    <span className="text-zinc-400">
+                      <Icon name={I.database} size={14} />
+                    </span>
                     <span className="text-xs truncate">{p.name}</span>
                     {p.path === currentPath && (
-                      <span className="ml-auto text-emerald-600 text-xs">✓</span>
+                      <span className="ml-auto text-emerald-600 text-xs">
+                        <Icon name={I.check} size={14} />
+                      </span>
                     )}
                   </button>
                 ))}
@@ -214,12 +229,14 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
                   const path = useProjectStore.getState().current?.path;
                   if (path) {
                     useStageStore.getState().refresh(path);
-                    pushToast('info', '🔄 已触发阶段刷新');
+                    pushToast('info', '已触发阶段刷新');
                   }
                   setOpen(false);
                 }}
               >
-                <span className="text-xs text-gray-400">🔄</span>
+                <span className="text-zinc-400">
+                  <Icon name={I.refresh} size={14} />
+                </span>
                 <span className="text-xs">刷新当前项目状态</span>
               </button>
               <button
@@ -228,18 +245,22 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
                   if (navigator.clipboard) {
                     navigator.clipboard.writeText(currentPath).catch(() => {});
                   }
-                  pushToast('success', '📋 项目路径已复制');
+                  pushToast('success', '项目路径已复制');
                   setOpen(false);
                 }}
               >
-                <span className="text-xs text-gray-400">📋</span>
+                <span className="text-zinc-400">
+                  <Icon name={I.clipboard} size={14} />
+                </span>
                 <span className="text-xs">复制项目路径</span>
               </button>
               <button
                 className="w-full text-left px-3 py-2 text-sm hover:bg-red-50 text-red-600 flex items-center gap-2 transition-colors"
                 onClick={() => useProjectStore.getState().close()}
               >
-                <span className="text-xs">❌</span>
+                <span className="text-red-600">
+                  <Icon name={I.xCircle} size={14} />
+                </span>
                 <span className="text-xs">关闭项目</span>
               </button>
             </div>

@@ -102,8 +102,16 @@ export interface StageStatus {
   message: string;
   /** 产物数量（衍生统计）*/
   artifacts_count?: number;
-  /** SQT 门控提示（来自 .dsh/dsh_state.json 的 gate.message，驾驶舱节点上直接展示）*/
+  /** 门控提示（来自 .dsh/dsh_state.json 的 gate.message，驾驶舱节点上直接展示）*/
   gate_message?: string;
+  /**
+   * 门控三态（stageStore 从 gate.upstream 布尔值算出来，供驾驶舱决定提示风格）：
+   *   'blocked'  → 上游有未完成（真阻塞，红色警告）
+   *   'pending'  → 上游齐备但产物缺失（待补产物，琥珀提示）
+   *   'ok'       → 上游齐备且产物命中（正向提示，"可进入 review"）
+   *   undefined  → 无门控（不显示提示条）
+   */
+  gate_state?: 'blocked' | 'pending' | 'ok';
 }
 
 // 审查摘要
@@ -278,4 +286,72 @@ export interface DshState {
   stages: Record<string, DshStageEntry>;
   current: string;
   productAdapters: Record<string, boolean>;
+  /** 后端 /api/session 快照可能带当前 goal（可选字段，刷新恢复时驱动阶段轨道点亮）*/
+  goal?: any;
+  /** 后端 /api/session 快照可能带 todos 列表（可选字段，导入实时看板）*/
+  todos?: any[];
+}
+
+// =============================================================================
+// 断点续跑（网关 GET /api/resume）
+// 网关重启/电脑休眠后，前端据此恢复断点：提示「已恢复到 X 阶段（剩 N 个待完成）」
+// 并提供「一键续跑」按钮（复用现有派活机制）。
+// =============================================================================
+
+/** /api/resume 建议继续执行的命令信息 */
+export interface ResumeSuggestedNext {
+  token: string;
+  command: string;
+  command_name: string;
+  aspice: string;
+  label?: string;
+}
+
+/** GET /api/resume 响应（断点恢复信息）*/
+export interface ResumeInfo {
+  projectPath: string;
+  /** 断点阶段 token；无 current 且全部完成时为 null */
+  current: string | null;
+  /** 在 STAGE_ORDER 里的下标；无断点时 -1 */
+  currentIndex: number;
+  /** 未完成（非 done/skipped）的活跃阶段数 */
+  pendingCount: number;
+  /** gate_state === blocked 的 token 列表 */
+  blockedStages: string[];
+  /** current 阶段的命令信息；无断点时 null */
+  suggestedNext: ResumeSuggestedNext | null;
+  /** false = 全部完成（或状态文件异常），前端不渲染恢复提示条 */
+  resumable: boolean;
+}
+
+// =============================================================================
+// 功能商店（Feature Store）类型 — 与网关 GET /api/features 契约对齐
+// =============================================================================
+
+/** 网关返回的单个功能条目（features.mjs listFeatures）*/
+export interface FeatureItem {
+  id: string;
+  name: string;
+  desc: string;
+  /** 适用阶段 token 数组；'all'=全部，'review'=所有 review_gate 阶段 */
+  appliesTo: string[];
+  /** low | medium | high */
+  cost: string;
+  /** 依赖说明（重开关灰置时的提示）*/
+  depends: string[];
+  /** 是否可开关（false=灰置，依赖 harness 链路未确认）*/
+  available: boolean;
+  /** 始终启用（如审计账本，无开关）*/
+  always: boolean;
+  enabled: boolean;
+  /** 规则文件是否加载到（可选）*/
+  loaded: { path: string } | null;
+  /** 纯 UI 功能（如周报）：不进 agent prompt，只控制前端功能卡显隐 */
+  uiOnly?: boolean;
+}
+
+/** GET /api/features 响应 */
+export interface FeaturesResponse {
+  ok: boolean;
+  features: FeatureItem[];
 }

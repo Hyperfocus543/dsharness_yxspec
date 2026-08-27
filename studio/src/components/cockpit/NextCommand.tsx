@@ -3,12 +3,10 @@
 
 import React from 'react';
 import { useToastStore } from '../../store/toastStore';
-import { useStageStore } from '../../store/stageStore';
-import { useProjectStore } from '../../store/projectStore';
-import { useChatStore } from '../../store/chatStore';
-import { useModelStore } from '../../store/modelStore';
 import { STAGE_TABLE } from '../../data/stage-mapping';
-import * as ipc from '../../utils/ipc';
+import { useStageDispatch } from '../../hooks/useStageDispatch';
+import { Button, Icon } from '../ui';
+import { I } from '../ui/icons';
 import type { StageMapping, StageStatus } from '../../data/types';
 
 interface Props {
@@ -21,7 +19,7 @@ interface Props {
 export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest }) => {
   const [nextCmd, setNextCmd] = React.useState<string>('');
   const [loading, setLoading] = React.useState(false);
-  const [sending, setSending] = React.useState(false);
+  const { dispatch, cancel, sending, cancelling, elapsedSec } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
 
   // 建议命令计算：先看当前阶段自身是否完成，
@@ -55,102 +53,64 @@ export const NextCommand: React.FC<Props> = ({ stage, mapping, stages, onSuggest
   };
 
   // 一键派活：把建议命令 POST 到网关 /api/agent，走完整 agent 编排。
-  // 网关 resolveStage 按 stage.command 精确命中 → 门控检查 → 驱动 agent 生成产物。
-  // 派活过程/结果回填到全局对话流（终端对话框实时可见）。
+  // 逻辑已抽到共享 hook useStageDispatch（门控检查 + 回填对话流 + session 订阅），
+  // NextCommand 与 StageNode 卡片共用同一份派活实现。
   const handleDispatch = async () => {
     if (!nextCmd || sending) return;
-    const pushUser = useChatStore.getState().pushUser;
-    const pushAssistant = useChatStore.getState().pushAssistant;
-    setSending(true);
-    pushToast('info', `🚀 派活：${nextCmd}`);
-    // 回填到对话区：用户命令
-    pushUser(nextCmd);
-    try {
-      // 回填到对话区：进展中
-      pushAssistant(`🚀 正在推进阶段 agent（${nextCmd}），生成产物需 3-5 分钟…`);
-      const sid = useStageStore.getState().sessionId;
-      const realSid = sid && sid.startsWith('bcm-') ? sid : undefined; // 避免传占位 "bcm"
-      const modelId = useModelStore.getState().defaultModelId || undefined;
-      const data = await ipc.runAgent(nextCmd, {
-        system: '你是 yxspec 车载嵌入式 ASPICE 流程助理，回复简洁准确。',
-        sessionId: realSid,
-        model: modelId,
-      });
-      if (data?.error && data.final_response === undefined) {
-        throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
-      }
-      const sessionId: string | null = data?.session_id || null;
-      if (sessionId) {
-        useStageStore.setState({ sessionId });
-        // 订阅刚创建的 session 事件流，让驾驶舱/看板实时点亮
-        const projectPath = useProjectStore.getState().current?.path;
-        if (projectPath) {
-          await useStageStore
-            .getState()
-            .connectEvents(projectPath)
-            .catch((e) => console.warn('[NextCommand] connectEvents 失败:', e));
-        }
-      }
-      const blocked = data?.finish_reason === 'blocked';
-      if (blocked) {
-        // 门控拦截：列出未完成的上游阶段
-        const upstream = (data?.gate?.upstream && typeof data.gate.upstream === 'object')
-          ? Object.entries(data.gate.upstream)
-              .filter(([, v]) => !v)
-              .map(([k]) => k)
-              .join('、')
-          : '';
-        const msg = `⛔ 门控拦截：${data?.gate?.message || '上游未完成'}` + (upstream ? `，先完成上游：${upstream}` : '');
-        pushToast('warn', msg);
-        pushAssistant(msg);
-      } else {
-        const msg = `✅ 派活完成（${data?.finish_reason || 'completed'}）`;
-        pushToast('success', msg);
-        pushAssistant(msg + (data?.final_response ? `\n\n${data.final_response}` : ''));
-      }
-    } catch (e: any) {
-      const msg = `⚠️ 派活失败：${e?.message || e}`;
-      pushToast('error', msg);
-      pushAssistant(msg);
-    } finally {
-      setSending(false);
-    }
+    await dispatch(nextCmd);
   };
 
   return (
-    <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-300">
-      <div className="flex items-center gap-2 text-sm text-gray-700">
-        <span>📍 当前阶段：</span>
-        <strong className="font-mono">{stage}</strong>
-        <span className="text-xs text-gray-500 ml-2">({mapping.aspice})</span>
-      </div>
-      <div className="flex items-center gap-2 text-sm text-gray-700 mt-2">
-        <span>💡 建议下一步：</span>
+    <div className="px-3 py-2.5 bg-white rounded-lg border border-zinc-200 flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-2 text-sm text-zinc-700 min-w-0">
+        <span className="text-zinc-400 shrink-0"><Icon name={I.arrowRight} size={13} /></span>
+        <span className="shrink-0">建议下一步</span>
         {loading ? (
-          <span className="text-gray-400">计算中…</span>
+          <span className="text-xs text-zinc-400">计算中…</span>
         ) : (
-          <strong className="font-mono text-blue-700">{nextCmd}</strong>
+          <strong className="font-mono text-emerald-700 truncate" title={nextCmd}>{nextCmd}</strong>
         )}
+        <span className="text-xs text-zinc-400">（当前 {stage}）</span>
       </div>
-      <div className="flex flex-wrap items-center gap-2 mt-3">
-        <button
-          className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 transition-colors disabled:opacity-50"
+      <div className="flex items-center gap-2 shrink-0 ml-auto">
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={handleFill}
           disabled={!nextCmd || loading}
+          title="复制命令到剪贴板"
         >
-          复制到剪贴板
-        </button>
-        <button
-          className="px-3 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700 transition-colors disabled:opacity-50"
-          onClick={handleDispatch}
-          disabled={!nextCmd || loading || sending}
-          title="直接经网关驱动当前阶段 agent 执行（门控通过才放行）"
-        >
-          {sending ? '🚀 执行中…' : '🚀 一键派活'}
-        </button>
-        <span className="text-xs text-gray-500">
-          ⚠️ 受限链式调用：推荐命令，需确认后执行
-        </span>
+          <Icon name={I.clipboard} size={13} />
+          复制
+        </Button>
+        {sending ? (
+          <>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={cancel}
+              disabled={cancelling}
+              title="中断当前阶段 agent 执行（杀 runtime）"
+            >
+              <Icon name={I.stop} size={13} weight="fill" />
+              {cancelling ? '终止中…' : '终止'}
+            </Button>
+            <span className="text-xs text-zinc-500 font-mono tabular-nums">
+              {elapsedSec}s
+            </span>
+          </>
+        ) : (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleDispatch}
+            disabled={!nextCmd || loading}
+            title="直接经网关驱动当前阶段 agent 执行（门控通过才放行）"
+          >
+            <Icon name={I.play} size={13} weight="fill" />
+            一键派活
+          </Button>
+        )}
       </div>
     </div>
   );

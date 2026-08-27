@@ -1,0 +1,146 @@
+# YXSpec SQT 对话网关 — SDK JSON-RPC agent runtime 组合（Windows 本地）
+# stdout 保留给 JSON-RPC；不得加控制台 logger 或终端 UI。
+# 插件用裸包名，从本文件所在目录的 node_modules 向上解析（junction 指向 harness 仓库）。
+
+- id: sdk-jsonrpc-server
+  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+  config:
+    maxTokensAsSuccess: true
+
+# pi-ai 多 provider 适配器：dormant 挂载，凭 settings.yaml 的 llm-pi-ai 节激活 minimax-cn
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+
+# 用户 settings 文档（$DSH_HOME/settings.yaml），热重载；llm-pi-ai 节由此进入
+- id: settings
+  name: '@deepseek-ai/dsh-settings-file'
+
+# 凭据来源：环境变量（MINIMAX_CN_API_KEY） > .credentials.yaml
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+
+# agent 主脊：无 UI、无 executor 的默认组合（goal / todo / skills / loop / bash）
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'
+    workspaceContext: false
+    # skills 开启（A+A 方案）：本地 filesystem provider 按 rank 扫
+    #   rank100 project-dsh = <项目根>/.dsh/skills（cwd 无 .git 时以 cwd 为项目根）
+    #   rank400 user-dsh   = <dshHome>/skills（dshHome 由 DSH_HOME 或这里显式给）
+    #   dshHome 必须与 settings 的解析根一致（agent-spine 会校验二者一致）。
+    skills:
+      enabled: true
+      filesystem:
+        dshHome: !!js process.env.DSH_HOME ?? 'C:/Users/Administrator/.dsh'
+    toolBash:
+      enableRunInBackground: false
+    toolJobs: false
+    goals:
+      domain: {}
+      tool: {}
+
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+    compression: 'none'
+
+- id: session-checkpoints
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
+- id: bash
+  name: '@deepseek-ai/dsh-bash-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    timeoutMs: 60000
+
+- id: fs-local
+  name: '@deepseek-ai/dsh-fs-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: fs-observation-policy
+  name: '@deepseek-ai/dsh-fs-observation-policy'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
+
+# ---- WeKnora knowledge retrieval（知识库检索优先，第一原则）----
+# baseUrl 指向 WeKnora 后端；无 Docker 时由本地简化后端（mock-weknora）承接，
+# 换真后端只需改 baseUrl 与环境变量。
+- id: weknora
+  name: '@wxg-prc-cpg/dsh-weknora'
+  config:
+    baseUrl: http://localhost:8080/api/v1
+    knowledgeBaseIds:
+      - kb-aima-x1-bcm
+
+# ---- graph-memory (cross-session memory) ----
+# agent-presets service: graph-memory depends on agentPresets for per-agent
+# compaction lookup. Empty roster + includeUserRoot=false keeps the default
+# 25-stage agent assembly semantics untouched (no preset composition mounted).
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    default: ''
+    roots: []
+    includeUserRoot: false
+
+- id: graph-memory
+  name: 'graph-memory/dsh'
+  config:
+    dbPath: !!js process.env.YXSPEC_GRAPH_MEMORY_DB ?? 'D:/Work/01_Projects/Aima_X1_BCM/.dsh/graph-memory/graph-memory.db'
+    extractionEnabled: true
+    recallEnabled: true
+    recallMaxNodes: 6
+    recallMaxDepth: 2
+    autoRecallMinScore: 0.6
+    recallTokenBudget: 4096
+    maintenanceInterval: 6
+    contextCompactionEnabled: true
+    freshTurnCount: 5
+    embedding:
+      apiKeyEnv: !!js "process.env.GRAPH_MEMORY_EMBEDDING_API_KEY ? 'GRAPH_MEMORY_EMBEDDING_API_KEY' : undefined"
+      baseURL: !!js process.env.GRAPH_MEMORY_EMBEDDING_BASE_URL
+      model: !!js process.env.GRAPH_MEMORY_EMBEDDING_MODEL
+      dimensions: !!js "process.env.GRAPH_MEMORY_EMBEDDING_DIMENSIONS ? Number(process.env.GRAPH_MEMORY_EMBEDDING_DIMENSIONS) : undefined"
+
+# ---- yxspec-tool-guard（工具裁剪 + 门控结构性化，夜间验证通过）----
+# 阶段动态解析：dsh_state.current → env YXSPEC_STAGE → config stage
+- id: yxspec-tool-guard
+  name: '@yxspec/tool-guard'
+
+# ---- POC: session-query 家族（审计账本可检索 + ASPICE 追溯断链定位）----
+# dsh-session-query-sqlite = ctx.sessionQuery 具体后端（FTS5），必须挂 sqlite 才完整
+- id: session-query-sqlite
+  name: '@deepseek-ai/dsh-session-query-sqlite'
+  config:
+    path: !!js "process.env.SESSION_QUERY_DB ?? 'D:/Work/01_Projects/Aima_X1_BCM/.dsh/gateway/runtime-js/poc-session-query/poc-session-query.db'"
+    openAt: 'first-search'
+
+# 模型侧工具：workspace-authorized session_search / session_trace / session_event_trace 等
+- id: tool-session-query
+  name: '@deepseek-ai/dsh-tool-session-query'

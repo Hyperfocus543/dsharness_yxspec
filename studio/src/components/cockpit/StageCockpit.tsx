@@ -1,30 +1,50 @@
 // M1 流程驾驶舱 - 25 阶段全景 + 当前阶段 + 建议下一步
 // 来自 build-spec §2.3 / §10.3 Step 8-10
-// v2：网格/流向双视图（流向视图合并自原产物图谱卡）
+// v3：布局优化——顶栏（整体进度+当前阶段+图例）合并紧凑；执行成本默认折叠；
+//     阶段网格列数适配右侧面板宽度（820px 下 3 列）；NextCommand/ResumeBanner 独立紧凑条。
+// UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 
 import React from 'react';
 import type { StageMapping, StageStatus } from '../../data/types';
 import { STAGE_GROUPS, STAGE_ORDER, STAGE_TABLE } from '../../data/stage-mapping';
 import { FlowView } from './FlowView';
+import { GateOverview } from './GateOverview';
+import { CostDashboard } from './CostDashboard';
+import { useStageDispatch } from '../../hooks/useStageDispatch';
+import { renderInline } from '../../utils/markdown';
+import { Icon, Badge } from '../ui';
+import { I } from '../ui/icons';
 
+// 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
+// emerald(赤陶) 只留当前态/交互（ring、派活按钮、当前标签）
 const STATUS_COLOR: Record<string, string> = {
-  completed: 'border-emerald-500 bg-emerald-50',
+  completed: 'border-sage-300 bg-sage-50',
   in_progress: 'border-amber-500 bg-amber-50',
-  pending: 'border-gray-300 bg-gray-50',
+  pending: 'border-zinc-300 bg-zinc-50',
   pending_review: 'border-orange-400 bg-orange-50',
   rejected: 'border-red-500 bg-red-50',
   blocked: 'border-red-600 bg-red-100',
   stale: 'border-purple-500 bg-purple-50',
 };
 
-const STATUS_ICON: Record<string, string> = {
-  completed: '✓',
-  in_progress: '◐',
-  pending: '○',
-  pending_review: '⌛',
-  rejected: '✗',
-  blocked: '⊘',
-  stale: '↻',
+const STATUS_ICON: Record<string, React.ElementType> = {
+  completed: I.check,
+  in_progress: I.clock,
+  pending: I.circle,
+  pending_review: I.eye,
+  rejected: I.xCircle,
+  blocked: I.stop,
+  stale: I.refresh,
+};
+
+const STATUS_ICON_TONE: Record<string, string> = {
+  completed: 'text-sage-600',
+  in_progress: 'text-amber-600',
+  pending: 'text-zinc-400',
+  pending_review: 'text-orange-600',
+  rejected: 'text-red-600',
+  blocked: 'text-red-600',
+  stale: 'text-purple-600',
 };
 
 const GROUP_LABEL: Record<string, string> = {
@@ -42,38 +62,90 @@ interface StageNodeProps {
   mapping: StageMapping;
   status: StageStatus;
   isCurrent: boolean;
+  /** 点击卡片时打开产物抽屉（grid 外层包了一层 onClick） */
+  onSelectStage?: (token: string) => void;
 }
 
-export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent }) => {
+export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage }) => {
   const color = STATUS_COLOR[status.status] || STATUS_COLOR.pending;
-  const icon = STATUS_ICON[status.status] || STATUS_ICON.pending;
+  const IconComp = STATUS_ICON[status.status] || STATUS_ICON.pending;
+  const iconTone = STATUS_ICON_TONE[status.status] || 'text-zinc-400';
+  const { dispatch, cancel, sending, dispatchingCmd, cancelling, elapsedSec } = useStageDispatch();
+  // 门控三态：blocked=真阻塞（上游未完成）、pending=待补产物、ok=产物齐备可 review
+  const gateState = status.gate_state;
+  const gateBlocked = gateState === 'blocked';
+  // 被阻塞时可跳去第一个未完成的上游（仅真阻塞时给点击）
+  const gateUpstreams = gateBlocked ? mapping.upstream : [];
+  const busy = sending && dispatchingCmd === mapping.command;
+
+  // 卡片右上角悬浮"一键派活"：点击派活当前阶段，阻止冒泡避免误触卡片 onClick
+  const handlePlayClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    dispatch(mapping.command);
+  };
+
+  // 门控拦截条可点击：跳到被阻塞的上游阶段（打开对应产物抽屉）；无上游则纯提示，点击无效果
+  const handleGateClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (gateUpstreams.length > 0) onSelectStage?.(gateUpstreams[0]);
+  };
 
   return (
     <div
-      className={`relative rounded-lg border-2 p-3 transition-all hover:shadow-md ${color} ${
-        isCurrent ? 'ring-2 ring-blue-500 shadow-lg' : ''
+      className={`group relative rounded-lg border-2 p-3 transition-all hover:shadow-md ${color} ${
+        isCurrent ? 'ring-2 ring-emerald-500 shadow-lg' : ''
       }`}
       title={`${mapping.aspice} - ${mapping.command}\n${status.message || ''}${
         status.gate_message ? `\n门控：${status.gate_message}` : ''
       }`}
     >
       {isCurrent && (
-        <span className="absolute -top-2 -right-2 text-base" title="当前阶段">
-          📍
+        <span
+          className="absolute -top-2 -right-2 px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-medium shadow-sm inline-flex items-center gap-0.5"
+          title="当前阶段"
+        >
+          <Icon name={I.gauge} size={10} weight="fill" />
+          当前
         </span>
       )}
+      {/* 悬浮"一键派活"按钮（hover 显示；派活中常驻显示可点击的取消按钮，点击终止 runtime）。
+          空闲时 pointer-events-none，避免隐形按钮挡在卡片右上角拦截点击冒泡。 */}
+      <span
+        className={`absolute -top-2 -right-2 px-1.5 py-1 rounded-full text-white shadow-sm inline-flex items-center gap-1 transition-all active:scale-[0.98] ${
+          busy
+            ? 'bg-red-500 hover:bg-red-600 opacity-100 cursor-pointer pointer-events-auto'
+            : 'bg-emerald-600 opacity-0 group-hover:opacity-100 hover:bg-emerald-700 cursor-pointer pointer-events-none group-hover:pointer-events-auto'
+        }`}
+        title={
+          busy
+            ? cancelling ? `终止中：${mapping.command}` : `点击终止执行：${mapping.command}（已执行 ${elapsedSec}s）`
+            : `一键派活：${mapping.command}`
+        }
+        onClick={busy ? (e) => { e.stopPropagation(); cancel(); } : handlePlayClick}
+      >
+        {busy ? (
+          <>
+            <Icon name={I.stop} size={12} weight="fill" />
+            <span className="tabular-nums">{elapsedSec}s</span>
+          </>
+        ) : (
+          <Icon name={I.play} size={12} weight="fill" />
+        )}
+      </span>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-mono text-gray-500">{mapping.aspice}</span>
-        <span className="text-base">{icon}</span>
+        <span className="text-xs font-mono text-zinc-500">{mapping.aspice}</span>
+        <span className={iconTone}>
+          <Icon name={IconComp} size={16} />
+        </span>
       </div>
-      <div className="text-sm font-semibold mt-1 truncate" title={token}>
+      <div className="text-sm font-semibold mt-1 break-words text-zinc-800" title={token}>
         {token}
       </div>
-      <div className="text-xs text-gray-600 mt-1 truncate" title={mapping.command}>
+      <div className="text-xs text-zinc-500 mt-1 break-words" title={mapping.command}>
         {mapping.command}
       </div>
       <div className="flex items-center justify-between mt-2 text-xs">
-        <span className="text-gray-500">
+        <span className="text-zinc-500">
           {status.artifacts_count !== undefined
             ? `${status.artifacts_count} 产物`
             : status.artifacts?.length
@@ -82,7 +154,7 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
         </span>
         {status.review && (
           <span
-            className={`px-1 rounded text-white text-[10px] ${
+            className={`px-1 rounded text-white text-xs ${
               status.review.verdict === 'approved'
                 ? 'bg-emerald-500'
                 : status.review.verdict === 'conditional'
@@ -94,9 +166,35 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
           </span>
         )}
       </div>
-      {status.gate_message && (
-        <div className="mt-2 text-[10px] leading-tight text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-1" title={status.gate_message}>
-          🚧 {status.gate_message}
+      {/* 门控提示条：三态区分（blocked 红警告 / pending 琥珀待补 / ok 绿正向），
+          避免把"产物已存在可进 review"这类正向提示误渲染成红色警告 */}
+      {status.gate_message && gateState && (
+        <div
+          className={`mt-2 w-full flex items-center gap-1 min-w-0 text-xs leading-tight rounded px-1.5 py-1 ${
+            gateState === 'blocked'
+              ? 'text-red-700 bg-red-50 border border-red-200 cursor-pointer hover:bg-red-100 hover:border-red-300 transition-all active:scale-[0.98]'
+              : gateState === 'pending'
+                ? 'text-amber-700 bg-amber-50 border border-amber-200'
+                : 'text-sage-700 bg-sage-50 border border-sage-200'
+          }`}
+          title={
+            gateState === 'blocked'
+              ? `点击查看上游阻塞（${gateUpstreams.join('、')}）`
+              : status.gate_message
+          }
+          onClick={handleGateClick}
+        >
+          <span className="shrink-0">
+            <Icon
+              name={gateState === 'blocked' ? I.warn : I.check}
+              size={11}
+              weight="fill"
+            />
+          </span>
+          <span className="flex-1 min-w-0 break-words">{renderInline(status.gate_message)}</span>
+          {gateUpstreams.length > 0 && (
+            <Icon name={I.arrowRight} size={10} weight="bold" className="shrink-0" />
+          )}
         </div>
       )}
     </div>
@@ -110,47 +208,137 @@ interface CockpitProps {
 }
 
 export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onSelectStage }) => {
-  const [view, setView] = React.useState<'grid' | 'flow'>('grid');
+  const [view, setView] = React.useState<'grid' | 'flow' | 'gates'>('grid');
+  const [showCost, setShowCost] = React.useState(false);
+
+  // 整体进度统计（顶栏用）
+  const counts: Record<string, number> = {};
+  for (const t of STAGE_ORDER) {
+    const s = stages[t]?.status || 'pending';
+    counts[s] = (counts[s] || 0) + 1;
+  }
+  const total = STAGE_ORDER.length;
+  const done = counts.completed || 0;
+  const pct = Math.round((done / total) * 100);
+
+  const currentMapping = currentStage
+    ? STAGE_TABLE[currentStage as keyof typeof STAGE_TABLE]
+    : null;
+  const currentStatus = currentStage ? stages[currentStage] : null;
 
   return (
-    <div className="space-y-4">
-      {/* 顶端：整体进度 + 当前阶段（两种视图常驻） */}
-      <CockpitSummary stages={stages} />
-      <CurrentStageBar stage={currentStage} stages={stages} />
+    <div className="space-y-3">
+      {/* 顶栏：整体进度条 + 当前阶段（合并紧凑，替代原两张独立大卡） */}
+      <div className="bg-white rounded-lg border border-zinc-200 px-3 py-2.5 space-y-2">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex-1 min-w-[180px]">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold text-zinc-700">整体进度</span>
+              <span className="text-xs font-mono text-zinc-600">
+                {done}/{total}（{pct}%）
+              </span>
+            </div>
+            <div className="w-full bg-zinc-200 rounded-full h-2 overflow-hidden">
+              <div className="bg-sage-500 h-2 transition-all" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+          {/* 当前阶段（右对齐紧凑） */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-zinc-500 inline-flex items-center gap-1">
+              <Icon name={I.gauge} size={13} className="text-emerald-600" weight="fill" />
+              当前
+            </span>
+            {currentStage ? (
+              <>
+                <span className="text-sm font-bold text-emerald-700 font-mono">{currentStage}</span>
+                {currentMapping && <span className="text-xs text-zinc-500">（{currentMapping.aspice}）</span>}
+                {currentStatus && <Badge status={currentStatus.status} />}
+              </>
+            ) : (
+              <span className="text-xs text-zinc-400">—</span>
+            )}
+          </div>
+        </div>
+        {/* 状态图例（inline，同卡片底色语义） */}
+        <div className="flex gap-2 text-xs flex-wrap">
+          <Legend color="sage" label="已完成" count={counts.completed || 0} />
+          <Legend color="amber" label="进行中" count={counts.in_progress || 0} />
+          <Legend color="orange" label="待审查" count={counts.pending_review || 0} />
+          <Legend color="red" label="被拒/阻塞" count={(counts.rejected || 0) + (counts.blocked || 0)} />
+          <Legend color="gray" label="未开始" count={counts.pending || 0} />
+        </div>
+      </div>
 
-      {/* 视图切换：网格 / 流向 */}
-      <div className="flex items-center gap-1 bg-gray-100 border rounded p-0.5 w-fit">
+      {/* 视图切换 + 成本折叠 */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex items-center gap-1 bg-zinc-100 border border-zinc-200 rounded p-0.5 w-fit">
+          <button
+            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+              view === 'grid' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+            }`}
+            onClick={() => setView('grid')}
+          >
+            <Icon name={I.squares} size={14} />
+            网格
+          </button>
+          <button
+            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+              view === 'flow' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+            }`}
+            onClick={() => setView('flow')}
+          >
+            <Icon name={I.swap} size={14} />
+            流向
+          </button>
+          <button
+            className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+              view === 'gates' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+            }`}
+            onClick={() => setView('gates')}
+          >
+            <Icon name={I.shield} size={14} />
+            门控
+          </button>
+        </div>
+        {/* 执行成本折叠开关 */}
         <button
-          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-            view === 'grid' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:bg-white/50'
+          className={`text-xs px-2.5 py-1.5 rounded-md border transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
+            showCost
+              ? 'border-emerald-500 bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+              : 'border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300'
           }`}
-          onClick={() => setView('grid')}
+          onClick={() => setShowCost(!showCost)}
+          title="执行成本（审计账本聚合）"
         >
-          ▦ 网格视图
-        </button>
-        <button
-          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-            view === 'flow' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:bg-white/50'
-          }`}
-          onClick={() => setView('flow')}
-        >
-          ⇄ 流向视图
+          <Icon name={I.chartBar} size={13} />
+          成本
+          <Icon name={showCost ? I.caretDown : I.caretRight} size={11} />
         </button>
       </div>
 
+      {/* 执行成本（折叠区，默认收起 —— 首屏专注阶段网格） */}
+      {showCost && (
+        <div className="bg-white rounded-lg border border-zinc-200 p-3">
+          <CostDashboard />
+        </div>
+      )}
+
       {view === 'flow' ? (
         <FlowView onSelectStage={onSelectStage} />
+      ) : view === 'gates' ? (
+        <GateOverview />
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-5">
           {Object.entries(STAGE_GROUPS).map(([group, tokens]) => {
             if (tokens.length === 0) return null;
             return (
               <div key={group}>
-                <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                  <span className="px-2 py-0.5 bg-gray-200 rounded text-xs">{GROUP_LABEL[group]}</span>
+                <h3 className="text-sm font-bold text-zinc-700 mb-2 flex items-center gap-2">
+                  <span className="px-2 py-0.5 bg-zinc-200 rounded text-xs text-zinc-600">{GROUP_LABEL[group]}</span>
                   {group}（{tokens.length} 阶段）
                 </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-7 gap-3">
+                {/* 面板宽 ~820px，3 列均衡；小窗回退 2 列 */}
+                <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
                   {tokens.map((token) => {
                     const mapping = STAGE_TABLE[token];
                     const status = stages[token] || {
@@ -173,6 +361,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
                           mapping={mapping}
                           status={status}
                           isCurrent={currentStage === token}
+                          onSelectStage={onSelectStage}
                         />
                       </div>
                     );
@@ -181,46 +370,8 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
               </div>
             );
           })}
-
-          {/* 进度汇总（已移到驾驶舱顶端，见 CockpitSummary 导出） */}
         </div>
       )}
-    </div>
-  );
-};
-
-/** 整体进度汇总卡（导出供驾驶舱顶部使用）*/
-export const CockpitSummary: React.FC<{ stages: Record<string, StageStatus> }> = ({ stages }) => {
-  const counts: Record<string, number> = {};
-  for (const t of STAGE_ORDER) {
-    const s = stages[t]?.status || 'pending';
-    counts[s] = (counts[s] || 0) + 1;
-  }
-  const total = STAGE_ORDER.length;
-  const done = counts.completed || 0;
-  const pct = Math.round((done / total) * 100);
-
-  return (
-    <div className="bg-white rounded-lg p-4 border">
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-sm font-bold text-gray-700">整体进度</h4>
-        <span className="text-sm font-mono text-gray-600">
-          {done}/{total}（{pct}%）
-        </span>
-      </div>
-      <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-        <div
-          className="bg-emerald-500 h-3 transition-all"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="flex gap-3 mt-3 text-xs flex-wrap">
-        <Legend color="emerald" label="已完成" count={counts.completed || 0} />
-        <Legend color="amber" label="进行中" count={counts.in_progress || 0} />
-        <Legend color="orange" label="待审查" count={counts.pending_review || 0} />
-        <Legend color="red" label="被拒/阻塞" count={(counts.rejected || 0) + (counts.blocked || 0)} />
-        <Legend color="gray" label="未开始" count={counts.pending || 0} />
-      </div>
     </div>
   );
 };
@@ -231,49 +382,15 @@ const Legend: React.FC<{ color: string; label: string; count: number }> = ({
   count,
 }) => {
   const bg = {
-    emerald: 'bg-emerald-100 text-emerald-800',
+    sage: 'bg-sage-100 text-sage-700',
     amber: 'bg-amber-100 text-amber-800',
     orange: 'bg-orange-100 text-orange-800',
     red: 'bg-red-100 text-red-800',
-    gray: 'bg-gray-100 text-gray-800',
+    gray: 'bg-zinc-100 text-zinc-700',
   }[color];
   return (
     <span className={`px-2 py-0.5 rounded ${bg}`}>
       {label} {count}
     </span>
-  );
-};
-
-/** 当前阶段浓缩条（驾驶舱顶端）*/
-export const CurrentStageBar: React.FC<{
-  stage: string | null;
-  stages: Record<string, StageStatus>;
-}> = ({ stage, stages }) => {
-  if (!stage) {
-    return (
-      <div className="bg-white rounded-lg p-3 border text-sm text-gray-500">
-        当前阶段：<span className="text-gray-400">—</span>
-        <span className="text-xs text-gray-400 ml-2">（暂无进行中的阶段）</span>
-      </div>
-    );
-  }
-  const mapping = STAGE_TABLE[stage as keyof typeof STAGE_TABLE];
-  const status = stages[stage];
-  return (
-    <div className="bg-white rounded-lg p-3 border flex items-center gap-3 flex-wrap">
-      <span className="text-sm text-gray-700 shrink-0">📍 当前阶段</span>
-      <span className="text-sm font-bold text-blue-700 font-mono">{stage}</span>
-      {mapping && <span className="text-xs text-gray-500">({mapping.aspice})</span>}
-      {status && (
-        <span className="px-2 py-0.5 rounded text-xs text-white bg-gray-500">
-          {status.status}
-        </span>
-      )}
-      {status?.gate_message && (
-        <span className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 truncate max-w-[280px]">
-          🚧 {status.gate_message}
-        </span>
-      )}
-    </div>
   );
 };

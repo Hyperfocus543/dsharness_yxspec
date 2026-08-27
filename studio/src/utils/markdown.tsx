@@ -9,29 +9,47 @@ import React from 'react';
 
 type MdInlineNode = React.ReactNode;
 
-function renderInline(text: string): MdInlineNode[] {
+/** HTML 转义：防注入。renderMarkdown 用 React 文本节点天然转义；
+ *  但 renderInline 导出的节点会被拼进 JSX，非标记文本/代码内容需手动转义，
+ *  再经 dangerouslySetInnerHTML 输出，避免 React 二次转义成 &amp;lt;。 */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * 渲染内联级 markdown（粗体 **...** + 代码 `...`），返回 React 节点数组。
+ * 供紧凑提示条（门控 message、进度横幅等）复用：不产生 p/表格/列表等块级结构。
+ * 注意：纯文本已转义，勿用于需要逐字显示原文的场合（原样文本请直接 <span>）。
+ */
+export function renderInline(text: string): MdInlineNode[] {
   const nodes: MdInlineNode[] = [];
   const push = (t: string) =>
     nodes.push(
-      <span key={nodes.length}>{t}</span>,
+      // 已手动转义，用 dangerouslySetInnerHTML 防 React 二次转义
+      <span key={nodes.length} dangerouslySetInnerHTML={{ __html: escapeHtml(t) }} />,
     );
-  // 内联代码 `...` 优先处理，避免干扰后续标记
-  const parts = text.split(/(`[^`]+`)/g);
+  // 内联粗体 `**...**` + 代码 `...` 一次分割，支持"句中粗体"（如 `**产物**已存在`）。
+  // 用非贪婪 [^*]+ 防止跨段误配；代码优先判（避免 `**` 出现在代码里被误判成粗体）。
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
   for (const part of parts) {
     if (!part) continue;
     if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
       nodes.push(
         <code
           key={nodes.length}
-          className="bg-gray-100 border border-gray-200 rounded px-1 py-0.5 font-mono text-[0.85em]"
-        >
-          {part.slice(1, -1)}
-        </code>,
+          className="bg-zinc-100 border border-zinc-200 rounded px-1 py-0.5 font-mono text-xs"
+          dangerouslySetInnerHTML={{ __html: escapeHtml(part.slice(1, -1)) }}
+        />,
       );
     } else if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
       nodes.push(
         <strong key={nodes.length} className="font-semibold">
-          {part.slice(2, -2)}
+          {renderInline(part.slice(2, -2))}
         </strong>,
       );
     } else {
@@ -242,7 +260,7 @@ export function renderMarkdown(text: string): React.ReactNode {
                     {rows[0].map((cell, ci) => (
                       <th
                         key={ci}
-                        className="border border-gray-300 bg-gray-100 px-2 py-1.5 text-left font-semibold text-gray-700"
+                        className="border border-zinc-300 bg-zinc-100 px-2 py-1.5 text-left font-semibold text-zinc-700"
                       >
                         {cell}
                       </th>
@@ -254,7 +272,7 @@ export function renderMarkdown(text: string): React.ReactNode {
                 {rows.slice(1).map((cells, ri) => (
                   <tr key={ri}>
                     {cells.map((cell, ci) => (
-                      <td key={ci} className="border border-gray-200 px-2 py-1.5 align-top">
+                      <td key={ci} className="border border-zinc-200 px-2 py-1.5 align-top">
                         {cell}
                       </td>
                     ))}
@@ -295,7 +313,7 @@ export function renderMarkdown(text: string): React.ReactNode {
         out.push(
           <blockquote
             key={key}
-            className="border-l-4 border-gray-300 bg-gray-50 italic text-gray-600 pl-3 pr-2 py-1 my-2 rounded-r"
+            className="border-l-4 border-zinc-300 bg-zinc-50 italic text-zinc-600 pl-3 pr-2 py-1 my-2 rounded-r"
           >
             {b.quote}
           </blockquote>,
@@ -305,14 +323,14 @@ export function renderMarkdown(text: string): React.ReactNode {
         out.push(
           <pre
             key={key}
-            className="bg-gray-100 border border-gray-200 rounded p-2 my-2 overflow-x-auto font-mono text-xs leading-relaxed"
+            className="bg-zinc-100 border border-zinc-200 rounded p-2 my-2 overflow-x-auto font-mono text-xs leading-relaxed"
           >
             {b.text}
           </pre>,
         );
         break;
       case 'hr':
-        out.push(<hr key={key} className="border-t border-gray-200 my-3" />);
+        out.push(<hr key={key} className="border-t border-zinc-200 my-3" />);
         break;
       case 'p':
         out.push(

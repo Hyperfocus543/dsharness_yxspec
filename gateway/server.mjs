@@ -25,12 +25,14 @@ import { fileURLToPath } from 'node:url'
 import { readState, updateState, snapshot, nextCurrent } from './lib/state.mjs'
 import { resolveStage, scanGates, buildAgentPrompt, STAGES, STAGE_TOKENS, PROJECT_ROOT } from './lib/stages.mjs'
 import { openSseStream, broadcastGoal, broadcastTodos, broadcastTurnEnd, broadcastToolCall, broadcastToolResult, broadcastStageUpdate, emitEvent, rememberSessionState, getSessionState } from './lib/bus.mjs'
-import { runTurn, closeHarness, abortTurn, getCurrentSpec, TurnAbortedError, TurnTimeoutError } from './lib/harness.mjs'
+import { runTurn, closeHarness, abortTurn, getCurrentSpec, isTurnBusy, TurnAbortedError, TurnTimeoutError } from './lib/harness.mjs'
 import * as models from './lib/models.mjs'
 import { listFeatures, setFeature, addCustomFeature, removeCustomFeature, listFeatureSkills, syncFeatureSkillInvocation, syncAllFeatureSkillInvocations } from './lib/features.mjs'
 import { buildCostStats } from './lib/cost.mjs'
 import { getCommunityPlugins } from './lib/community.mjs'
 import { listInstalledPlugins } from './lib/installed.mjs'
+import { listCapabilityCandidates } from './lib/candidates.mjs'
+import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
 
@@ -741,6 +743,50 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/api/community-plugins') {
       const data = await getCommunityPlugins()
       return json(res, 200, { ok: true, ...data })
+    }
+
+    // 插件统一列表：GET /api/plugins
+    // Everything-is-a-Plugin：已装配插件（plugin）+ 候选能力（candidate）+ 基座（base）
+    // 统一成可开关的插件条目。真相源 = lib/plugins.mjs（cordis.yml + candidates 注册表）。
+    if (req.method === 'GET' && path === '/api/plugins') {
+      const plugins = listPlugins()
+      return json(res, 200, { ok: true, count: plugins.length, plugins })
+    }
+
+    // 插件开关：PUT /api/plugins/:id {enabled: true|false}
+    // 生效方式 = 开关即重建：写 plugins.yaml → closeHarness() 重建 runtime（~2-5s）。
+    // 安全检查：有 active turn 时拒绝（重建会杀 runtime 导致 in-flight turn 失败）。
+    if (req.method === 'PUT' && path.startsWith('/api/plugins/')) {
+      const id = decodeURIComponent(path.slice('/api/plugins/'.length))
+      let body = {}
+      try {
+        const raw = await readBody(req)
+        body = raw && typeof raw === 'object' ? raw : JSON.parse(raw || '{}')
+      } catch { /* 空 body → 默认 {} */ }
+      if (typeof body.enabled !== 'boolean') {
+        return json(res, 400, { error: 'bad-request', message: 'enabled 必须为 boolean' })
+      }
+      if (isTurnBusy()) {
+        return json(res, 409, { error: 'busy', message: '有 turn 在执行中，请等待完成后再开关插件' })
+      }
+      try {
+        const r = await setPluginEnabled(id, body.enabled)
+        // 重建：先关旧 runtime，下次 turn 时 getHarness 用新合成装配重建
+        await closeHarness()
+        return json(res, 200, { ok: true, ...r, message: `插件 ${id} 已${body.enabled ? '启用' : '关闭'}，runtime 已重建` })
+      } catch (e) {
+        return json(res, 400, { error: 'plugin', message: String(e?.message ?? e) })
+      }
+    }
+
+    // 已验证待接入能力：GET /api/capability-candidates
+    // 静态注册表（lib/candidates.mjs）——subagent/session-query/ralph/schedule/
+    // feedback/commands/invariants 已 POC 验证但尚未进主 cordis.yml。
+    // 前端「插件中心」据此展示候选，避免"功能做了但页面看不出来"。
+    if (req.method === 'GET' && path === '/api/capability-candidates') {
+      const wired = new URL(req.url, 'http://x').searchParams.get('wired') || 'all'
+      const list = listCapabilityCandidates({ wired })
+      return json(res, 200, { ok: true, count: list.length, candidates: list })
     }
 
     // 已安装插件：GET /api/installed-plugins

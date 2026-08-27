@@ -19,8 +19,41 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const CORDIS_CONFIG = join(__dirname, '..', 'runtime-js', 'config', 'cordis.yml')
 
-/** 内置 harness 插件（@deepseek-ai 命名空间）→ 归类 builtin，不列进「已安装插件」。 */
-const BUILTIN_PREFIXES = ['@deepseek-ai/']
+// ----------------------------------------------------------------------------
+// 分类（tier）语义：
+//   base —— DSH harness 基座必需插件（sdk 服务 / LLM 适配 / session 存储 / 工具 /
+//           compaction 等），前端默认折叠；改了它 runtime 就起不来。
+//   ours —— 我们为 yxspec 接入/新增的功能（agent-spine 装配、graph-memory、
+//           weknora、tool-guard、invariants、commands 等），前端高亮展示：
+//           「这是我们在 DSH 基座上加的东西」。
+//   poc  —— POC 已验证但尚未进主装配的能力（subagent / session-query / ralph /
+//           schedule / feedback），由 /api/capability-candidates 单独出（见 candidates.mjs）。
+//
+// 判定逻辑：先按装配 id 命中 BASE 白名单 → base；否则 name 以 @deepseek-ai/ 开头
+// 且非 OUR_PACKAGES → base（剩余未命名的 deepseek 基座，不逐个列）；其余 → ours。
+// 新验证的 @deepseek-ai 能力进主装配时，只要 id 不属于 BASE 白名单，就自动归 ours。
+// ----------------------------------------------------------------------------
+const BASE_IDS = new Set([
+  'sdk-jsonrpc-server',
+  'llm-pi-ai',
+  'settings',
+  'credentials',
+  'sessions',
+  'session-checkpoints',
+  'subprocess',
+  'bash',
+  'fs-local',
+  'fs-observation-policy',
+  'tool-fs',
+  'tool-todo',
+  'tool-goal',
+  'token-meter',
+  'compaction-basic',
+  'agent-presets',
+])
+
+/** 我们接入/新增的 deepseek 命名空间包（即使 id 不在白名单也归 ours，便于展示）。 */
+const OUR_PACKAGES = ['@deepseek-ai/dsh-agent-spine-demo', '@deepseek-ai/dsh-invariants', '@deepseek-ai/dsh-commands']
 
 /** 解析 cordis.yml → [{ id, name }]（宽松：只认 `- id:` 条目 + 相邻 name，其余行忽略）。 */
 export function parseCordisEntries(text) {
@@ -73,7 +106,7 @@ function readPkgVersion(pkg) {
   }
 }
 
-/** 主入口：返回已安装（非内置）插件清单。 */
+/** 主入口：返回已安装插件清单（含基座/我们接入分类）。 */
 export function listInstalledPlugins() {
   let text = null
   try {
@@ -85,16 +118,24 @@ export function listInstalledPlugins() {
   const out = []
   for (const e of parseCordisEntries(text)) {
     const name = e.name || e.id
-    // 跳过内置 harness 基座插件
-    if (BUILTIN_PREFIXES.some((p) => name.startsWith(p))) continue
     const pkg = toPackageName(name)
+    const tier = classifyTier(e.id, name)
     out.push({
       id: e.id,
       name: name,
       package: pkg,
       version: pkg ? readPkgVersion(pkg) : null,
       source: 'cordis.yml',
+      tier,
     })
   }
   return out
+}
+
+/** 分类：装配 id 命中基座白名单，或 deepseek 命名空间且非我们接入 → base；否则 ours。 */
+function classifyTier(id, name) {
+  if (BASE_IDS.has(id)) return 'base'
+  const ours =
+    OUR_PACKAGES.includes(name) || (name.startsWith('@deepseek-ai/') ? false : true)
+  return ours ? 'ours' : 'base'
 }

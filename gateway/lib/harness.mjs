@@ -3,18 +3,36 @@
 import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 
-const sdkClient = await import(pathToFileURL('D:/AI/deepseek-harness-master/packages/sdk/client/lib/index.js').href)
+// Harness 主仓根目录：换机/副本验证时用 HARNESS_HOME 环境变量覆盖（默认本机路径向后兼容）
+const HARNESS_HOME = process.env.HARNESS_HOME ?? 'D:/AI/deepseek-harness-master'
+const sdkClient = await import(pathToFileURL(`${HARNESS_HOME}/packages/sdk/client/lib/index.js`).href)
 const { DeepSeekHarness } = sdkClient
 
 // 顶层懒加载 models.mjs（其函数只在需要时调用）
 const modelsModule = await import('./models.mjs')
+// 顶层懒加载 plugins.mjs（合成装配/开关）——避免与 server.mjs 的显式 import 重复初始化
+const pluginsModule = await import('./plugins.mjs')
 
-export const RUNTIME_BIN = 'D:/AI/deepseek-harness-master/packages/examples/jsonrpc-demo/lib/bin.js'
-// 运行时装配表：默认主 cordis.yml，可经 env YXSPEC_CORDIS_CONFIG 覆盖（副本网关验证用）
+export const RUNTIME_BIN = `${HARNESS_HOME}/packages/examples/jsonrpc-demo/lib/bin.js`
+// 运行时装配表：默认主 cordis.yml，可经 env YXSPEC_CORDIS_CONFIG 覆盖（副本网关验证用）。
+// 插件开关（plugins.mjs 合成装配）优先：无显式 YXSPEC_CORDIS_CONFIG 时，
+// 每次新建 runtime 写一份合成 yml（cordis.synth.yml）指向它——开关即重建据此生效。
 export const CONFIG_PATH = process.env.YXSPEC_CORDIS_CONFIG
   ? (process.env.YXSPEC_CORDIS_CONFIG.startsWith('file:') ? fileURLToPath(new URL(process.env.YXSPEC_CORDIS_CONFIG)) : process.env.YXSPEC_CORDIS_CONFIG)
-  : fileURLToPath(new URL('../runtime-js/config/cordis.yml', import.meta.url))
-export const HARNESS_CWD = 'D:/AI/deepseek-harness-master'
+  : null // 无显式指定 → 启动时由 resolveConfigPath() 决定（合成或默认）
+
+/** 决定 runtime 启动用的装配文件路径：显式 YXSPEC_CORDIS_CONFIG 优先；否则写合成装配并指向它。 */
+export function resolveConfigPath() {
+  if (CONFIG_PATH) return CONFIG_PATH // 副本/调试：显式指定，不合成
+  try {
+    const abs = pluginsModule.writeSynthesizedConfig()
+    if (abs) return abs
+  } catch (e) {
+    console.warn(`[harness] 合成装配生成失败，回落默认 cordis.yml: ${e?.message ?? e}`)
+  }
+  return fileURLToPath(new URL('../runtime-js/config/cordis.yml', import.meta.url))
+}
+export const HARNESS_CWD = HARNESS_HOME
 // 工作区（项目根）可经环境变量覆盖：runtime 的 fs/bash cwd + session 目录归属
 export const WORKSPACE_CWD = process.env.YXSPEC_WORKSPACE_CWD || 'D:/Work/01_Projects/Aima_X1_BCM'
 
@@ -73,6 +91,15 @@ export class TurnAbortedError extends Error {
 /** turn 超时熔断：单轮 agent 最长时间，超过视为卡死（杀 runtime + 清队列，让编排器拿明确失败）。 */
 const TURN_TIMEOUT_MS = 30 * 60 * 1000
 
+// 进行中的 turn 计数（串行闸门内一次一个，但 abort/重建需要知道是否有 turn 在跑）。
+// 供插件开关（开关即重建）做安全检查：有 active turn 时拒绝重建。
+let activeTurns = 0
+
+/** 当前是否有 turn 在执行（含排队）。插件开关重建前必须为 false。 */
+export function isTurnBusy() {
+  return activeTurns > 0
+}
+
 /** 超时熔断异常：runTurn 超时未返回时抛出，调用方（runAndEmit）置 blocked。 */
 export class TurnTimeoutError extends Error {
   constructor(message = `turn timeout after ${TURN_TIMEOUT_MS / 60000}min`) {
@@ -124,7 +151,7 @@ export function getHarness({ provider, model, maxTokens } = {}) {
   harness = new DeepSeekHarness({
     launch: {
       command: process.execPath,
-      args: [RUNTIME_BIN, CONFIG_PATH],
+      args: [RUNTIME_BIN, resolveConfigPath()],
       cwd: HARNESS_CWD,
       env: { ...process.env },
     },
@@ -194,8 +221,13 @@ export async function runTurn({ prompt, sessionId, model, onEvent }) {
       withRunLock(async () => {
         // 上一轮 abort 标记只影响"被中止的那一轮"；新 turn 真正开始执行时清除。
         abortRequested = false
-        const h = specArgs ? getHarness(specArgs) : getHarness()
-        return executeTurn({ h, prompt, sessionId, onEvent })
+        activeTurns++
+        try {
+          const h = specArgs ? getHarness(specArgs) : getHarness()
+          return await executeTurn({ h, prompt, sessionId, onEvent })
+        } finally {
+          activeTurns--
+        }
       }),
       timeout,
     ])

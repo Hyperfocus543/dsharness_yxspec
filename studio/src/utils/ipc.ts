@@ -12,6 +12,7 @@ import type {
   DshState,
   PipelineState,
   ProjectInfo,
+  ResumeInfo,
   ReviewEntry,
   StageMapping,
   StageStatus,
@@ -36,11 +37,58 @@ const isTauri =
 // =============================================================================
 // 默认 8787 = Track B 对话网关（server.mjs）。旧 8001 = s2_a_gateway.py（已弃用）。
 // 可用 VITE_EXEC_GATEWAY 覆盖。
+// 局域网挂载：浏览器与网关不在同一台机器时，127.0.0.1 指向访问者本机而连不到网关主机。
+// 因此未显式指定时，用 window.location.hostname（访问 Vite 页面所用的主机名：
+// 本机 = localhost，局域网 = 网关主机 IP）拼 :8787，让局域网机器也能连到网关。
 export const GATEWAY_BASE: string =
-  (import.meta as any)?.env?.VITE_EXEC_GATEWAY || 'http://127.0.0.1:8787';
+  (import.meta as any)?.env?.VITE_EXEC_GATEWAY ||
+  (typeof window !== 'undefined' && window.location
+    ? `http://${window.location.hostname}:8787`
+    : 'http://127.0.0.1:8787');
+
+/** yxspec 车载嵌入式 ASPICE 流程助理系统提示词（Agent A 后端会把它并入 agent prompt）*/
+export const YXSPEC_SYSTEM_PROMPT = '你是 yxspec 车载嵌入式 ASPICE 流程助理，回复简洁准确。';
 
 /** 网关事件回调载荷（与后端 SSE 消息 {type, data} 对齐）*/
 export type GatewayEvent = { type: string; data: any };
+
+// =============================================================================
+// sessionId 持久化（按 projectKey 隔离）
+// key 格式：yxspec-studio.session.<projectKey>（projectKey 通常 = 项目绝对路径）
+// 用途：刷新页面后 stageStore.sessionId 归零，SSE 不重连旧 session；刷新恢复时
+// 从 localStorage 读回 sessionId → connectEvents 先拉 /api/session 快照再订阅，
+// 驾驶舱状态即刻恢复，不必等下次派活。
+// =============================================================================
+
+/** 生成按项目隔离的 localStorage key */
+function sessionStorageKey(projectKey: string): string {
+  return `yxspec-studio.session.${projectKey}`;
+}
+
+/** 读取持久化的 sessionId（localStorage 不可用/无值时返回 null）*/
+export function getStoredSessionId(projectKey: string): string | null {
+  if (!projectKey) return null;
+  try {
+    const raw = localStorage.getItem(sessionStorageKey(projectKey));
+    return raw ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 写入/清除持久化的 sessionId（传 null 清除；localStorage 不可用时静默忽略）*/
+export function setStoredSessionId(projectKey: string, sessionId: string | null): void {
+  if (!projectKey) return;
+  try {
+    if (sessionId) {
+      localStorage.setItem(sessionStorageKey(projectKey), sessionId);
+    } else {
+      localStorage.removeItem(sessionStorageKey(projectKey));
+    }
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+}
 
 // =============================================================================
 // 浏览器模式：通过 Vite 中间件 /yxspec/* 读取 yxspec 项目文件
@@ -287,6 +335,8 @@ export async function computeAllStatus(projectPath: string): Promise<StageStatus
 /**
  * 订阅网关实时事件（SSE / EventSource）。
  * 浏览器模式与 Tauri 模式一致：new EventSource(...)，onmessage 里 JSON.parse 后回调。
+ * 不传 sessionId → 订阅全部事件（subscribeAll），无论谁派活（含编排脚本 verify-*）
+ * 都能看到模型实时动作。
  * @returns 取消订阅函数（调用后关闭连接并清理）
  */
 export function subscribeEvents(
@@ -335,8 +385,17 @@ export async function fetchSessionSnapshot(
 }
 
 /**
- * 派活给真实模型（走网关 /api/agent，可选复用常驻 harness session）。
- * 返回后端 JSON：{final_response, finish_reason, session_id, error}
+ * 派活给真实模型（走网关 /api/agent）。
+ *
+ * 长任务轮询契约（网关 server.mjs）：
+ *   POST /api/agent 不再阻塞等 turn 跑完 —— 长任务（3-5 分钟）若占着 HTTP 请求，
+ *   客户端连接抖动会让 fetch 抛 "Failed to fetch" 且结果丢在网关里。
+ *   新行为：
+ *     · 门控拦截等即时结果  → HTTP 200，直接返回 {finish_reason, final_response, ...}
+ *     · 真实推进（后台跑 turn）→ HTTP 202，返回 {task_id, session_id, accepted}
+ *   调用方拿 task_id 后应走 pollTask() 轮询直到终态。
+ *
+ * @returns {Promise<any>} 即时结果，或 {task_id, session_id, accepted}
  */
 export async function runAgent(
   prompt: string,
@@ -354,9 +413,113 @@ export async function runAgent(
   });
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(data?.detail || `HTTP ${res.status}`);
+    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
   }
   return data;
+}
+
+// =============================================================================
+// 长任务轮询（网关后台任务） —— GET /api/tasks/:id
+// 派活后若拿到 task_id，用 pollTask 轮询到 done|error 终态。
+// =============================================================================
+
+/** 任务终态：{status, result|error}（result = 原 /api/agent 的即时结果体）*/
+export interface TaskStatus {
+  task_id: string;
+  /** running=还在跑；done=有 result（含 blocked/aborted）；error=网关内部异常 */
+  status: 'running' | 'done' | 'error';
+  session_id: string | null;
+  result: {
+    finish_reason?: string;
+    final_response?: string;
+    session_id?: string;
+    error?: unknown;
+    stage?: string | null;
+    artifacts?: unknown[];
+    gate?: unknown;
+    model?: string | null;
+  } | null;
+  error: unknown;
+  created_at: string;
+}
+
+/**
+ * 拉取一次任务状态。
+ * 三态返回（关键：区分「网络抖动」与「任务丢失」）：
+ *   TaskStatus      正常返回（running/done/error）
+ *   'missing'       任务不存在（404，网关重启后内存清空）—— 真丢失，调用方应退出
+ *   null            网络错误/抖动 —— 调用方应退避重试，不能误判为丢失
+ */
+export async function fetchTask(taskId: string): Promise<TaskStatus | 'missing' | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/tasks/${encodeURIComponent(taskId)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (res.status === 404) return 'missing';
+    if (!res.ok) return null;
+    return (await res.json()) as TaskStatus;
+  } catch {
+    // 网络抖动：调用方重试轮询
+    return null;
+  }
+}
+
+/**
+ * 轮询长任务直到终态（done/error）或超时。
+ * @param taskId 派活拿到的 task_id
+ * @param opts.timeoutMs 总超时，默认 15 分钟（长阶段 3-5 分钟，留足余量）
+ * @param opts.intervalMs 轮询间隔，默认 3s（turn 长，不需要高频）
+ * @param opts.shouldStop 每轮轮询前检查；返回 true 则立即停止（用于用户取消）
+ * @param opts.onPoll 每次查询后的回调（可用于刷新 UI 进度），查询异常时为 null
+ * @returns 终态 TaskStatus；超时/任务丢失/被 shouldStop 中止返回 null
+ */
+export async function pollTask(
+  taskId: string,
+  opts?: {
+    timeoutMs?: number;
+    intervalMs?: number;
+    shouldStop?: () => boolean;
+    onPoll?: (t: TaskStatus | null) => void;
+  },
+): Promise<TaskStatus | null> {
+  const timeout = opts?.timeoutMs ?? 15 * 60 * 1000;
+  const interval = opts?.intervalMs ?? 3000;
+  const deadline = Date.now() + timeout;
+  // 轮询是短请求，天然免疫长连接超时；偶发网络错误不中断，退避后重试
+  let backoff = 1000;
+  while (Date.now() < deadline) {
+    if (opts?.shouldStop?.()) return null; // 用户取消 → 立即停止
+    const t = await fetchTask(taskId);
+    // onPoll 只看"是否拿到状态"（网络抖动/丢失给 null，不外泄 'missing' 细节）
+    opts?.onPoll?.(t === 'missing' ? null : t);
+    // 先排除 'missing'（任务真丢失，网关重启），再按 status 判断终态
+    if (t === 'missing') return null;
+    if (t?.status === 'done' || t?.status === 'error') return t;
+    if (t === null) {
+      // 网络抖动：退避重试，不中断（最长退避 5s）
+      await sleep(Math.min(backoff, 5000));
+      backoff *= 1.5;
+      continue;
+    }
+    // running：正常间隔轮询
+    await sleep(interval);
+    backoff = 1000;
+  }
+  return null; // 超时
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 便捷工具：判断某 TaskStatus.result 是否为门控拦截 */
+export function isTaskBlocked(t: TaskStatus): boolean {
+  return t?.status === 'done' && t?.result?.finish_reason === 'blocked';
+}
+
+/** 便捷工具：判断某 TaskStatus.result 是否为用户取消 */
+export function isTaskAborted(t: TaskStatus): boolean {
+  return t?.status === 'done' && t?.result?.finish_reason === 'aborted';
 }
 
 // =============================================================================
@@ -420,6 +583,96 @@ export async function applyModel(): Promise<any> {
   return modelsFetch(`${GATEWAY_BASE}/api/models/apply`, { method: 'POST' });
 }
 
+// =============================================================================
+// 功能商店 API（网关 /api/features*）
+// 网关真相源：features.mjs 注册表 + project/config/features.yaml
+// =============================================================================
+
+export interface FeatureItem {
+  id: string;
+  name: string;
+  desc: string;
+  appliesTo: string[];
+  cost: string;
+  depends: string[];
+  available: boolean;
+  always: boolean;
+  enabled: boolean;
+  loaded: { path: string } | null;
+  /** 纯 UI 功能（如周报）：不进 agent prompt，只控制前端功能卡显隐 */
+  uiOnly?: boolean;
+  /** 用户自定义功能（custom-features.yaml 写入）标记 */
+  custom?: boolean;
+  /** A+A：该 feature 对应的 harness 原生 dsh skill（存在 .dsh/skills/<id>/SKILL.md 才有值） */
+  skill?: { name: string; invocation: 'model-invocable' | 'model-disabled' } | null;
+}
+
+export interface FeatureSkillItem {
+  id: string;
+  name: string;
+  desc: string;
+  description: string;
+  enabled: boolean;
+  invocation: 'model-invocable' | 'model-disabled';
+  source: string;
+  path: string;
+}
+
+export interface FeaturesResponse {
+  ok: boolean;
+  features: FeatureItem[];
+}
+
+export interface FeatureSkillsResponse {
+  ok: boolean;
+  skills: FeatureSkillItem[];
+}
+
+/** 新增自定义功能所需字段（与后端 addCustomFeature 对齐）。 */
+export interface CustomFeatureFields {
+  id: string;
+  name: string;
+  desc?: string;
+  appliesTo: string[] | string;
+  cost?: string;
+  defaultEnabled?: boolean;
+  ruleFile?: string;
+  maxChars?: number;
+}
+
+/** 拉取全部功能条目（元数据 + 启用状态 + 规则可加载性）。 */
+export async function getFeatures(): Promise<FeaturesResponse> {
+  return modelsFetch(`${GATEWAY_BASE}/api/features`);
+}
+
+/** A+A：拉取 .dsh/skills 下已生成的原生 dsh skill 只读清单。 */
+export async function getFeatureSkills(): Promise<FeatureSkillsResponse> {
+  return modelsFetch(`${GATEWAY_BASE}/api/features/skills`);
+}
+
+/** 设置开关；灰置（available=false）会得到 HTTP 400（后端拒绝）。 */
+export async function setFeature(id: string, enabled: boolean): Promise<any> {
+  return modelsFetch(`${GATEWAY_BASE}/api/features/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+/** 新增自定义功能（POST /api/features/custom）；校验失败后端返回 HTTP 400。 */
+export async function addCustomFeature(fields: CustomFeatureFields): Promise<any> {
+  return modelsFetch(`${GATEWAY_BASE}/api/features/custom`, {
+    method: 'POST',
+    body: JSON.stringify(fields),
+  });
+}
+
+/** 删除自定义功能（DELETE /api/features/custom/{id}）。 */
+export async function removeCustomFeature(id: string): Promise<any> {
+  return modelsFetch(`${GATEWAY_BASE}/api/features/custom/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function readPipelineState(projectPath: string): Promise<PipelineState | null> {
   if (isTauri) {
     const invoke = await getTauriInvoke();
@@ -464,6 +717,27 @@ export async function fetchDshState(projectPath: string): Promise<DshState | nul
     }
   }
   return browserFetchDshState();
+}
+
+/**
+ * 断点续跑：拉取网关 GET /api/resume 恢复信息。
+ * 网关重启/电脑休眠后前端据此显示「已恢复到 X 阶段」+ 一键续跑。
+ * 失败（网关未起/项目无 dsh_state/结构异常）静默返回 null，保持现有加载链行为，
+ * 不抛错不 toast —— 恢复提示条缺失不应影响驾驶舱正常使用。
+ */
+export async function fetchResumeInfo(projectPath: string): Promise<ResumeInfo | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/resume`);
+    if (!res.ok) return null;
+    const data = (await res.json()) as ResumeInfo;
+    // 结构校验：resumable 为 false 或 current 缺失时仍返回（前端据此不渲染提示条），
+    // 但必须保证字段形态可被前端安全读取。
+    if (!data || typeof data !== 'object') return null;
+    if (typeof data.resumable !== 'boolean') data.resumable = Boolean(data.current && data.currentIndex >= 0);
+    return data;
+  } catch {
+    return null; // 网关未起 / 网络错：静默降级
+  }
 }
 
 /** 读取单个产物文件全文（浏览器模式经 /yxspec 中间件；Tauri 经 read_file 命令）。 */
@@ -516,6 +790,222 @@ export async function suggestNextCommand(stage: string): Promise<string | null> 
     return `/yxspec:review ${stage}`;
   }
   return null;
+}
+
+// =============================================================================
+// 执行成本统计 API（网关 /api/cost）
+// 聚合审计账本（.dsh/gateway-log）按阶段统计负载：耗时/次数/工具调用。
+// 账本未记 token usage → prompt/completionTokens 恒 0，hasTokenData=false；
+// 单价可经网关环境变量配置，未配置为 0（不估金额）。
+// =============================================================================
+
+export interface CostStageStat {
+  token: string;
+  runs: number;
+  elapsedMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  toolCalls: number;
+  lastRunAt: string | null;
+}
+
+export interface CostTotals {
+  runs: number;
+  elapsedMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  toolCalls: number;
+}
+
+export interface CostData {
+  perStage: CostStageStat[];
+  totals: CostTotals;
+  pricePerMillion: { input: number; output: number };
+  hasTokenData: boolean;
+  note: string;
+}
+
+/** 拉取执行成本统计（GET /api/cost）；失败返回 null（网关未开/路由未就绪时降级）。 */
+export async function fetchCost(): Promise<CostData | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/cost`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CostData;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
+// 社区插件市场 API（网关 /api/community-plugins）
+// 只读浏览/筛选：数据源为 GitHub search（topic:dsh-plugin），网关缓存 6h；
+// GitHub 挂/限流时降级旧缓存(stale)或内置静态精选(static)。
+// 本期不做安装，不挂进 runtime。
+// =============================================================================
+
+/** 单个社区插件条目（网关精简映射后的字段）。 */
+export interface CommunityPlugin {
+  fullName: string;
+  name: string;
+  owner: string;
+  description: string;
+  stars: number;
+  pushedAt: string | null;
+  url: string;
+}
+
+export interface CommunityPluginsResponse {
+  ok: boolean;
+  /** github=刚拉的实时数据；cache=命中 6h 缓存；static=内置精选兜底 */
+  source: 'github' | 'cache' | 'static';
+  /** 命中旧缓存但刷新 GitHub 失败（数据可能过期） */
+  stale: boolean;
+  fetchedAt: string | null;
+  count: number;
+  plugins: CommunityPlugin[];
+}
+
+/** 拉取社区插件列表；失败返回 null（前端静默降级，不 toast）。 */
+export async function fetchCommunityPlugins(): Promise<CommunityPluginsResponse | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/community-plugins`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CommunityPluginsResponse;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
+// 已安装插件 API（网关 /api/installed-plugins）
+// 真相源 = runtime 装配表 cordis.yml 解析；返回已接入 runtime 的非内置插件
+// （graph-memory / weknora 等），带版本号。功能开关 tab 顶部展示。
+// =============================================================================
+
+/** 单个已安装插件条目。 */
+export interface InstalledPlugin {
+  id: string;
+  /** cordis.yml 里的插件名（@scope/pkg 或 pkg/entry）。 */
+  name: string;
+  /** npm 包名（name 归一化后用于查 node_modules）。 */
+  package: string | null;
+  /** node_modules/<pkg>/package.json 的 version（未装/读不到 → null）。 */
+  version: string | null;
+  source: string;
+  /** 分类：base=DSH 基座必需 / ours=我们接入/新增（前端高亮）。 */
+  tier?: 'base' | 'ours';
+}
+
+export interface InstalledPluginsResponse {
+  ok: boolean;
+  count: number;
+  plugins: InstalledPlugin[];
+}
+
+/** 拉取已安装插件清单；失败返回 null（静默降级）。 */
+export async function fetchInstalledPlugins(): Promise<InstalledPluginsResponse | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/installed-plugins`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as InstalledPluginsResponse;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
+// 已验证待接入能力（GET /api/capability-candidates）
+// subagent / session-query / ralph / schedule / feedback / commands / invariants
+// 已 POC 验证但尚未进主 cordis.yml；插件中心据此展示候选，避免"做了但看不出来"。
+// =============================================================================
+
+/** 单个已验证待接入能力条目。 */
+export interface CapabilityCandidate {
+  id: string;
+  name: string;
+  desc: string;
+  packages: string[];
+  verified: boolean;
+  verifiedAt: string;
+  evidence: string;
+  port: number;
+  /** 接入时是否需 @yxspec/tool-guard 白名单放行。 */
+  guard: boolean;
+  /** 是否已真正接进主 cordis.yml（false=候选待接入）。 */
+  wired: boolean;
+}
+
+export interface CapabilityCandidatesResponse {
+  ok: boolean;
+  count: number;
+  candidates: CapabilityCandidate[];
+}
+
+/** 拉取已验证待接入能力清单；失败返回 null（静默降级）。 */
+export async function fetchCapabilityCandidates(): Promise<CapabilityCandidatesResponse | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/capability-candidates`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CapabilityCandidatesResponse;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
+// 插件统一模型（Everything-is-a-Plugin 开关层）
+// 后端 /api/plugins：已装配插件（plugin）+ 候选能力（candidate）+ 基座（base）
+// 统一成可开关的插件条目。开关生效 = 开关即重建（写装配 → 重建 runtime）。
+// =============================================================================
+
+export interface UnifiedPlugin {
+  id: string;
+  name: string;
+  desc: string;
+  /** plugin=已装配 / candidate=候选能力 / base=基座 */
+  kind: 'plugin' | 'candidate' | 'base';
+  tier: 'plugin' | 'candidate' | 'base';
+  enabled: boolean;
+  /** base 不可关（只读）；agent-spine 也锁 */
+  switchable: boolean;
+}
+
+export interface PluginsResponse {
+  ok: boolean;
+  count: number;
+  plugins: UnifiedPlugin[];
+}
+
+/** 拉取统一插件列表。 */
+export async function fetchPlugins(): Promise<PluginsResponse | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/plugins`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as PluginsResponse;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 开关插件（开关即重建）。后端会 closeHarness() 重建 runtime（~2-5s）。
+ * 有 active turn 时后端返回 409；base 返回 400。
+ */
+export async function setPluginEnabled(id: string, enabled: boolean): Promise<any> {
+  return modelsFetch(`${GATEWAY_BASE}/api/plugins/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 // =============================================================================

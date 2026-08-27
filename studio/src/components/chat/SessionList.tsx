@@ -1,3 +1,4 @@
+// UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 // SessionList — 对话会话管理（对话管理系统 UI）
 // 终端对话区顶部的会话切换器：
@@ -8,6 +9,8 @@
 
 import React from 'react';
 import { useChatStore } from '../../store/chatStore';
+import { Icon } from '../ui';
+import { I } from '../ui/icons';
 
 export const SessionList: React.FC = () => {
   const sessions = useChatStore((s) => s.sessions);
@@ -48,27 +51,27 @@ export const SessionList: React.FC = () => {
     <div className="relative" ref={listRef}>
       {/* 当前会话折叠态 */}
       <button
-        className="flex items-center gap-1.5 max-w-[240px] text-xs px-2 py-1 bg-white border rounded hover:bg-gray-50"
+        className="flex items-center gap-1.5 max-w-[240px] text-xs px-2 py-1 bg-white border border-zinc-300 rounded-md hover:bg-zinc-50 transition-colors active:scale-[0.98]"
         onClick={() => setOpen((v) => !v)}
         title="会话管理"
       >
-        <span className="text-gray-400">💬</span>
-        <span className="truncate text-gray-700">{current?.title || '新会话'}</span>
-        <span className="text-gray-400 shrink-0">{sessions.length > 1 ? `(${sessions.length})` : ''}</span>
-        <span className="text-gray-400 shrink-0">▾</span>
+        <span className="text-zinc-400"><Icon name={I.chat} size={12} /></span>
+        <span className="truncate text-zinc-700">{current?.title || '新会话'}</span>
+        <span className="text-zinc-400 shrink-0">{sessions.length > 1 ? `(${sessions.length})` : ''}</span>
+        <span className="text-zinc-400 shrink-0"><Icon name={I.caretDown} size={12} /></span>
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1 w-[280px] bg-white border rounded-lg shadow-xl z-[65] overflow-hidden">
+        <div className="absolute left-0 top-full mt-1 w-[280px] bg-white border border-zinc-200 rounded-lg shadow-lg z-[65] overflow-hidden">
           {/* 新建 */}
           <button
-            className="w-full px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 flex items-center gap-2 border-b"
+            className="w-full px-3 py-2 text-sm text-emerald-600 hover:bg-emerald-50 flex items-center gap-2 border-b border-zinc-200 transition-colors active:scale-[0.98]"
             onClick={() => {
               newSession();
               setOpen(false);
             }}
           >
-            <span>＋</span> 新会话
+            <Icon name={I.plus} size={14} /> 新会话
           </button>
 
           {/* 会话列表 */}
@@ -78,8 +81,8 @@ export const SessionList: React.FC = () => {
               return (
                 <div
                   key={s.id}
-                  className={`group flex items-center gap-1 px-2 py-1.5 border-b hover:bg-blue-50/50 cursor-pointer ${
-                    active ? 'bg-blue-50' : ''
+                  className={`group flex items-center gap-1 px-2 py-1.5 border-b border-zinc-100 cursor-pointer transition-colors ${
+                    active ? 'bg-emerald-50' : 'hover:bg-zinc-50'
                   }`}
                   onClick={() => {
                     switchTo(s.id);
@@ -89,7 +92,7 @@ export const SessionList: React.FC = () => {
                   {renamingId === s.id ? (
                     <input
                       autoFocus
-                      className="flex-1 text-xs px-1.5 py-0.5 border rounded font-mono"
+                      className="flex-1 text-xs px-1.5 py-0.5 border border-zinc-300 rounded-md font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                       value={renameVal}
                       onChange={(e) => setRenameVal(e.target.value)}
                       onClick={(e) => e.stopPropagation()}
@@ -104,28 +107,30 @@ export const SessionList: React.FC = () => {
                   ) : (
                     <>
                       <span className="flex-1 min-w-0">
-                        <div className="text-xs truncate">{s.title}</div>
-                        <div className="text-[10px] text-gray-400">{fmtTime(s.updatedAt)}</div>
+                        <div className={`text-xs truncate ${active ? 'text-emerald-800 font-medium' : 'text-zinc-700'}`}>{s.title}</div>
+                        <div className="text-xs text-zinc-400">{fmtTime(s.updatedAt)}</div>
                       </span>
-                      {active && <span className="text-emerald-600 text-xs shrink-0">✓</span>}
+                      {active && <span className="text-emerald-600 shrink-0"><Icon name={I.check} size={14} /></span>}
                       <span
-                        className="opacity-0 group-hover:opacity-100 text-[10px] text-gray-400 shrink-0"
+                        className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-emerald-600 cursor-pointer transition-all shrink-0"
                         onClick={(e) => {
                           e.stopPropagation();
                           setRenamingId(s.id);
                           setRenameVal(s.title);
                         }}
+                        title="重命名"
                       >
-                        ✎
+                        <Icon name={I.edit} size={14} />
                       </span>
                       <span
-                        className="opacity-0 group-hover:opacity-100 text-[10px] text-gray-400 shrink-0"
+                        className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-600 cursor-pointer transition-all shrink-0"
                         onClick={(e) => {
                           e.stopPropagation();
                           remove(s.id);
                         }}
+                        title="删除会话"
                       >
-                        🗑
+                        <Icon name={I.trash} size={14} />
                       </span>
                     </>
                   )}
