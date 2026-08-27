@@ -280,6 +280,22 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
   // hover 镜像联动：悬停卡片 → 其验证伙伴卡片亮环
   const [hoverToken, setHoverToken] = React.useState<string | null>(null);
 
+  // 打开视图自动定位到当前进行阶段（略过上方的已实现阶段）：
+  // mount 后 / loading 结束 / currentStage 变化时各滚一次；ref 去重，轮询刷新不重复滚
+  const scrolledRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (loading) return;
+    if (!currentStage) return;
+    if (scrolledRef.current === currentStage) return;
+    scrolledRef.current = currentStage;
+    const raf = requestAnimationFrame(() => {
+      document
+        .getElementById(`stage-${currentStage}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [loading, currentStage]);
+
   return (
     <div className="space-y-3">
       {/* 整体进度统计条 */}
@@ -334,6 +350,7 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
                       return (
                         <div
                           key={token}
+                          id={`stage-${token}`}
                           className={`cursor-pointer rounded-lg transition-all ${
                             isPartnerHighlighted ? 'ring-2 ring-emerald-400/70' : 'ring-0 ring-transparent'
                           }`}
