@@ -20,7 +20,7 @@ export function recentSessions(
   limit = 5,
 ): ChatSession[] {
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  if (currentId) {
+  if (currentId && sessions.some((s) => s.id === currentId)) {
     // 当前会话排最前（高亮锚点），其余按时间紧随
     return [
       ...sorted.filter((s) => s.id === currentId),

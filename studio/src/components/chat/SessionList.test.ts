@@ -51,4 +51,13 @@ describe('recentSessions（最近会话快切）', () => {
     const recents = recentSessions([d, a, f, c, b, e], 'f', 3);
     expect(recents.map((s) => s.id)).toEqual(['f', 'a', 'b']);
   });
+
+  it('currentId 不在列表时按时间倒序取（不放大幽灵锚点）', () => {
+    const recents = recentSessions([a, b, c], 'ghost-id', 5);
+    expect(recents.map((s) => s.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('limit=0 返回空数组（快切区空态不渲染）', () => {
+    expect(recentSessions([a, b, c], null, 0)).toEqual([]);
+  });
 });
