@@ -495,12 +495,21 @@ export function scanGates(state) {
   return gates
 }
 
-/** 从 prompt 识别目标阶段。仅完整命令匹配（/yxspec:<command>）。 */
+/** 从 prompt 识别目标阶段。仅完整命令匹配（/yxspec:<command>）。
+ *  边界规则：命令后必须跟 空白/标点/字符串结尾，禁止子串命中——
+ *  否则 /yxspec:swe-coding-verify-v2 会误吞 /yxspec:swe-coding-verify-pc-v2。
+ *  按命令长度降序匹配：同时提及多个命令时取最具体的那个（PC 变体优先）。 */
 export function resolveStage(prompt) {
   // 分析/咨询问句（含阶段名或中文标签）一律返回 null → 走 general 模式，
   // 避免"请分析 sqt_defect_feedback"误触发阶段执行 + 篡改状态。
-  for (const [token, stage] of Object.entries(STAGES)) {
-    if (prompt.includes(stage.command)) return { token, stage }
+  const text = String(prompt ?? '')
+  const byLen = Object.entries(STAGES).sort(
+    (a, b) => b[1].command.length - a[1].command.length,
+  )
+  for (const [token, stage] of byLen) {
+    const cmd = stage.command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(`(?:^|[^\\w-])${cmd}(?:$|[\\s.,;:!?，。；：！？、)）]|(?:[^\\w-]))`)
+    if (re.test(text)) return { token, stage }
   }
   return null
 }
