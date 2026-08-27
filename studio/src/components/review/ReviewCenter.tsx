@@ -132,9 +132,14 @@ export const ReviewCenter: React.FC<ReviewCenterProps> = ({ projectPath }) => {
   const total = entries.length;
 
   return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-zinc-800">审查中心</h3>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-zinc-800 flex items-center gap-2">
+          <span className="text-emerald-600">
+            <Icon name={I.shield} size={16} />
+          </span>
+          审查中心
+        </h3>
         <Button variant="secondary" size="sm" onClick={() => load(projectPath)}>
           <Icon name={I.refresh} size={14} />
           刷新

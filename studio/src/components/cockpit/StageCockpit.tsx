@@ -16,16 +16,17 @@ import { StageTraj } from './StageTraj';
 import { CostDashboard } from './CostDashboard';
 import { PipelinePanel } from '../pipeline/PipelinePanel';
 import { BatchQueue } from './BatchQueue';
+import { ReviewCenter } from '../review/ReviewCenter';
 import { useProjectStore } from '../../store/projectStore';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
 
-// 视图互斥状态机：grid / flow / gates / traj / pipeline / batch 六选一。
+// 视图互斥状态机：grid / flow / gates / traj / pipeline / batch / review 七选一。
 // traj 为独立视图（而非覆盖在 grid 上的叠加状态）——否则会出现
 // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
-// pipeline（原独立「Pipeline」卡，信息与驾驶舱重复）已并入驾驶舱；
-// batch（原「批处理」卡，多选阶段串行派活）同样并入——驾驶舱=看+跑一体的操作中心。
-type View = 'grid' | 'flow' | 'gates' | 'traj' | 'pipeline' | 'batch';
+// pipeline（原独立「Pipeline」卡）、batch（原「批处理」卡）、review（原「审查中心」卡）
+// 均已并入驾驶舱——驾驶舱=看+跑+审一体的操作中心。
+type View = 'grid' | 'flow' | 'gates' | 'traj' | 'pipeline' | 'batch' | 'review';
 
 interface ViewTabProps {
   view: View;
@@ -41,6 +42,7 @@ const ViewTabs: React.FC<ViewTabProps> = ({ view, onView }) => {
     { id: 'traj', label: '轨迹', icon: I.timer, title: '阶段执行轨迹（@yxspec/aspice-trajectory）' },
     { id: 'pipeline', label: 'Pipeline', icon: I.stack, title: '编码流水线状态（原独立「Pipeline」卡，信息与驾驶舱重复，已并入）' },
     { id: 'batch', label: '批次', icon: I.listChecks, title: '多选阶段一键串行派活（原独立「批处理」卡，已并入驾驶舱）' },
+    { id: 'review', label: '审查', icon: I.shield, title: '审查报告汇总 + 待审裁决（原独立「审查中心」卡，已并入驾驶舱）' },
   ];
   return (
     <div className="flex items-center gap-1 bg-zinc-100 border border-zinc-200 rounded p-0.5 w-fit">
@@ -144,6 +146,8 @@ export const StageCockpit: React.FC<CockpitProps> = ({
         <PipelinePanel projectPath={projectPath} />
       ) : view === 'batch' ? (
         <BatchQueue />
+      ) : view === 'review' ? (
+        <ReviewCenter projectPath={projectPath} />
       ) : view === 'traj' && trajStage ? (
         <StageTraj
           stage={trajStage}
