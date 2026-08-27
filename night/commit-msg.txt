@@ -1,0 +1,13 @@
+fix:/api/resume 全完成误报可续跑 + current 落在废弃阶段时续跑点错位
+
+- 全部活跃阶段完成时：旧逻辑 ?? current 保留已完成的 current，
+  返回 resumable:true + 已完成阶段的 suggestedNext（前端会渲染
+  "已恢复到 X · 剩 0 个待完成" 并允许一键续跑已完阶段）。
+  改为重推导失败时置 null → resumable:false，与注释语义一致。
+- dsh_state.current 落在废弃/变体阶段（swe_detail / swe_coding_verify_pc）时：
+  isDone 为 false → 保留该阶段 → suggestedNext 返回废弃命令 /yxspec:swe-detail。
+  改为与 activeTokens 同口径（跳过 deprecated/variant），
+  重推导到第一个未完成的活跃阶段（如 swe_coding_plan）。
+
+验证：tsc 0 error；vitest 33/33 过；起真实网关冒烟——
+  A(全 done) → resumable=false；B(current=swe_detail) → 续跑点重推到 swe_coding_plan。
