@@ -133,12 +133,17 @@ function nextSeqFor(root, stage) {
   }
 }
 
-/** 轨迹记录 → JSONL 行（schema 与 lib/trajectory.mjs 对齐）。 */
+/** 轨迹记录 → JSONL 行（schema 与 lib/trajectory.mjs 对齐）。
+ *  reason → status 映射（2026-08-27 实跑修正）：
+ *    error/max-tokens → failed（模型/流程失败，产物可能残缺）
+ *    aborted/interrupted/blocked/stage-switch → blocked（未按预期完成，打回）
+ *    completed → passed
+ *    null（尚未 turn/end）→ unverified */
 function toRecord(rec) {
   const status =
-    rec.reason === 'error' ? 'failed'
-      : rec.reason === 'interrupted' ? 'blocked'
-        : rec.reason ? 'passed'
+    rec.reason === 'error' || rec.reason === 'max-tokens' ? 'failed'
+      : rec.reason === 'aborted' || rec.reason === 'interrupted' || rec.reason === 'blocked' || rec.reason === 'stage-switch' ? 'blocked'
+        : rec.reason === 'completed' ? 'passed'
           : 'unverified'
   return {
     stage: rec.stage,
@@ -221,7 +226,7 @@ export function apply(ctx, input = {}) {
     try {
       mkdirSync(dirname(rec.file), { recursive: true })
       appendFileSync(rec.file, JSON.stringify(toRecord(rec)) + '\n', 'utf8')
-      log(`append ${rec.stage}/${rec.stage}-${String(rec.seq).padStart(3, '0')}.jsonl events=${rec.eventTypes.size} tools=${rec.tools.length} reason=${reason ?? 'completed'}`)
+      log(`append ${rec.stage}/${rec.stage}-${String(rec.seq).padStart(3, '0')}.jsonl events=${rec.eventTypes.size} tools=${rec.tools.length} reason=${reason ?? 'no-reason'}`)
     } catch (e) {
       log(`write fail: ${String(e?.message ?? e)}`)
     }

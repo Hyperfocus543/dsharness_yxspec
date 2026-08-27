@@ -157,7 +157,9 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
               : '暂无产物'}
         </span>
         <span className="flex items-center gap-1">
-          {/* 门控三态徽标（来自轨迹门控）：verified 绿 / unverified 黄 / blocked 红 */}
+          {/* 门控三态徽标（来自轨迹门控）：verified 绿 / unverified 黄 / blocked 红。
+              Phase 2 徽标联动：派活被门控打回后，gate_reason 带打回原因，
+              title 展示原因文案（'迹✗' 常驻显示打回状态）。 */}
           {status.gate_trajectory && (
             <span
               className={`px-1 rounded text-white text-xs ${
@@ -167,7 +169,11 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
                     ? 'bg-amber-500'
                     : 'bg-red-500'
               }`}
-              title={`轨迹门控：${status.gate_trajectory}`}
+              title={
+                status.gate_reason
+                  ? `轨迹门控：${status.gate_trajectory}（派活打回：${status.gate_reason}）`
+                  : `轨迹门控：${status.gate_trajectory}`
+              }
             >
               {status.gate_trajectory === 'verified' ? '迹✓' : status.gate_trajectory === 'unverified' ? '迹?' : '迹✗'}
             </span>

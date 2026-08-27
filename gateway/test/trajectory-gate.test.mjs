@@ -1,4 +1,5 @@
 // gateStage 门控判定单测（Phase 1 门禁要求 3 个用例：verified / unverified / blocked）
+// Phase 2 追加：派活前门控强制执行（lib/gate-enforce.mjs）——打回/放行/警告三路径
 // 运行：cd gateway && node test/trajectory-gate.test.mjs
 // 说明：lib/trajectory.mjs 读 runtime-data/trajectory（env YXSPEC_TRAJECTORY_ROOT
 // 可覆盖）。测试用临时目录写三条轨迹 JSONL，分别断言三态：
@@ -28,6 +29,9 @@ writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sys', 'sys-req-01-测试.md'),
 
 const { gateStage, latestTrajectory, listTrajectories } = await import(
   pathToFileURL(join(process.cwd(), 'lib', 'trajectory.mjs')).href
+)
+const { checkDispatchGate, gateAction, gateEnforceEnabled } = await import(
+  pathToFileURL(join(process.cwd(), 'lib', 'gate-enforce.mjs')).href
 )
 
 let pass = 0
@@ -138,6 +142,116 @@ console.log('== 6) 最近一次执行判定（latest 语义）==')
   assert('latest = 最后写入的 seq=3（blocked）', latest?.seq === 3, JSON.stringify(latest?.seq))
   const all = listTrajectories('sys_analysis')
   assert('listTrajectories 时间升序 3 条', all.length === 3, String(all.length))
+}
+
+// =============================================================================
+// Phase 2：派活前门控强制执行（gate-enforce.mjs）
+// 场景顺序依赖：上面已写 sys_analysis 轨迹 seq1(verified)/seq2(unverified)/seq3(blocked)，
+// latest=seq3(blocked) → gateStage 恒 blocked，因此打回路径直接复用 sys_analysis；
+// 放行/警告路径用从未执行过的阶段（sys_elicitation / sys_arch）。
+// =============================================================================
+console.log('== 7) 派活前门控：强制开启（默认）==')
+{
+  const en = gateEnforceEnabled()
+  assert('YXSPEC_GATE_ENFORCE 未设 → 默认开', en === true, String(en))
+}
+
+console.log('== 8) 打回：trajectory-blocked（latest=seq3 blocked）==')
+{
+  const g = gateStage('sys_analysis')
+  assert('前置：sys_analysis 门控 = trajectory-blocked', g.reason === 'trajectory-blocked', g.reason)
+  const dg = checkDispatchGate('sys_analysis')
+  assert('applies（artifact+trajectory）', dg.applies === true, JSON.stringify(dg))
+  assert('blocked=true → 拒绝派活', dg.blocked === true, JSON.stringify(dg))
+  assert('reason=trajectory-blocked', dg.reason === 'trajectory-blocked', dg.reason)
+  assert('无 warning', dg.warning === null, String(dg.warning))
+}
+
+console.log('== 9) 打回：no-trajectory（从未执行过 + 无产物）==')
+{
+  // sys_arch 无轨迹、无产物（spec_globs 未命中）→ gateStage reason=no-trajectory
+  const g = gateStage('sys_arch')
+  assert('前置：sys_arch = no-trajectory', g.reason === 'no-trajectory', g.reason)
+  const dg = checkDispatchGate('sys_arch')
+  assert('blocked=true → 拒绝派活', dg.blocked === true, JSON.stringify(dg))
+  assert('reason=no-trajectory', dg.reason === 'no-trajectory', dg.reason)
+}
+
+console.log('== 10) 打回：artifact-passed-no-trajectory（产物在但无轨迹）==')
+{
+  // sys_elicitation 产物已命中（5b 造的 prd-*.md）且无轨迹 → 展示层 passed=true，
+  // 但派活拦截（不开新 turn 盲跑）
+  const g = gateStage('sys_elicitation')
+  assert('前置：sys_elicitation = artifact-passed-no-trajectory', g.reason === 'artifact-passed-no-trajectory', g.reason)
+  const dg = checkDispatchGate('sys_elicitation')
+  assert('展示层 passed=true 但派活打回', dg.blocked === true, JSON.stringify(dg))
+  assert('reason=artifact-passed-no-trajectory', dg.reason === 'artifact-passed-no-trajectory', dg.reason)
+}
+
+console.log('== 11) 警告：trajectory-unverified（轨迹缺关键证据）==')
+{
+  // swe_arch 造产物命中 + 一条 unverified 轨迹（无 turn/end + 全工具失败）
+  mkdirSync(join(TMP_PROJ, 'project', 'specs', 'sw-arch'), { recursive: true })
+  writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sw-arch', 'sw-arch-01-测试.md'), '# SW-ARCH-001', 'utf8')
+  mkdirSync(join(TMP_TRAJ, 'swe_arch'), { recursive: true })
+  writeFileSync(join(TMP_TRAJ, 'swe_arch', 'swe_arch-001.jsonl'), JSON.stringify({
+    stage: 'swe_arch', seq: 1, sessionId: 't', status: 'unverified', reason: null,
+    startedAt: 1730000000000, finishedAt: 1730000005000, turnCount: 1, stepCount: 1,
+    events: ['turn/start', 'tool/call', 'tool/result'],
+    tools: [{ type: 'tool/call', name: 'x', ts: 1 }, { type: 'tool/result', name: 'c1', ok: false, error: 'EACCES', ts: 2 }],
+    cost: { tokens: 1, inputTokens: 1, outputTokens: 0 },
+  }) + '\n', 'utf8')
+  const g = gateStage('swe_arch')
+  assert('前置：swe_arch = trajectory-unverified', g.reason === 'trajectory-unverified', JSON.stringify(g))
+  const dg = checkDispatchGate('swe_arch')
+  assert('不拦截（blocked=false）', dg.blocked === false, JSON.stringify(dg))
+  assert('warning 带原因', typeof dg.warning === 'string' && dg.warning.includes('trajectory-unverified'), String(dg.warning))
+  // gateAction 纯判定（不依赖 env）
+  const act = gateAction(g)
+  assert('gateAction: warn=true', act.warn === true && act.block === false, JSON.stringify(act))
+}
+
+console.log('== 12) 放行：verified（产物 + 轨迹完整）==')
+{
+  // sqt_tr 造 verified 轨迹（turn/end + tool ok）；产物未命中（无 sqt-tr-*.md）？
+  // 不行——产物必须命中才 verified。给 sqt_tr 造产物 + 轨迹。
+  mkdirSync(join(TMP_PROJ, 'project', 'specs', 'sqt-tr'), { recursive: true })
+  writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sqt-tr', 'sqt-tr-01-测试.md'), '# TR-001', 'utf8')
+  mkdirSync(join(TMP_TRAJ, 'sqt_tr'), { recursive: true })
+  writeFileSync(join(TMP_TRAJ, 'sqt_tr', 'sqt_tr-001.jsonl'), JSON.stringify({
+    stage: 'sqt_tr', seq: 1, sessionId: 't', status: 'passed', reason: 'completed',
+    startedAt: 1730000000000, finishedAt: 1730000005000, turnCount: 1, stepCount: 1,
+    events: ['turn/start', 'step/start', 'tool/call', 'tool/result', 'turn/end'],
+    tools: [{ type: 'tool/call', name: 'create_goal', ts: 1 }, { type: 'tool/result', name: 'call_0', ok: true, ts: 2 }],
+    cost: { tokens: 100, inputTokens: 80, outputTokens: 20 },
+  }) + '\n', 'utf8')
+  const g = gateStage('sqt_tr')
+  assert('前置：sqt_tr = 门控通过', g.passed === true && g.reason === 'artifact+trajectory-passed', JSON.stringify(g))
+  const dg = checkDispatchGate('sqt_tr')
+  assert('放行（blocked=false）', dg.blocked === false, JSON.stringify(dg))
+  assert('无 warning', dg.warning === null, String(dg.warning))
+}
+
+console.log('== 13) 不适用：artifact 策略阶段不受轨迹门控拦截 ==')
+{
+  // swe_coding_do gate_policy='artifact' → applies=false，直接放行（不查轨迹）
+  const dg = checkDispatchGate('swe_coding_do')
+  assert('applies=false（artifact 策略）', dg.applies === false, JSON.stringify(dg))
+  assert('blocked=false', dg.blocked === false, JSON.stringify(dg))
+}
+
+console.log('== 14) 开关：YXSPEC_GATE_ENFORCE=0 → 强制关闭 ==')
+{
+  process.env.YXSPEC_GATE_ENFORCE = '0'
+  assert('enforce=false（env=0）', gateEnforceEnabled() === false, String(gateEnforceEnabled()))
+  const dg = checkDispatchGate('sys_analysis') // 即使门控 blocked 也不拦
+  assert('applies=false（强制关闭）', dg.applies === false, JSON.stringify(dg))
+  assert('blocked=false', dg.blocked === false, JSON.stringify(dg))
+  process.env.YXSPEC_GATE_ENFORCE = 'false'
+  assert('enforce=false（env=false）', gateEnforceEnabled() === false, String(gateEnforceEnabled()))
+  process.env.YXSPEC_GATE_ENFORCE = '1'
+  assert('enforce=true（env=1）', gateEnforceEnabled() === true, String(gateEnforceEnabled()))
+  delete process.env.YXSPEC_GATE_ENFORCE
 }
 
 rmSync(TMP, { recursive: true, force: true })

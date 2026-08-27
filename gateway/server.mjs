@@ -34,6 +34,7 @@ import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, gateStage, gateSummary } from './lib/trajectory.mjs'
+import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
 
@@ -165,9 +166,10 @@ function settleTask(taskId, { result = null, error = null } = {}) {
 }
 
 /** 后台跑一轮 turn（串行闸门保证一次一个），完成后 settle 任务。 */
-async function runTaskInBackground({ taskId, session, token, agentPrompt, state, general, model }) {
+async function runTaskInBackground({ taskId, session, token, agentPrompt, state, general, model, warning }) {
   try {
     const out = await runAndEmit({ session, token, agentPrompt, state, general, model })
+    if (warning && out && typeof out === 'object') out.warning = warning // 门控警告（unverified 放行）透传终态
     settleTask(taskId, { result: out })
   } catch (err) {
     // runAndEmit 内部已广播 turn/end(error) 并置 blocked；这里记录任务终态
@@ -220,8 +222,27 @@ async function dispatchAgent({ prompt, sessionId, model, system }) {
   }
 
   const { token, stage } = hit
-  const gates = scanGates(state)
-  const gate = gates[token]
+  // gate_policy==='artifact+trajectory' 的阶段：派活前检查轨迹证据。
+  //   blocked / no-trajectory → 拒绝派活（不启动 turn），reason 供前端徽标联动
+  //   unverified             → 默认放行但响应带 warning 字段（YXSPEC_GATE_ENFORCE=0 全关）
+  const dg = checkDispatchGate(token)
+  if (dg.blocked) {
+    console.log(`[gateway] 门控打回: stage=${token} reason=${dg.reason}（YXSPEC_GATE_ENFORCE=${process.env.YXSPEC_GATE_ENFORCE ?? '(on)'}）`)
+    broadcastGoal(session, token, 'blocked', stage.aspice)
+    broadcastTurnEnd(session, { kind: 'blocked' })
+    return {
+      result: {
+        final_response: `门控拦截：阶段 ${stage.label}（${token}）缺少轨迹证据（${dg.reason}）。请先完成并验证本阶段的执行记录，再重新派活。`,
+        finish_reason: 'blocked',
+        session_id: session,
+        error: null,
+        stage: token,
+        gate,
+        trajectory_gate: dg.gate,
+        reason: dg.reason,
+      },
+    }
+  }
 
   // 门控检查：上游未完成 → 拦截，不派给 agent
   const upstreamOk = Object.values(gate.upstream).every((v) => v === true)
@@ -238,6 +259,7 @@ async function dispatchAgent({ prompt, sessionId, model, system }) {
         error: null,
         stage: token,
         gate,
+        reason: 'upstream-blocked',
       },
     }
   }
@@ -262,8 +284,8 @@ async function dispatchAgent({ prompt, sessionId, model, system }) {
     userPrompt: prompt, token, stage, state, gates, force: false,
   }), system)
   const taskId = registerTask({ sessionId: session })
-  runTaskInBackground({ taskId, session, token, agentPrompt, state, model })
-  return { task: { task_id: taskId, session_id: session } }
+  runTaskInBackground({ taskId, session, token, agentPrompt, state, model, warning: dg.warning })
+  return { task: { task_id: taskId, session_id: session }, warning: dg.warning }
 }
 
 /** 驱动 agent 跑一轮，转发事件到 SSE，完成后回写状态。
@@ -446,10 +468,12 @@ const server = createServer(async (req, res) => {
           session_id: out.task.session_id,
           accepted: true,
           message: '已进入执行队列，轮询 /api/tasks/:id 获取结果',
+          ...(out.warning ? { warning: out.warning } : {}),
         })
       }
       // 门控拦截等即时结果：直接返回
       const r = out.result
+      if (out.warning && r && typeof r === 'object') r.warning = out.warning // 门控警告（unverified 放行）透传
       console.log(`[gateway] /api/agent 即时完成: ${Date.now() - t0}ms finish=${r.finish_reason} stage=${r.stage ?? '(general)'}`)
       return json(res, 200, r)
     }
