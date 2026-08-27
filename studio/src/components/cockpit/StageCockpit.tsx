@@ -235,9 +235,12 @@ interface CockpitProps {
 }
 
 export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onSelectStage }) => {
-  const [view, setView] = React.useState<'grid' | 'flow' | 'gates'>('grid');
+  // 视图互斥状态机：grid / flow / gates / traj 四选一。
+  // traj 为独立视图（而非覆盖在 grid 上的叠加状态）——否则会出现
+  // 「轨迹视图下点网格按钮无反应」「切走轨迹后按钮仍高亮」的脱节。
+  const [view, setView] = React.useState<'grid' | 'flow' | 'gates' | 'traj'>('grid');
   const [showCost, setShowCost] = React.useState(false);
-  // 「轨迹」标签：从网格点选阶段打开对应轨迹面板（只读，Phase 1 不接门控写回）
+  // 「轨迹」视图的选中阶段（从网格点选 / 视图内 select 切换，只读，Phase 1 不接门控写回）
   const [trajStage, setTrajStage] = React.useState<StageToken | null>(null);
 
   // 整体进度统计（顶栏用）
@@ -306,6 +309,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
               view === 'grid' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => setView('grid')}
+            aria-pressed={view === 'grid'}
           >
             <Icon name={I.squares} size={14} />
             网格
@@ -315,6 +319,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
               view === 'flow' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => setView('flow')}
+            aria-pressed={view === 'flow'}
           >
             <Icon name={I.swap} size={14} />
             流向
@@ -324,16 +329,26 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
               view === 'gates' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
             onClick={() => setView('gates')}
+            aria-pressed={view === 'gates'}
           >
             <Icon name={I.shield} size={14} />
             门控
           </button>
           <button
             className={`px-3 py-1 rounded text-xs font-medium transition-all active:scale-[0.98] inline-flex items-center gap-1.5 ${
-              trajStage ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+              view === 'traj' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
             }`}
-            onClick={() => setTrajStage(trajStage ? null : ((currentStage as StageToken) ?? (STAGE_ORDER[0] as StageToken)))}
+            onClick={() => {
+              if (view === 'traj') {
+                setView('grid');
+                setTrajStage(null);
+              } else {
+                setTrajStage(trajStage ?? ((currentStage as StageToken) ?? (STAGE_ORDER[0] as StageToken)));
+                setView('traj');
+              }
+            }}
             title="阶段执行轨迹（@yxspec/aspice-trajectory）"
+            aria-pressed={view === 'traj'}
           >
             <Icon name={I.timer} size={14} />
             轨迹
@@ -366,7 +381,7 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
         <FlowView onSelectStage={onSelectStage} />
       ) : view === 'gates' ? (
         <GateOverview />
-      ) : trajStage ? (
+      ) : view === 'traj' && trajStage ? (
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
@@ -391,8 +406,11 @@ export const StageCockpit: React.FC<CockpitProps> = ({ stages, currentStage, onS
               </select>
               <button
                 className="text-xs px-2 py-1 rounded border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 transition-all active:scale-[0.98]"
-                onClick={() => setTrajStage(null)}
-                title="收起轨迹面板"
+                onClick={() => {
+                  setView('grid');
+                  setTrajStage(null);
+                }}
+                title="收起轨迹面板，回到阶段网格"
               >
                 收起
               </button>
