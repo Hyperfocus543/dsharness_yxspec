@@ -1,0 +1,1 @@
+{"stage":"swe_coding_do","seq":1,"sessionId":"bcm-1787629408018","status":"failed","startedAt":1787819276295,"finishedAt":1787819276515,"turnCount":1,"stepCount":0,"events":["turn/start","turn/end"],"tools":[],"cost":{"tokens":0,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0},"reason":"error"}

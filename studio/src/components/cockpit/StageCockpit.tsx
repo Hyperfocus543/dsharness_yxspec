@@ -9,11 +9,10 @@
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 
 import React from 'react';
-import type { StageStatus, StageToken } from '../../data/types';
-import { STAGE_ORDER } from '../../data/stage-mapping';
+import type { StageStatus } from '../../data/types';
 import { StagePanorama } from './StagePanorama';
 import { StageGates } from './StageGates';
-import { StageTraj } from './StageTraj';
+import { TrajectoryTimeline } from './TrajectoryTimeline';
 import { CostDashboard } from './CostDashboard';
 import { PipelinePanel } from '../pipeline/PipelinePanel';
 import { BatchQueue } from './BatchQueue';
@@ -41,7 +40,7 @@ const ViewTabs: React.FC<ViewTabProps> = ({ view, onView }) => {
   const tabs: { id: View; label: string; icon: React.ElementType; title?: string }[] = [
     { id: 'panorama', label: '全景', icon: I.squares, title: '左开发右验证 V 形全景（原「网格/流向/V 模型」三视图合并）' },
     { id: 'gates', label: '门控', icon: I.shield },
-    { id: 'traj', label: '轨迹', icon: I.timer, title: '阶段执行轨迹（@yxspec/aspice-trajectory）' },
+    { id: 'traj', label: '轨迹', icon: I.timer, title: '全部轨迹时间轴（各阶段执行记录按时间汇流；单模块轨迹在单元卡内查看）' },
     { id: 'pipeline', label: 'Pipeline', icon: I.stack, title: '编码流水线状态（原独立「Pipeline」卡，信息与驾驶舱重复，已并入）' },
     { id: 'batch', label: '批次', icon: I.listChecks, title: '多选阶段一键串行派活（原独立「批处理」卡，已并入驾驶舱）' },
     { id: 'review', label: '审查', icon: I.shield, title: '审查报告汇总 + 待审裁决（原独立「审查中心」卡，已并入驾驶舱）' },
@@ -87,26 +86,14 @@ export const StageCockpit: React.FC<CockpitProps> = ({
   const [view, setView] = React.useState<View>('panorama');
   const [showCost, setShowCost] = React.useState(false);
   const projectPath = useProjectStore((s) => s.current?.path || '');
-  // 「轨迹」视图的选中阶段（从网格点选 / 视图内 select 切换，只读，Phase 1 不接门控写回）
-  const [trajStage, setTrajStage] = React.useState<StageToken | null>(null);
 
-  const handleView = (v: View) => {
-    if (v === 'traj' && view === 'traj') {
-      // 轨迹视图下再点「轨迹」= 收起回全景（与原行为一致）
-      setView('panorama');
-      setTrajStage(null);
-      return;
-    }
-    if (v === 'traj') {
-      setTrajStage(trajStage ?? ((currentStage as StageToken) ?? (STAGE_ORDER[0] as StageToken)));
-    }
-    setView(v);
+  // 轨迹视图内打开某阶段详情（时间轴阶段徽标/小计点击）→ 设到轨迹 tab
+  const openTrajectory = (token: string) => {
+    setView('traj');
   };
 
-  // 网格卡片上的轨迹徽标点击 → 设选中阶段并切到轨迹视图
-  const openTrajectory = (token: string) => {
-    setTrajStage(token as StageToken);
-    setView('traj');
+  const handleView = (v: View) => {
+    setView(v);
   };
 
   return (
@@ -149,15 +136,8 @@ export const StageCockpit: React.FC<CockpitProps> = ({
         <BatchQueue />
       ) : view === 'review' ? (
         <ReviewCenter projectPath={projectPath} />
-      ) : view === 'traj' && trajStage ? (
-        <StageTraj
-          stage={trajStage}
-          onStageChange={setTrajStage}
-          onClose={() => {
-            setView('panorama');
-            setTrajStage(null);
-          }}
-        />
+      ) : view === 'traj' ? (
+        <TrajectoryTimeline onOpenStage={openTrajectory} />
       ) : (
         <StagePanorama
           stages={stages}

@@ -83,6 +83,39 @@ export function latestTrajectory(stage) {
   return all.length > 0 ? all[all.length - 1] : null
 }
 
+/**
+ * 全阶段轨迹聚合（GET /api/trajectory-all）：
+ * 把所有阶段的执行记录合并成一条时间流（按 startedAt 降序，新→旧）。
+ * 每行附阶段元信息（label/aspice/command/group）+ 门控三态（gateStatus 聚合），
+ * 另返回每阶段记录数（stageCounts）供前端"只显示有轨迹的阶段"小计。
+ * 单条记录与 listTrajectories 原样透出（前端复用 TrajectoryRecord 渲染瀑布行）。
+ * @param {number} [limit] 全局行数上限（默认 200，防爆）
+ * @returns {object} { ok, total, stageCounts, rows }
+ */
+export function trajectoryAll(limit = 200) {
+  const stageCounts = {}
+  const rows = []
+  for (const token of Object.keys(STAGES)) {
+    const recs = listTrajectories(token)
+    if (recs.length === 0) continue
+    stageCounts[token] = recs.length
+    const meta = STAGES[token]
+    for (const rec of recs) {
+      rows.push({
+        ...rec,
+        stageLabel: meta?.label ?? token,
+        aspice: meta?.aspice ?? '',
+        command: meta?.command ?? '',
+        group: meta?.group ?? '',
+      })
+    }
+  }
+  // 时间降序（新→旧）；同时间戳按阶段 key 稳定排序
+  rows.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || a.stage.localeCompare(b.stage))
+  const cap = Math.max(1, Math.min(1000, Number(limit) || 200))
+  return { ok: true, total: rows.length, stageCounts, rows: rows.slice(0, cap) }
+}
+
 /** rollbackId 形态校验：`<stage>-<seq>`（stage 为小写字母/数字/下划线，seq 为正整数）。 */
 export function isValidRollbackId(stage, rollbackId) {
   if (typeof rollbackId !== 'string') return false

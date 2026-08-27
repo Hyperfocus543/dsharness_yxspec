@@ -33,7 +33,7 @@ import { getCommunityPlugins } from './lib/community.mjs'
 import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
-import { trajectoryView, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
+import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
@@ -665,6 +665,12 @@ const server = createServer(async (req, res) => {
       const view = trajectoryView(stage, limit)
       if (!view || !view.stage) return json(res, 400, { error: 'unknown-stage', stage })
       return json(res, 200, view)
+    }
+
+    // 全阶段轨迹聚合（总轨迹时间轴数据源）：GET /api/trajectory-all?limit=N
+    if (req.method === 'GET' && path === '/api/trajectory-all') {
+      const limit = Number(url.searchParams.get('limit') ?? 200)
+      return json(res, 200, trajectoryAll(limit))
     }
 
     if (req.method === 'GET' && path === '/api/trajectory-gate') {

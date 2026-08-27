@@ -879,6 +879,36 @@ export async function fetchTrajectory(stage: string, limit = 50): Promise<Trajec
   }
 }
 
+/** GET /api/trajectory-all 响应：全阶段轨迹聚合时间流（按 startedAt 降序）。 */
+export interface TrajectoryAllEntry extends TrajectoryRecord {
+  /** 阶段显示名（label） */
+  stageLabel: string;
+  aspice: string;
+  command: string;
+  group: string;
+}
+export interface TrajectoryAll {
+  ok: boolean;
+  total: number;
+  /** stage → 记录数（供"每阶段小计"） */
+  stageCounts: Record<string, number>;
+  rows: TrajectoryAllEntry[];
+}
+
+/** 拉取全阶段轨迹聚合（总轨迹时间轴）；失败返回 null。 */
+export async function fetchTrajectoryAll(limit = 200): Promise<TrajectoryAll | null> {
+  try {
+    const res = await fetch(
+      `${GATEWAY_BASE}/api/trajectory-all?limit=${limit}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as TrajectoryAll;
+  } catch {
+    return null;
+  }
+}
+
 /** 拉取某阶段门控判定；失败返回 null。 */
 export async function fetchTrajectoryGate(stage: string): Promise<TrajectoryGate | null> {
   try {

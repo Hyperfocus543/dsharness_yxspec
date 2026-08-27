@@ -15,6 +15,7 @@ import { STAGE_GROUPS, STAGE_TABLE } from '../../data/stage-mapping';
 import { Skeleton } from '../ui';
 import { StageHeader } from './StageHeader';
 import { StageNode } from './StageNode';
+import { TrajectoryPanel } from './TrajectoryPanel';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
 
@@ -279,6 +280,8 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
   const [detail, setDetail] = React.useState<StageToken | null>(null);
   // hover 镜像联动：悬停卡片 → 其验证伙伴卡片亮环
   const [hoverToken, setHoverToken] = React.useState<string | null>(null);
+  // 卡片内联轨迹展开（每个单元卡独立展示/调取本模块轨迹，点按钮展开收起）
+  const [trajOpen, setTrajOpen] = React.useState<Set<string>>(new Set());
 
   // 打开视图自动定位到当前进行阶段（略过上方的已实现阶段）：
   // mount 后 / loading 结束 / currentStage 变化时各滚一次；ref 去重，轮询刷新不重复滚
@@ -347,6 +350,7 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
                         artifacts_count: 0,
                       };
                       const isPartnerHighlighted = hoverToken !== null && pairStageOf(hoverToken) === token;
+                      const trajExpanded = trajOpen.has(token);
                       return (
                         <div
                           key={token}
@@ -365,6 +369,15 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
                             isCurrent={currentStage === token}
                             onSelectStage={onSelectStage}
                             onViewTrajectory={onViewTrajectory}
+                            expanded={trajExpanded}
+                            onToggleTrajectory={(t) => {
+                              setTrajOpen((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(t)) next.delete(t);
+                                else next.add(t);
+                                return next;
+                              });
+                            }}
                           />
                         </div>
                       );

@@ -8,6 +8,7 @@ import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
 import { StageGateBar } from './StageGateBar';
+import { TrajectoryPanel } from './TrajectoryPanel';
 
 // 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
 // emerald(赤陶) 只留当前态/交互（ring、派活按钮、当前标签）
@@ -50,9 +51,13 @@ interface StageNodeProps {
   onSelectStage?: (token: string) => void;
   /** 点击轨迹徽标 → 跳到该阶段轨迹视图（StageCockpit 传 setTrajStage+handleView） */
   onViewTrajectory?: (token: string) => void;
+  /** 轨迹内联展开（单模块轨迹在单元卡内展示；点击卡片内「轨迹」按钮切换） */
+  expanded?: boolean;
+  /** 轨迹展开/收起切换回调 */
+  onToggleTrajectory?: (token: string) => void;
 }
 
-export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage, onViewTrajectory }) => {
+export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage, onViewTrajectory, expanded, onToggleTrajectory }) => {
   const color = STATUS_COLOR[status.status] || STATUS_COLOR.pending;
   const IconComp = STATUS_ICON[status.status] || STATUS_ICON.pending;
   const iconTone = STATUS_ICON_TONE[status.status] || 'text-zinc-400';
@@ -68,12 +73,6 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     dispatch(mapping.command);
-  };
-
-  // 轨迹徽标点击 → 跳转该阶段轨迹视图（阻止冒泡避免误触产物抽屉）
-  const handleTrajClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onViewTrajectory?.(token);
   };
 
   return (
@@ -148,12 +147,21 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
           {onViewTrajectory && (
             <button
               type="button"
-              onClick={handleTrajClick}
-              className="px-1.5 py-0.5 rounded text-zinc-400 hover:text-emerald-700 hover:bg-emerald-50 border border-transparent hover:border-emerald-200 transition-all active:scale-[0.96]"
-              title="查看该阶段执行轨迹"
-              aria-label={`查看 ${mapping.command} 执行轨迹`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleTrajectory?.(token);
+              }}
+              className={`px-1.5 py-0.5 rounded border transition-all active:scale-[0.96] inline-flex items-center gap-0.5 ${
+                expanded
+                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                  : 'text-zinc-400 hover:text-emerald-700 hover:bg-emerald-50 border-transparent hover:border-emerald-200'
+              }`}
+              title={expanded ? '收起本模块轨迹' : '在本卡片内查看该阶段执行轨迹'}
+              aria-label={`${expanded ? '收起' : '查看'} ${mapping.command} 执行轨迹`}
+              aria-expanded={expanded}
             >
               <Icon name={I.timer} size={13} />
+              {expanded && <span className="text-[10px] font-medium">收起</span>}
             </button>
           )}
           {status.review && (
@@ -177,6 +185,12 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
         gateUpstreams={gateUpstreams}
         onUpstreamClick={(t) => onSelectStage?.(t)}
       />
+      {/* 单模块轨迹内联（展开时插入到卡片尾部，随卡片网格整体布局） */}
+      {expanded && (
+        <div className="mt-2 border-t border-zinc-200 pt-2">
+          <TrajectoryPanel stage={token} limit={10} />
+        </div>
+      )}
     </div>
   );
 };
