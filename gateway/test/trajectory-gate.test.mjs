@@ -12,7 +12,7 @@
 // 不行 —— 无 glob 阶段 globs.length===0 → artifactPassed=true 恒真，会污染三态。
 // 因此选有 glob 的阶段，并临时造一个最小命中文件（env YXSPEC_PROJECT_ROOT 指向
 // 测试临时项目根，glob 命中 `project/specs/sys/sys-req-*.md` 才算 artifact passed）。
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, readFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -27,7 +27,7 @@ process.env.YXSPEC_TRAJECTORY_ROOT = TMP_TRAJ
 mkdirSync(join(TMP_PROJ, 'project', 'specs', 'sys'), { recursive: true })
 writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sys', 'sys-req-01-测试.md'), '# SR-001', 'utf8')
 
-const { gateStage, latestTrajectory, listTrajectories } = await import(
+const { gateStage, latestTrajectory, listTrajectories, rollbackTrajectory, isValidRollbackId } = await import(
   pathToFileURL(join(process.cwd(), 'lib', 'trajectory.mjs')).href
 )
 const { checkDispatchGate, gateAction, gateEnforceEnabled } = await import(
@@ -61,7 +61,7 @@ const mkRec = (stage, seq, over = {}) => ({
   finishedAt: 1730000005000,
   turnCount: 1,
   stepCount: 1,
-  events: ['turn/start', 'step/start', 'tool/call', 'tool/result', 'turn/end'],
+  events: ['turn/start', 'step/start', 'assistant/message', 'tool/call', 'tool/result', 'turn/end'],
   tools: [
     { type: 'tool/call', name: 'create_goal', ts: 1730000000100 },
     { type: 'tool/result', name: 'call_0', ok: true, ts: 1730000000200 },
@@ -221,7 +221,7 @@ console.log('== 12) 放行：verified（产物 + 轨迹完整）==')
   writeFileSync(join(TMP_TRAJ, 'sqt_tr', 'sqt_tr-001.jsonl'), JSON.stringify({
     stage: 'sqt_tr', seq: 1, sessionId: 't', status: 'passed', reason: 'completed',
     startedAt: 1730000000000, finishedAt: 1730000005000, turnCount: 1, stepCount: 1,
-    events: ['turn/start', 'step/start', 'tool/call', 'tool/result', 'turn/end'],
+    events: ['turn/start', 'step/start', 'assistant/message', 'tool/call', 'tool/result', 'turn/end'],
     tools: [{ type: 'tool/call', name: 'create_goal', ts: 1 }, { type: 'tool/result', name: 'call_0', ok: true, ts: 2 }],
     cost: { tokens: 100, inputTokens: 80, outputTokens: 20 },
   }) + '\n', 'utf8')
@@ -254,6 +254,100 @@ console.log('== 14) 开关：YXSPEC_GATE_ENFORCE=0 → 强制关闭 ==')
   delete process.env.YXSPEC_GATE_ENFORCE
 }
 
+// =============================================================================
+// Phase 3：回滚协议 + OTel GenAI 导出（3.3 / 3.4 节）
+// 用独立阶段 sqt_strategy 验证：不污染上面 Phase 2 的 latest=blocked 场景。
+// 写两条轨迹（seq1 passed / seq2 passed 带 git 起始 commit），回滚最新 seq2。
+// =============================================================================
+console.log('== 15) 回滚协议：标记最新轨迹 rolled_back + 审计留档 ==')
+{
+  mkdirSync(join(TMP_TRAJ, 'sqt_strategy'), { recursive: true })
+  writeFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-001.jsonl'), JSON.stringify(
+    mkRec('sqt_strategy', 1, { sessionId: 's1' }),
+  ) + '\n', 'utf8')
+  writeFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-002.jsonl'), JSON.stringify(
+    mkRec('sqt_strategy', 2, { sessionId: 's2', git: { commit: 'abc123def' } }),
+  ) + '\n', 'utf8')
+
+  const r = rollbackTrajectory('sqt_strategy', null, 'trajectory-blocked')
+  assert('ok + rollbackId=<stage>-<seq>', r.ok === true && r.rollbackId === 'sqt_strategy-2', JSON.stringify(r))
+  assert('seq 指向最新轨迹', r.seq === 2, String(r.seq))
+  assert('回滚指令含 git reset（对齐 guard.sh 块起始）', Array.isArray(r.instructions) && r.instructions.some((i) => i.includes('git reset --hard abc123def')), JSON.stringify(r.instructions))
+  assert('rollbackCommit 来自轨迹 git 起始 commit', r.rollbackCommit === 'abc123def', String(r.rollbackCommit))
+  assert('降级指令含 re-run 命令', r.command === '/yxspec:sqt-strategy', String(r.command))
+
+  // append-only 审计：JSONL 尾部追加 rollback 行，原行未被改写
+  const lines = readFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-002.jsonl'), 'utf8').trim().split('\n')
+  assert('JSONL 共 2 行（原记录 + rollback 审计行）', lines.length === 2, String(lines.length))
+  const rb = JSON.parse(lines[1])
+  assert('审计行 type=rollback + rollbackId + reason + at', rb.type === 'rollback' && rb.rollbackId === 'sqt_strategy-2' && rb.reason === 'trajectory-blocked' && typeof rb.at === 'number', JSON.stringify(rb))
+  assert('原记录行未被改写（无 type 字段）', !JSON.parse(lines[0]).type, lines[0].slice(0, 80))
+
+  // 合并语义：latest 记录带 rolled_back 标记
+  const latest = latestTrajectory('sqt_strategy')
+  assert('latest 合并 rolled_back=true + rollbackId', latest?.rolled_back === true && latest?.rollbackId === 'sqt_strategy-2', JSON.stringify(latest))
+}
+
+console.log('== 16) 回滚幂等：同一 rollbackId 重复 → already，不重复追加 ==')
+{
+  const r2 = rollbackTrajectory('sqt_strategy', 'sqt_strategy-2', 'again')
+  assert('already=true + 同一 rollbackId', r2.ok === true && r2.already === true && r2.rollbackId === 'sqt_strategy-2', JSON.stringify(r2))
+  const lines = readFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-002.jsonl'), 'utf8').trim().split('\n')
+  assert('幂等不追加（仍 2 行）', lines.length === 2, String(lines.length))
+  const r3 = rollbackTrajectory('sqt_strategy', 'sqt_strategy-1', 'rollback-older')
+  assert('回滚旧轨迹也允许（id 显式指定）', r3.ok === true && r3.already === false && r3.seq === 1, JSON.stringify(r3))
+  const lines3 = readFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-001.jsonl'), 'utf8').trim().split('\n')
+  assert('旧轨迹文件追加 rollback 行', lines3.length === 2, String(lines3.length))
+}
+
+console.log('== 17) 回滚边界：未知阶段 / 无轨迹 / rollbackId 校验 ==')
+{
+  const bad = rollbackTrajectory('not-a-stage')
+  assert('未知阶段 → error=unknown-stage', bad.ok === false && bad.error === 'unknown-stage', JSON.stringify(bad))
+  const noTraj = rollbackTrajectory('sys_arch') // 从未执行过
+  assert('无轨迹 → error=no-trajectory', noTraj.ok === false && noTraj.error === 'no-trajectory', JSON.stringify(noTraj))
+  assert('rollbackId 形态校验通过', isValidRollbackId('swe_coding_do', 'swe_coding_do-7') === true)
+  assert('rollbackId 形态校验拒绝错 stage', isValidRollbackId('swe_coding_do', 'sys_analysis-7') === false)
+  assert('rollbackId 形态校验拒绝非法 seq', isValidRollbackId('swe_coding_do', 'swe_coding_do-x') === false)
+}
+
+console.log('== 18) 回滚 → 门控联动：rolled_back 后门控 blocked 打回 ==')
+{
+  // sqt_strategy 是 review_gate 阶段（artifact+trajectory），回滚后 latest 带 rolled_back。
+  // 补产物命中（project/specs/sqt-tp/sqt-tp-*.md）——否则门控先报 artifact-missing，
+  // 测不出轨迹维度打回。
+  mkdirSync(join(TMP_PROJ, 'project', 'specs', 'sqt-tp'), { recursive: true })
+  writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sqt-tp', 'sqt-tp-01-测试.md'), '# TP-001', 'utf8')
+  const g = gateStage('sqt_strategy')
+  assert('rolled_back → 轨迹三态 blocked', g.trajectory?.status === 'blocked', JSON.stringify(g.trajectory))
+  assert('门控 reason=trajectory-blocked（打回）', g.passed === false && g.reason === 'trajectory-blocked', g.reason)
+  const dg = checkDispatchGate('sqt_strategy')
+  assert('派活拦截 blocked=true', dg.blocked === true, JSON.stringify(dg))
+}
+
+console.log('== 19) 回滚后 re-run：新轨迹 seq3 通过 → 门控恢复放行 ==')
+{
+  writeFileSync(join(TMP_TRAJ, 'sqt_strategy', 'sqt_strategy-003.jsonl'), JSON.stringify(
+    mkRec('sqt_strategy', 3, { sessionId: 's3', startedAt: 1730000100000 }),
+  ) + '\n', 'utf8')
+  const g = gateStage('sqt_strategy')
+  assert('新轨迹最新（seq3）→ 门控恢复 verified 放行', g.passed === true && g.reason === 'artifact+trajectory-passed', JSON.stringify(g))
+  assert('latest=seq3（回滚不阻塞后续执行）', latestTrajectory('sqt_strategy')?.seq === 3, String(latestTrajectory('sqt_strategy')?.seq))
+}
+
+console.log('== 20) 回滚降级指令：无 git 起始 commit → re-run 提示 ==')
+{
+  // swe_integration_verify 无产物、无 git 记录（回滚后 OTel 章节不再用它）
+  mkdirSync(join(TMP_TRAJ, 'swe_integration_verify'), { recursive: true })
+  writeFileSync(join(TMP_TRAJ, 'swe_integration_verify', 'swe_integration_verify-001.jsonl'), JSON.stringify(
+    mkRec('swe_integration_verify', 1, { sessionId: 's4' }),
+  ) + '\n', 'utf8')
+  const r = rollbackTrajectory('swe_integration_verify', null, 'failed')
+  assert('无 git commit → rollbackCommit=null', r.ok === true && r.rollbackCommit === null, JSON.stringify(r))
+  assert('指令含 re-run 命令提示', r.instructions.some((i) => i.includes('/yxspec:swe-integration-verify')), JSON.stringify(r.instructions))
+}
+
 rmSync(TMP, { recursive: true, force: true })
-console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
+console.log(`
+结果: ${pass} 通过, ${fail} 失败`)
 process.exit(fail > 0 ? 1 : 0)

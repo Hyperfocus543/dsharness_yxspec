@@ -21,7 +21,7 @@
 //
 // 红线：只读 runtime-data；不写状态文件；网关侧无 trajectory 时门控回退 artifact。
 // =============================================================================
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { STAGES, scanStageArtifacts, stageGlobHit } from './stages.mjs'
@@ -58,7 +58,19 @@ export function listTrajectories(stage) {
     for (const line of lines) {
       try {
         const rec = JSON.parse(line)
-        if (rec && rec.stage === stage) out.push(rec)
+        if (rec && rec.type === 'rollback' && rec.stage === stage) {
+          // 回滚审计行：与同 seq 的执行记录合并成"最新状态"（append-only 不改原行）
+          const target = out.find((r) => r.seq === rec.seq)
+          if (target) {
+            target.rollbackId = rec.rollbackId
+            target.rolled_back = true
+            target.rollbackAt = rec.at
+            target.rollbackReason = rec.reason ?? null
+            target.rollback = rec
+          }
+        } else if (rec && rec.stage === stage) {
+          out.push(rec)
+        }
       } catch { /* 坏行跳过 */ }
     }
   }
@@ -69,6 +81,96 @@ export function listTrajectories(stage) {
 export function latestTrajectory(stage) {
   const all = listTrajectories(stage)
   return all.length > 0 ? all[all.length - 1] : null
+}
+
+/** rollbackId 形态校验：`<stage>-<seq>`（stage 为小写字母/数字/下划线，seq 为正整数）。 */
+export function isValidRollbackId(stage, rollbackId) {
+  if (typeof rollbackId !== 'string') return false
+  return rollbackId === `${stage}-${String(rollbackId.slice(stage.length + 1))}` &&
+    /^\d+$/.test(rollbackId.slice(stage.length + 1))
+}
+
+/**
+ * 回滚协议（3.3 节落地，吸收 dsh-continual-harness rollbackId）：
+ *   门控打回/阶段失败 → 把该阶段最新轨迹标记 rolled_back，记 rollbackId/reason/时间戳。
+ *   落盘形态 = 在轨迹 JSONL 尾部追加一条 rollback 审计行（append-only，不改原行），
+ *   与执行记录合并成"最新状态"（rolled_back 后轨迹证据三态转 blocked → 门控打回）。
+ * 幂等：同一 rollbackId 重复调用 → 返回 { already: true }，不重复追加（审计留档唯一）。
+ * 不越权：本函数只"发回滚指令留档"，绝不执行 git 操作——指令与 guard.sh 的
+ *   `git reset --hard 块起始` 语义对齐（rollback_commit = 该阶段执行前的 HEAD，
+ *   即轨迹记录里 git 起始 commit；拿不到时给 re-run 该阶段的降级指令）。
+ * @param {string} stage 阶段 token
+ * @param {string} [rollbackId] 可选；缺省 = 最新轨迹的 `<stage>-<seq>`（自动生成）
+ * @param {string} [reason] 可选；回滚原因（如 'trajectory-blocked' / 'review-rejected'）
+ * @returns {object} { ok, already, rollbackId, seq, targetStatus, rollbackCommit, instructions, command }
+ */
+export function rollbackTrajectory(stage, rollbackId = null, reason = null) {
+  if (!isStageToken(stage)) return { ok: false, error: 'unknown-stage', stage }
+  const all = listTrajectories(stage)
+  if (all.length === 0) return { ok: false, error: 'no-trajectory', stage }
+
+  const target = all[all.length - 1] // 最新一次执行（阶段起始点）
+  // 显式 rollbackId 时按 id 的 seq 定位目标（幂等/旧轨迹回滚都依赖它）
+  let seq = target.seq ?? 0
+  if (isValidRollbackId(stage, rollbackId)) {
+    const want = Number(rollbackId.slice(stage.length + 1))
+    const bySeq = all.find((r) => r.seq === want)
+    if (bySeq) seq = want
+  }
+  const id = isValidRollbackId(stage, rollbackId) ? rollbackId : `${stage}-${seq}`
+  if (target.rollbackId === id) {
+    // 幂等：已标记过同一 rollbackId，不再追加（审计留档唯一）
+    return {
+      ok: true,
+      already: true,
+      rollbackId: id,
+      seq,
+      targetStatus: target.status ?? 'unverified',
+      rollbackCommit: target.git?.commit ?? null,
+      instructions: [],
+      command: null,
+    }
+  }
+
+  const entry = {
+    type: 'rollback',
+    stage,
+    seq,
+    rollbackId: id,
+    reason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'manual-rollback',
+    at: Date.now(),
+  }
+  const dir = join(TRAJECTORY_ROOT, stage)
+  const file = join(dir, `${stage}-${String(seq).padStart(3, '0')}.jsonl`)
+  try {
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(file, JSON.stringify(entry) + '\n', 'utf8')
+  } catch (e) {
+    return { ok: false, error: 'write-failed', message: String(e?.message ?? e), stage }
+  }
+
+  const targetStatus = target.status ?? 'unverified'
+  const rollbackCommit = target.git?.commit ?? null
+  // 回滚指令（只发指令留档，不执行 git）——对齐 guard.sh `git reset --hard 块起始`
+  const instructions = []
+  if (rollbackCommit) {
+    instructions.push(
+      `git reset --hard ${rollbackCommit}  # 回到 ${stage} 执行前的阶段起始 commit（对齐 guard.sh 块起始语义）`,
+    )
+  } else {
+    instructions.push(`重新派活：${STAGES[stage]?.command ?? stage}（无 git 起始 commit 记录，走 re-run）`)
+  }
+  return {
+    ok: true,
+    already: false,
+    rollbackId: id,
+    seq,
+    targetStatus,
+    rollbackCommit,
+    instructions,
+    command: STAGES[stage]?.command ?? null,
+    at: entry.at,
+  }
 }
 
 /**
@@ -106,7 +208,7 @@ export function trajectoryStatus(rec, meta) {
   if (!rec) return null
   const hasTurnEnd = rec.reason !== null || (Array.isArray(rec.events) && rec.events.includes('turn/end'))
   const toolOk = Array.isArray(rec.tools) && rec.tools.some((t) => t.type === 'tool/result' && t.ok === true)
-  const failed = rec.status === 'failed' || rec.status === 'blocked'
+  const failed = rec.status === 'failed' || rec.status === 'blocked' || rec.rolled_back === true
   const status = failed ? 'blocked' : hasTurnEnd && toolOk ? 'verified' : 'unverified'
   return {
     status, // verified | unverified | blocked
@@ -216,3 +318,4 @@ export function gateSummary() {
   }
   return out
 }
+

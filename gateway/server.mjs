@@ -33,7 +33,7 @@ import { getCommunityPlugins } from './lib/community.mjs'
 import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
-import { trajectoryView, gateStage, gateSummary } from './lib/trajectory.mjs'
+import { trajectoryView, gateStage, gateSummary, rollbackTrajectory } from './lib/trajectory.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
@@ -675,6 +675,28 @@ const server = createServer(async (req, res) => {
         return json(res, 200, g)
       }
       return json(res, 200, { ok: true, gates: gateSummary() })
+    }
+
+    // 回滚协议（3.3 节）：POST /api/trajectory/:stage/rollback { rollbackId?, reason? }
+    // → 把该阶段最新轨迹标记 rolled_back（JSONL 尾部追加 rollback 审计行，append-only），
+    //   返回回滚指令（含 git 操作提示，对齐 guard.sh reset --hard 块起始语义）。
+    //   本端点只"发指令留档"，绝不执行 git reset（插件不越权）。
+    if (req.method === 'POST' && path.startsWith('/api/trajectory/') && path.endsWith('/rollback')) {
+      const stage = decodeURIComponent(path.slice('/api/trajectory/'.length, -'/rollback'.length))
+      let body = {}
+      try {
+        const raw = await readBody(req)
+        body = raw && typeof raw === 'object' ? raw : {}
+      } catch {
+        body = {}
+      }
+      const r = rollbackTrajectory(stage, typeof body.rollbackId === 'string' ? body.rollbackId : null, typeof body.reason === 'string' ? body.reason : null)
+      if (!r.ok) {
+        const code = r.error === 'unknown-stage' ? 400 : r.error === 'write-failed' ? 500 : 409
+        return json(res, code, r)
+      }
+      console.log(`[gateway] 轨迹回滚: stage=${stage} rollbackId=${r.rollbackId} seq=${r.seq}${r.already ? '（幂等命中）' : ''}`)
+      return json(res, 200, r)
     }
 
     // 执行成本统计：GET /api/cost
