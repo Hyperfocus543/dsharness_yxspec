@@ -16,3 +16,4 @@ night/*.out
 night/manifest.json
 night/SUMMARY.md
 night/stop-flag
+night/commit-msg.txt
