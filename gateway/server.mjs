@@ -222,6 +222,10 @@ async function dispatchAgent({ prompt, sessionId, model, system }) {
   }
 
   const { token, stage } = hit
+  const gates = scanGates(state)
+  const gate = gates[token]
+
+  // ===== Phase 2 派活前门控（轨迹证据强制）=====
   // gate_policy==='artifact+trajectory' 的阶段：派活前检查轨迹证据。
   //   blocked / no-trajectory → 拒绝派活（不启动 turn），reason 供前端徽标联动
   //   unverified             → 默认放行但响应带 warning 字段（YXSPEC_GATE_ENFORCE=0 全关）
