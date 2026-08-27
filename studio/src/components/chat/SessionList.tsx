@@ -8,9 +8,27 @@
 // =============================================================================
 
 import React from 'react';
-import { useChatStore } from '../../store/chatStore';
+import { useChatStore, type ChatSession } from '../../store/chatStore';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
+
+/** 最近 N 个会话（按 updatedAt 倒序，含当前会话）—— 终端顶部快捷切换区数据源。
+ *  sessions 已在 store 内按 updatedAt 倒序维护，这里只做裁剪 + 防御排序。 */
+export function recentSessions(
+  sessions: ChatSession[],
+  currentId: string | null,
+  limit = 5,
+): ChatSession[] {
+  const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (currentId) {
+    // 当前会话排最前（高亮锚点），其余按时间紧随
+    return [
+      ...sorted.filter((s) => s.id === currentId),
+      ...sorted.filter((s) => s.id !== currentId),
+    ].slice(0, limit);
+  }
+  return sorted.slice(0, limit);
+}
 
 export const SessionList: React.FC = () => {
   const sessions = useChatStore((s) => s.sessions);
