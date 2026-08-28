@@ -74,8 +74,15 @@ export const useGitStore = create<GitStore>((set) => ({
   rollback: async (params) => {
     try {
       const res = await ipc.recordGitRollback(params);
-      useToastStore.getState().push('success', '回滚指令已记录（不自动执行）');
-      return res?.ok !== false;
+      // 只在后端明确 ok（含未带 ok 字段的宽松响应）时推成功；
+      // ok:false（HTTP 200 但未留档）绝不能配「已记录」成功 toast，且不抛错——
+      // 保持确认面板原地可重试，让用户看到的是错误提示而不是"成功却不动"。
+      if (res?.ok !== false) {
+        useToastStore.getState().push('success', '回滚指令已记录（不自动执行）');
+        return true;
+      }
+      useToastStore.getState().push('error', '回滚留档未写入（网关未确认），请重试');
+      return false;
     } catch (e: any) {
       useToastStore.getState().push('error', `回滚留档失败：${e?.message || e}`);
       throw e;
