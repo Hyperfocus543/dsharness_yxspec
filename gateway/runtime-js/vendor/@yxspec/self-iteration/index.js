@@ -239,7 +239,10 @@ function isRoundEndReason(reason) {
  */
 function decide(roundNo, total, baselineTotal, goal, gateOk, maxIter) {
   const g = String(goal ?? '').trim()
-  if (baselineTotal != null && total <= baselineTotal) return 'degrade'
+  // 降级判定只在"本轮确实有分"时才有意义：total 缺失（score tool 降级/未调用）时
+  // `total <= baselineTotal` 恒真（null<=N），会无限 degrade、converge_by_maxiter
+  // 永不触发 → 自迭代死循环。无分轮不判降级，交由下方 roundNo>=maxIter 兜底收束。
+  if (total != null && baselineTotal != null && total <= baselineTotal) return 'degrade'
   // 目标解析：正则提取 "Total>=80" / "Total>80" / "Total >= 80"（含小数），
   // 其余文本（如 "且门禁全绿"）视为附加条件。此前用 g.split('>=')[1] 硬切，
   // 复合目标会得到 Number('80 且门禁全绿')=NaN → total>=NaN 恒 false，

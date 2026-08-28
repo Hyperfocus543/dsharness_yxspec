@@ -333,6 +333,7 @@ async function processPhaseEnd(stage, seq, reason, { root, autoCommit, input = {
   const tagRes = await runGit(['tag', tagName, audit.tagCommit ?? commit], { cwd: gitRoot })
   if (!tagRes.ok) {
     audit.status = 'git-unavailable' // 打 tag 失败（permission/并发），降级不抛
+    audit.tag = tagName // 与其他降级分支一致：审计记录自包含 tag 名
     audit.gitError = tagRes.error
     writeAudit(root, stage, seq, audit)
     return audit
