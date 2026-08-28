@@ -117,12 +117,15 @@ function parseSelfIterate(prompt) {
   // 修正为 `/^(?:[边界]|$)/`，与 stages.mjs resolveStage 边界规则对齐。
   if (!/^(?:[\s.,;:!?，。；：！？、)）]|$)/.test(rest)) return null
 
-  // 参数提取：--key=value / --key "value with space" / --key value / --flag
+  // 参数提取：--key=value / --key "value with space" / --key 'single' / --key value / --flag
   const flagVal = (key) => {
     const eq = new RegExp(`--${key}\\s*=\\s*(?:"([^"]*)"|(\\S+))`).exec(rest)
     if (eq) return eq[1] ?? eq[2]
-    const sp = new RegExp(`--${key}\\s+([^\\s"']+)`).exec(rest)
-    return sp ? sp[1] : null
+    // 空格分隔形态支持引号包裹值（与注释声明的 `--key "value with space"` 对齐）：
+    // 此前 `([^\s"']+)` 只取引号内第一段，`--goal "Total>=80 且门禁全绿"` 会截断成 "Total>=80"。
+    const sp = new RegExp(`--${key}\\s+(?:"([^"]*)"|'([^']*)'|(\\S+))`).exec(rest)
+    if (sp) return sp[1] ?? sp[2] ?? sp[3]
+    return null
   }
   const maxIterRaw = flagVal('max-iter')
   const goal = flagVal('goal')
