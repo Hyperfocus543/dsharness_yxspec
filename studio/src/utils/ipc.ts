@@ -1254,6 +1254,10 @@ export interface GitStatus {
 export interface GitStageTrace {
   seq: number;
   commit: string;
+  /** 完整 commit hash（网关 toStageRow 已返回；tooltip 展示用） */
+  commitFull?: string | null;
+  /** 该 commit 的提交说明（tooltip 展示用；无 → null） */
+  subject?: string | null;
   tag: string | null;
   status: string;
   /** 已被回滚（后端追加 rollback 审计行后合并置 true，不回改 status 字段；前端据此显示「已回滚」） */

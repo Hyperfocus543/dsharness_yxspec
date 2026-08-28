@@ -18,3 +18,4 @@ export { Button } from './Button';
 export { Badge, StatusDot, STATUS_TONE, STATUS_LABEL } from './Badge';
 export { Skeleton } from './Skeleton';
 export { EmptyState, Panel, PanelHeader, SectionLabel } from './Layout';
+export { GitDiffPreview } from './GitDiffPreview';

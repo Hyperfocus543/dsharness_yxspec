@@ -4,20 +4,30 @@
 //   （@yxspec/aspice-trajectory 插件订阅 session/event 聚合落盘 JSONL）
 // 展示：门控三态徽标（verified 绿 / unverified 黄 / blocked 红）+ 产物命中 +
 //       执行记录瀑布（状态/耗时/token + turn/step 计数 + 工具调用序列）。
+// 轨迹 × git：每行执行记录对齐该阶段留痕的最新 commit + tag（GET /api/git/commits，
+//   与 Git 工作区管控卡同数据源），hover commit 徽标 → 共享 ui/GitDiffPreview 展示
+//   该 commit 相对上一留痕 commit 的改动。git 不可用/无留痕 → 行内不渲染，不阻塞。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // Phase 1 只读展示；网关未起/无轨迹 → 空态，不阻塞驾驶舱。
 // =============================================================================
 
 import React from 'react';
-import { EmptyState, Icon } from '../ui';
+import { EmptyState, GitDiffPreview, Icon } from '../ui';
 import { I } from '../ui/icons';
 import {
   fetchTrajectory,
   markTrajectoryRollback,
   fetchTrajectoryOtelExport,
   downloadJson,
+  getGitCommits,
 } from '../../utils/ipc';
-import type { TrajectoryView, TrajectoryRecord, TrajectoryGateStatus } from '../../utils/ipc';
+import type {
+  TrajectoryView,
+  TrajectoryRecord,
+  TrajectoryGateStatus,
+  GitStageTrace,
+} from '../../utils/ipc';
+import { gitTraceBase, gitTraceBySeq } from '../../utils/gitTrace';
 
 /** 毫秒 → 人类可读耗时（与项目时间约定一致：h m / m s / s） */
 function fmtMs(ms: number | null | undefined): string {
@@ -35,6 +45,12 @@ function fmtMs(ms: number | null | undefined): string {
 function recDuration(r: TrajectoryRecord): string {
   if (!r.startedAt || !r.finishedAt) return '—';
   return fmtMs(r.finishedAt - r.startedAt);
+}
+
+/** commit hash 缩写：保留前 8 位，其余折叠（无 → —） */
+function shortHash(h: string | null | undefined): string {
+  if (!h) return '—';
+  return h.length > 12 ? `${h.slice(0, 8)}…${h.slice(-4)}` : h;
 }
 
 /** 门控三态徽标样式（verified 绿 / unverified 黄 / blocked 红） */
@@ -68,6 +84,12 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
   const [rollbackMsg, setRollbackMsg] = React.useState<string | null>(null);
   const [confirming, setConfirming] = React.useState(false);
   const [rollbackErr, setRollbackErr] = React.useState<string | null>(null);
+  // git 留痕（阶段 ↔ commit/tag 对照）：轨迹×git 瀑布增强 —— 该阶段每次执行的最新
+  // commit + tag。走 /api/git/commits（只读采集），与 Git 工作区管控卡同数据源；
+  // git 不可用/无留痕 → null，瀑布行不渲染 git 徽标（不阻塞）。
+  const [gitTraces, setGitTraces] = React.useState<GitStageTrace[] | null>(null);
+  // hover 展开 commit diff 的行 key（至多一个浮层，与工作区管控卡同交互）
+  const [hoverSeq, setHoverSeq] = React.useState<number | null>(null);
 
   const reload = React.useCallback(() => {
     setLoading(true);
@@ -95,6 +117,12 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+    // 并行拉取该阶段 git 留痕（轨迹×git 增强；失败静默降级，不阻塞轨迹面板）
+    getGitCommits(stage)
+      .then((traces) => {
+        if (!cancelled && traces) setGitTraces(traces);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -183,6 +211,8 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
   const gate = view.status;
   const badge = gate ? GATE_BADGE[gate.status] : null;
   const rows = (view.rows ?? []).slice(-10).reverse(); // 最近 10 条，新→旧
+  // git 留痕 → seq 映射（该阶段留痕的 commit/tag）；瀑布行按 seq 对齐展示
+  const gitBySeq = React.useMemo(() => gitTraceBySeq(gitTraces), [gitTraces]);
 
   return (
     <div className="space-y-3">
@@ -285,8 +315,17 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
               const toolCalls = (r.tools ?? []).filter((t) => t.type === 'tool/call').length;
               const toolOks = (r.tools ?? []).filter((t) => t.type === 'tool/result' && t.ok).length;
               const durMs = (r.finishedAt ?? 0) - (r.startedAt ?? 0);
+              // 轨迹×git：该条执行的最新 commit/tag（git 留痕按 seq 对齐；无 → null）
+              const g = gitBySeq.get(r.seq) ?? null;
+              const gCommit = g?.commit || null;
+              // diff 基线：该阶段留痕中比当前 seq 更早的最近一条 commit（纯函数聚合，可单测）
+              const gBase = gitTraceBase(gitTraces, r.seq);
+              const showGit = !!gCommit;
               return (
-                <div key={`${r.seq}-${r.startedAt}`} className={`border rounded-lg bg-white px-2.5 py-2 ${r.rolled_back ? 'border-red-200' : 'border-zinc-200'}`}>
+                <div
+                  key={`${r.seq}-${r.startedAt}`}
+                  className={`relative border rounded-lg bg-white px-2.5 py-2 ${r.rolled_back ? 'border-red-200' : 'border-zinc-200'}`}
+                >
                   <div className="flex items-center gap-2 text-xs flex-wrap">
                     <span className="font-mono text-zinc-500 shrink-0">#{r.seq}</span>
                     <span className={`font-medium ${st.cls}`}>{st.label}</span>
@@ -304,6 +343,27 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
                     <span className="text-zinc-400 shrink-0 tabular-nums" title={`工具调用 ${toolCalls} 次，成功 ${toolOks} 次`}>
                       ×{toolCalls}✓{toolOks}
                     </span>
+                    {/* 轨迹×git：该次执行的最新 commit + tag（hover 看相对上一留痕 commit 的改动） */}
+                    {showGit && (
+                      <>
+                        <span
+                          className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px] hover:bg-emerald-50 hover:text-emerald-700 transition-all cursor-help"
+                          title={`该次执行时刻最新 commit：${g?.commitFull ?? gCommit}${g?.subject ? `\n提交说明：${g.subject}` : ''}\n悬停查看相对上一留痕 commit 的改动`}
+                          onMouseEnter={() => setHoverSeq(r.seq)}
+                          onMouseLeave={() => setHoverSeq(null)}
+                        >
+                          {shortHash(gCommit)}
+                        </span>
+                        {g?.tag && (
+                          <span
+                            className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+                            title={`该次执行时刻的 commit 打上了 tag：${g.tag}`}
+                          >
+                            {g.tag}
+                          </span>
+                        )}
+                      </>
+                    )}
                     {r.reason && (
                       <span className="text-[11px] text-zinc-400 font-mono truncate max-w-[140px]" title={r.reason}>
                         {r.reason}
@@ -329,6 +389,8 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
                       ))}
                     </div>
                   )}
+                  {/* 轨迹×git diff 预览：hover commit 徽标 → 该 commit 相对上一留痕 commit 的改动 */}
+                  <GitDiffPreview base={gBase} target={gCommit} open={showGit && hoverSeq === r.seq} />
                 </div>
               );
             })}
