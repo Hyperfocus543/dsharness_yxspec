@@ -1248,6 +1248,41 @@ export async function getGitStatus(): Promise<GitStatus | null> {
   }
 }
 
+/** 单个脏文件的 diff 预览（GET /api/git/diff；hover 用，只读 git diff）。 */
+export interface GitDiffResult {
+  ok: boolean;
+  /** untracked=无基线 / staged=暂存区 diff / modified=工作区 diff / deleted=删除（diff 可能为空） */
+  status?: string;
+  path?: string;
+  /** 是否预览暂存区改动（staged=1） */
+  staged?: boolean;
+  /** unified diff 文本（无改动/无基线 → null） */
+  diff?: string | null;
+  /** 新增/删除行数统计（diff 头行计数，可空） */
+  stats?: { added: number; removed: number } | null;
+  note?: string | null;
+  error?: string;
+  message?: string;
+}
+
+/**
+ * 拉取单个脏文件的 diff 预览；失败/无基线返回 null（前端静默降级）。
+ * @param path 仓库内相对路径（与 GitDirtyFile.path 一致）
+ * @param staged 预览暂存区改动（true）还是工作区改动（false，缺省）
+ */
+export async function getGitDiff(path: string, staged = false): Promise<GitDiffResult | null> {
+  try {
+    const res = await fetch(
+      `${GATEWAY_BASE}/api/git/diff?path=${encodeURIComponent(path)}&staged=${staged ? 1 : 0}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as GitDiffResult;
+  } catch {
+    return null;
+  }
+}
+
 /** GET /api/git/commits?stage=：拉某阶段的 commit/tag 留痕轨迹；失败返回 null。 */
 export async function getGitCommits(stage: string): Promise<GitStageTrace[] | null> {
   try {

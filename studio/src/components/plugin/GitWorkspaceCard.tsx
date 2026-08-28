@@ -17,7 +17,7 @@ import { EmptyState, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
-import type { GitDirtyFile, GitStageTrace } from '../../utils/ipc';
+import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace } from '../../utils/ipc';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -125,6 +125,81 @@ const TraceRow: React.FC<{
   );
 };
 
+/** 脏文件行内 diff 预览浮层（hover 时拉取 /api/git/diff 展示）。
+ *  只读展示（含 +N/-M 统计）；untracked/无基线/网关不可用 → 降级提示，不阻塞行交互。 */
+const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean }> = ({ file, open }) => {
+  const [data, setData] = React.useState<GitDiffResult | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  // open 变 true 才拉取（避免为每个脏文件都发请求）；同一文件重复 hover 命中缓存
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    // staged 行预览暂存区改动（--cached），其余预览工作区改动
+    getGitDiff(file.path, file.staged)
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch(() => {
+        if (!cancelled) setData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, file.path, file.staged]);
+
+  if (!open) return null;
+
+  const diff = data?.diff;
+  return (
+    <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-zinc-200 bg-white shadow-lg p-2.5 space-y-1.5 animate-fade-in-up">
+      <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+        <span className="font-mono text-zinc-600 truncate min-w-0" title={file.path}>
+          {file.path}
+        </span>
+        {data?.stats && (
+          <span className="ml-auto shrink-0 tabular-nums">
+            <span className="text-emerald-600">+{data.stats.added}</span>
+            <span className="text-red-600"> -{data.stats.removed}</span>
+          </span>
+        )}
+      </div>
+      {loading ? (
+        <div className="text-[11px] text-zinc-400 py-1">正在加载 diff…</div>
+      ) : diff ? (
+        <pre className="max-h-56 overflow-auto text-[10px] leading-relaxed font-mono whitespace-pre bg-zinc-50 rounded-md p-2">
+          {diff.split('\n').map((line, i) => {
+            const cls = line.startsWith('+')
+              ? 'text-emerald-700 bg-emerald-50/60'
+              : line.startsWith('-')
+                ? 'text-red-600 bg-red-50/60'
+                : line.startsWith('@@')
+                  ? 'text-zinc-500'
+                  : '';
+            return (
+              <span key={i} className={`block w-full ${cls}`}>
+                {line || ' '}
+              </span>
+            );
+          })}
+        </pre>
+      ) : data?.status === 'untracked' || data?.note ? (
+        <div className="text-[11px] text-zinc-400 py-1">
+          {data.note || '未跟踪文件：无索引/HEAD 基线，暂无 diff 可预览'}
+        </div>
+      ) : data ? (
+        <div className="text-[11px] text-zinc-400 py-1">该文件暂无可见改动</div>
+      ) : (
+        <div className="text-[11px] text-zinc-400 py-1">diff 预览不可用（网关未响应或文件不可读）</div>
+      )}
+    </div>
+  );
+};
+
 export const GitWorkspaceCard: React.FC = () => {
   const status = useGitStore((s) => s.status);
   const loading = useGitStore((s) => s.loading);
@@ -156,6 +231,8 @@ export const GitWorkspaceCard: React.FC = () => {
   }, [traceStage, loadCommits]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
+  // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）
+  const [hoverFile, setHoverFile] = React.useState<string | null>(null);
   // 最近 5 条 commit（取带 message 的，倒序排列）；后端字段 recentCommits，旧字段 recent 兜底
   const recent = [...(status?.recentCommits ?? status?.recent ?? [])].slice(0, 5);
   const tags = status?.tags ?? [];
@@ -315,16 +392,24 @@ export const GitWorkspaceCard: React.FC = () => {
               return (
                 <div
                   key={f.path}
-                  className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
+                  className="relative"
+                  onMouseEnter={() => setHoverFile(f.path)}
+                  onMouseLeave={() => setHoverFile((cur) => (cur === f.path ? null : cur))}
                 >
-                  <span className={`shrink-0 w-1 self-stretch rounded-full ${st.dot}`} aria-hidden />
-                  <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${st.cls}`}>{st.label}</span>
-                  {f.staged && (
-                    <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-zinc-100 text-zinc-500">已暂存</span>
-                  )}
-                  <span className="min-w-0 truncate text-zinc-600 font-mono" title={f.path}>
-                    {f.path}
-                  </span>
+                  <div
+                    className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
+                    title="hover 查看改动 diff"
+                  >
+                    <span className={`shrink-0 w-1 self-stretch rounded-full ${st.dot}`} aria-hidden />
+                    <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${st.cls}`}>{st.label}</span>
+                    {f.staged && (
+                      <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-zinc-100 text-zinc-500">已暂存</span>
+                    )}
+                    <span className="min-w-0 truncate text-zinc-600 font-mono" title={f.path}>
+                      {f.path}
+                    </span>
+                  </div>
+                  <DirtyDiffPreview file={f} open={hoverFile === f.path} />
                 </div>
               );
             })}

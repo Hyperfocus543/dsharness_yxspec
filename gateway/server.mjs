@@ -34,7 +34,7 @@ import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
-import { getStatus, getStageRecords, recordRollback } from './lib/git.mjs'
+import { getStatus, getStageRecords, getFileDiff, recordRollback } from './lib/git.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
@@ -723,6 +723,7 @@ const server = createServer(async (req, res) => {
     // 带 gitAvailable:false + error 字段，前端按 gitAvailable 渲染降级态。
     //   GET /api/git/status               → 工作区状态（分支/HEAD/脏文件/领先落后/最近提交）
     //   GET /api/git/commits?stage=<token> → 阶段 ↔ commit ↔ tag 对照表（轨迹 × git log）
+    //   GET /api/git/diff?path=&staged=    → 单个脏文件 diff 预览（hover 用，只读）
     //   POST /api/git/rollback {stage,seq,commit,reason} → 回滚审计留档（只追加 JSONL，不执行 git）
     if (req.method === 'GET' && path === '/api/git/status') {
       return json(res, 200, await getStatus())
@@ -732,6 +733,15 @@ const server = createServer(async (req, res) => {
       const stage = url.searchParams.get('stage') ?? ''
       if (!stage) return json(res, 400, { ok: false, error: 'stage required' })
       return json(res, 200, await getStageRecords(stage))
+    }
+
+    // 单个脏文件 diff 预览（hover 用）：GET /api/git/diff?path=<repo-relative>&staged=1
+    // 只读 git diff；untracked 无基线 → status:'untracked'（前端提示无 diff 可预览）
+    if (req.method === 'GET' && path === '/api/git/diff') {
+      const p = url.searchParams.get('path') ?? ''
+      const staged = url.searchParams.get('staged') === '1' || url.searchParams.get('staged') === 'true'
+      if (!p) return json(res, 400, { ok: false, error: 'path required' })
+      return json(res, 200, await getFileDiff({ path: p, staged }))
     }
 
     if (req.method === 'POST' && path === '/api/git/rollback') {

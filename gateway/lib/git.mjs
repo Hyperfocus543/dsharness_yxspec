@@ -295,6 +295,65 @@ export async function getStageRecords(stage) {
 }
 
 /**
+ * GET /api/git/diff 数据源：单个脏文件的 diff 预览。
+ * 只读执行 git（无 shell），供工作区管控卡 hover 预览改动内容。
+ * 入参：
+ *   - path  仓库相对路径（反斜杠归一为斜杠；必须落在仓库内，杜绝跨仓读取）
+ *   - staged=true 预览已暂存改动（--cached，X 位暂存态）；缺省预览工作区改动
+ * 判定逻辑（与 getStatus 的 porcelain XY 语义一致，便于预览"状态对应哪个 diff"）：
+ *   - untracked（??）→ git 没有索引/HEAD 基线可 diff → status:'untracked'（前端提示无基线）
+ *   - deleted（工作区删除）→ HEAD → 工作区路径 diff 可能为空文件，用 note 兜底
+ *   - 其余（modified/added/renamed/conflict，含 staged）→ 标准 two-dot diff
+ * 返回 { ok, status, path, staged, diff, stats, error }；任何 git 失败 → { ok:false, error }。
+ * 红线：路径不参与 shell 拼接（execFile 数组透传）；只读 git diff，绝不写文件。
+ */
+export async function getFileDiff({ path, staged = false } = {}) {
+  const p = typeof path === 'string' ? path.replace(/\\/g, '/').trim() : ''
+  if (!p || p === '.') return { ok: false, error: 'bad-request', message: 'path 不能为空' }
+  // 防路径逃逸：拒绝绝对路径 / 盘符 / 父目录前缀，只能指向仓库内相对路径
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..')) {
+    return { ok: false, error: 'bad-request', message: 'path 必须为仓库内相对路径' }
+  }
+  const gr = await resolveGitRoot()
+  if (!gr) return { ok: false, error: 'not-a-git-repo', message: '未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库）' }
+  const cwd = gr.root
+
+  // 先判定文件状态：untracked 无基线可 diff；deleted 用 --stat 兜底（diff 全删）
+  const st = await runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--', p], { cwd })
+  const line = (st.ok ? st.stdout.split('\n').find((l) => l.slice(3) === p) : null) ?? ''
+  const xy = line.slice(0, 2)
+  const isUntracked = xy[0] === '?' && xy[1] === '?'
+  const isDeleted = porcelainStatus(xy) === 'deleted'
+
+  // 参数组装（execFile 数组透传，无 shell）
+  const args = ['-c', 'core.quotepath=false', 'diff']
+  if (staged) args.push('--cached')
+  if (isUntracked) {
+    return { ok: true, status: 'untracked', path: p, staged, diff: null, stats: null, note: 'untracked 文件无索引/HEAD 基线，无 diff 可预览' }
+  }
+  args.push('--', p)
+  const res = await runGit(args, { cwd })
+  if (!res.ok) return { ok: false, error: res.error, message: 'git diff 执行失败' }
+  const diff = (res.stdout ?? '').slice(0, 8000)
+  // 行数统计：新增 +N / 删除 -M（diff 行头 ^\+[^+] 与 ^-[^-] 计数）
+  let added = 0
+  let removed = 0
+  for (const l of diff.split('\n')) {
+    if (l.startsWith('+') && !l.startsWith('+++')) added++
+    else if (l.startsWith('-') && !l.startsWith('---')) removed++
+  }
+  return {
+    ok: true,
+    status: isDeleted ? 'deleted' : staged ? 'staged' : 'modified',
+    path: p,
+    staged,
+    diff: diff || null,
+    stats: { added, removed },
+    note: isDeleted && !diff ? '工作区已删除：diff 为空（文件内容已不在工作区）' : null,
+  }
+}
+
+/**
  * POST /api/git/rollback 数据源。
  * 回滚审计留档：往该阶段轨迹 JSONL 尾部追加一条 rollback 审计行
  * （append-only，与 trajectory.mjs rollbackTrajectory 同款落盘形态，额外记 commit）。
