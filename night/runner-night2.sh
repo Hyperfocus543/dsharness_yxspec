@@ -15,6 +15,16 @@ MAX_CONSECUTIVE_FAIL=3          # 连续失败停轮（不是停整晚，换下�
 END_AT="${END_AT:-13:00}"        # 到点自动停（24h HH:MM）
 START=$(date +%s)
 STOP_FLAG="$NIGHT/stop-flag"
+# END_AT=HH:MM（24h）→ 绝对 epoch。若目标时刻已过（如 20:53 启动、END_AT=13:00），
+# 视为明天该时刻。只在启动时算一次，避免跨午夜后重新解析成"今天"而提前/推迟停。
+END_EPOCH=0
+if [ -n "$END_AT" ] && date -d "$END_AT" +%s >/dev/null 2>&1; then
+  END_EPOCH=$(date -d "$END_AT" +%s)
+  if [ "$END_EPOCH" -le "$START" ]; then
+    END_EPOCH=$((END_EPOCH + 86400))
+  fi
+  echo "END_EPOCH=$END_EPOCH ($(date -d @$END_EPOCH '+%F %H:%M:%S'))"
+fi
 SUMMARY="$NIGHT/SUMMARY-night2.md"
 LOG_DIR="$NIGHT/log-night2"
 mkdir -p "$LOG_DIR"
@@ -29,12 +39,9 @@ elapsed() { echo $(( $(now) - START )); }
 
 check_stop() {
   [ -f "$STOP_FLAG" ] && return 0
-  # 到点自动停：END_AT=HH:MM（24h），当前时间 ≥ 目标时间即停
-  if [ -n "$END_AT" ]; then
-    local now_hm=$(date +%H:%M) end_hm="$END_AT"
-    if [ "$now_hm" \> "$end_hm" ] || [ "$now_hm" = "$end_hm" ]; then
-      return 0
-    fi
+  # 到点自动停：用启动时算好的绝对 END_EPOCH 做 epoch 比较（避免字典序/跨午夜坑）
+  if [ "$END_EPOCH" -gt 0 ] && [ "$(date +%s)" -ge "$END_EPOCH" ]; then
+    return 0
   fi
   return 1
 }
