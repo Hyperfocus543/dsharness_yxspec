@@ -86,10 +86,11 @@ const TraceRow: React.FC<{
   rec: GitStageTrace;
   stage: string;
   confirming: boolean;
+  rolling: boolean;
   onRollback: () => void;
   onCancel: () => void;
   onConfirm: () => void;
-}> = ({ rec, stage, confirming, onRollback, onCancel, onConfirm }) => {
+}> = ({ rec, stage, confirming, rolling, onRollback, onCancel, onConfirm }) => {
   const statusLabel = TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
   return (
     <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
@@ -113,14 +114,16 @@ const TraceRow: React.FC<{
           <button
             type="button"
             onClick={onConfirm}
-            className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[11px] hover:bg-red-700 active:scale-[0.98]"
+            disabled={rolling}
+            className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[11px] hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            确认回滚
+            {rolling ? '提交中…' : '确认回滚'}
           </button>
           <button
             type="button"
             onClick={onCancel}
-            className="px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-zinc-500 text-[11px] hover:bg-zinc-50 active:scale-[0.98]"
+            disabled={rolling}
+            className="px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-zinc-500 text-[11px] hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             取消
           </button>
@@ -156,6 +159,8 @@ export const GitWorkspaceCard: React.FC = () => {
   const [traceStage, setTraceStage] = React.useState<string>(stageTokens[0] ?? '');
   const [confirmTarget, setConfirmTarget] = React.useState<GitStageTrace | null>(null);
   const [rollbackReason, setRollbackReason] = React.useState('');
+  // 回滚留档提交中：禁用确认按钮 + 显示进度，防重复提交
+  const [rolling, setRolling] = React.useState(false);
 
   // 挂载即拉一次工作区状态；初始 stage 对应轨迹也一起拉
   React.useEffect(() => {
@@ -175,7 +180,8 @@ export const GitWorkspaceCard: React.FC = () => {
   const connected = gitOk && !loadError;
 
   const doRollback = async () => {
-    if (!confirmTarget) return;
+    if (!confirmTarget || rolling) return;
+    setRolling(true);
     try {
       await rollback({
         stage: traceStage,
@@ -187,6 +193,8 @@ export const GitWorkspaceCard: React.FC = () => {
       setRollbackReason('');
     } catch {
       // 失败 toast 已在 store 内 push；保持确认态让用户可改原因重试
+    } finally {
+      setRolling(false);
     }
   };
 
@@ -374,6 +382,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 rec={rec}
                 stage={traceStage}
                 confirming={confirmTarget?.seq === rec.seq && confirmTarget?.commit === rec.commit}
+                rolling={rolling}
                 onRollback={() => {
                   setConfirmTarget(rec);
                   setRollbackReason('');
@@ -410,10 +419,10 @@ export const GitWorkspaceCard: React.FC = () => {
             <button
               type="button"
               onClick={doRollback}
-              disabled={!rollbackReason.trim()}
+              disabled={!rollbackReason.trim() || rolling}
               className="px-2.5 py-1 rounded text-xs bg-red-600 text-white hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              确认回滚留档
+              {rolling ? '提交中…' : '确认回滚留档'}
             </button>
             <button
               type="button"
@@ -421,7 +430,8 @@ export const GitWorkspaceCard: React.FC = () => {
                 setConfirmTarget(null);
                 setRollbackReason('');
               }}
-              className="px-2.5 py-1 rounded text-xs bg-white border border-zinc-300 text-zinc-600 hover:bg-zinc-50 active:scale-[0.98]"
+              disabled={rolling}
+              className="px-2.5 py-1 rounded text-xs bg-white border border-zinc-300 text-zinc-600 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               取消
             </button>
