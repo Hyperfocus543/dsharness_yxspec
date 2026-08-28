@@ -52,15 +52,21 @@ log() {
   echo "$msg" >> "$SUMMARY"
 }
 
-# 子代理执行（无人值守全自动）
+# 子代理执行（无人值守全自动，带超时保护防卡死）
 run_agent() {
   local TASK="$1" ROUND="$2" PROMPT="$3" OUT="$LOG_DIR/$TASK-r$ROUND.out"
-  log "  → 子代理 $TASK 第${ROUND}轮 (${OUT##*/})"
-  (cd "$ROOT" && "$CLAUDE_BIN" -p "$PROMPT" \
+  local TIMEOUT_S="${4:-1800}"   # 默认 30 分钟；verify 传短超时
+  log "  → 子代理 $TASK 第${ROUND}轮 (${OUT##*/}) 超时=${TIMEOUT_S}s"
+  (cd "$ROOT" && timeout "$TIMEOUT_S" "$CLAUDE_BIN" -p "$PROMPT" \
     --dangerously-skip-permissions \
     --output-format text \
     2>&1 | tee "$OUT")
-  return ${PIPESTATUS[0]}
+  local RC=${PIPESTATUS[0]}
+  if [ "$RC" -eq 124 ]; then
+    log "    ⚠️ 子代理 $TASK 超时(${TIMEOUT_S}s)被 kill，标记失败"
+    return 124
+  fi
+  return "$RC"
 }
 
 # 提交本轮改动（gates 全绿后）
@@ -147,13 +153,14 @@ FEAT_PROMPT='你是 yxspec-studio 的创意代理，工作目录 D:/Work/04_Temp
 - 自迭代打分结果展示卡（读 self-iteration 轨迹）
 约束：前后端都可改，一次只做 1 个单 commit。改完 cd studio && npx tsc --noEmit + cd studio && npm test + cd studio && npm run build 全过；涉及 gateway 的 node --check。报告（200字内）。'
 
-# verify：新能力真实验证（不 commit，只验证 + 记录）
-VERIFY_PROMPT='你是 yxspec-studio 的夜间验证代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：验证本晚新增的三个能力的运行时行为，发现 bug 直接修复（一次一件），没 bug 就记录验证结果。
+# verify：新能力快速回归（不 commit，只验证 + 记录）——不做真实 LLM turn（那是慢活会卡死整轮）
+VERIFY_PROMPT='你是 yxspec-studio 的夜间回归验证代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：对新能力做快速静态回归，发现确定性 bug 直接修复（一次一件），没 bug 就记录验证结果。禁止启动网关副本、禁止跑真实 LLM turn——只做静态/轻量检查。
 要验证：
-1. git 工作区管控：网关副本（GATEWAY_PORT=8789 + YXSPEC_GIT_ROOT=/d/Work/04_Temp/yxspec-studio-release + YXSPEC_TRAJECTORY_ROOT=/d/Work/01_Projects/Aima_X1_BCM/.dsh/gateway/runtime-data/trajectory 起 node server.mjs）→ curl /api/git/status / /api/git/commits?stage=swe_unit_verify / POST /api/git/rollback 确认三条路由工作
-2. @yxspec/git-workspace 插件：真实 turn 触发阶段命令收尾 → 确认打了 yxspec/<stage>/<seq> tag + 审计 JSONL 落盘
-3. @yxspec/self-iteration 插件：真实 turn 触发 /yxspec:self-iterate → 确认 run-state 状态机推进 + self_iter_score tool 可用
-约束：只改 gateway/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓。验证完清理测试产生的 tag/审计。报告：每项验证结果（通过/失败+修复了什么）。'
+1. gateway/lib/git.mjs 语法与关键逻辑：node --check 通过；getStatus() 的 recentCommits 含 message 字段（用 node -e 快速 import 断言，不启动 server）
+2. @yxspec/git-workspace 插件的审计 JSONL 写入逻辑：读 runtime-js/vendor/@yxspec/git-workspace/index.js 检查 tag 打点/审计路径拼接/降级分支（静态审阅）
+3. @yxspec/self-iteration 插件：读 index.js 检查 run-state 状态机推进、self_iter_score 注册、优雅降级三档（静态审阅）；检查 runtime-data/self-iteration/ 现有 run-state.json 的 schema 一致性
+4. plugins.mjs 装配：getPluginMap() 应含 git-workspace/yxspec-self-iteration（node -e 快速 import 断言）
+约束：只改 gateway/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓。验证完清理临时文件。报告：每项验证结果（通过/失败+修复了什么）。'
 
 # ---------- 主循环：无限轮直到到点 ----------
 # 任务类型轮换：fix → verify → pm → feat → fix → ...
@@ -179,7 +186,12 @@ while true; do
       ATTEMPTS=$((ATTEMPTS + 1))
       check_stop && { log "到点，终止"; break 2; }
       log "--- $TASK 第${ROUND}轮 (attempt $ATTEMPTS) ---"
-      run_agent "$TASK" "$ROUND" "$PROMPT"
+      # verify 轮 10 分钟短超时（静态回归快），其余 30 分钟
+      if [ "$TASK" = "verify" ]; then
+        run_agent "$TASK" "$ROUND" "$PROMPT" 600
+      else
+        run_agent "$TASK" "$ROUND" "$PROMPT" 1800
+      fi
       # verify 轮不强制 commit（子代理可能无改动），但 gates 要过
       if ! bash "$NIGHT/gates.sh"; then
         CONSECUTIVE_FAIL=$((CONSECUTIVE_FAIL + 1))
