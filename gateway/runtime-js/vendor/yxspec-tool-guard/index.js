@@ -137,29 +137,50 @@ const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
  *      前有分隔符（`[\\/]git`），避免把 `mygit` 这类「以 git 结尾的非 git 命令」
  *      误判为调用。
  *  前边界只认 段首/空白（非引号）：`"git status"`（引号串非调用）不命中。 */
-function gitSubcommandOf(segment) {
+/** 解析段内 git 调用 → { sub, args }；无 git 调用 → null。
+ *  sub  = 子命令名（token，非引号且不以 `-` 开头）；
+ *  args = 子命令名之后到段尾的参数串（trimmed，用于 branch/tag/remote 的 flag 细分）。
+ *  token 切分把引号包裹片段（含空格/反斜杠）整体当一个 token：
+ *    · `git -C "C:\Program Files\p" status` —— 引号路径不拆散，-C 正确跳过一个
+ *      token，status 才能被识别为子命令（按 \S+ 裸拆会把路径片段当子命令名，
+ *      导致只读 status 被默认拒绝误伤）；
+ *    · 子命令定位与 gitArgsAfter 同源：不再用 `\bsub\b` 全文搜索定位子命令——
+ *      `git -C D:\Work\tag-scripts tag` 这类「-C 路径里含 tag/remote/branch 字样」
+ *      的命令，旧写法会先匹配到路径里的子串，把路径当参数串 → 只读列出被误伤。
+ *  前 8 个 token 内找不到子命令（纯 flag/全局选项）→ null。 */
+function gitSubAndArgs(segment) {
   let m =
     /(?:^|\s)"([^"\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)"(?=\s|$)/i.exec(segment) ||
     /(?:^|\s)'([^'\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)'(?=\s|$)/i.exec(segment) ||
     /(?:^|\s)(?:git(?:\.(?:exe|cmd|bat))?|[^\s"'`]*[\\/]git(?:\.(?:exe|cmd|bat))?)(?=\s|$)/i.exec(segment)
   if (!m) return null
-  // 引号包裹片段（含空格/反斜杠）整体成一个 token：`git -C "C:\Program Files\p" status`
-  // 若按 \S+ 裸拆，路径会被拆成 `"C:\Program` / `Files\p"`，-C 只跳过"一段"后
-  // 路径片段被当子命令名 → gitSubUnsafe 默认拒绝 → 只读 status 被误伤拦截。
-  const tokens = (segment.slice(m.index + m[0].length).match(/"[^"\r\n]*"|'[^'\r\n]*'|\S+/g) || []).slice(0, 8);
+  const after = segment.slice(m.index + m[0].length)
+  const re = /"[^"\r\n]*"|'[^'\r\n]*'|\S+/g
+  const tokens = []
+  let tok
+  while ((tok = re.exec(after)) && tokens.length < 8) {
+    tokens.push({ text: tok[0], index: tok.index })
+  }
   for (let i = 0; i < tokens.length; i += 1) {
-    const t = tokens[i];
-    if (!t.startsWith('-')) return t;
+    const t = tokens[i].text;
+    if (!t.startsWith('-')) {
+      return { sub: t, args: after.slice(tokens[i].index + t.length).trim() };
+    }
     if (GIT_GLOBAL_VALUE_OPTS.has(t)) i += 1; // -C <dir> 占两个 token（带 = 连写的 -C=<dir> 已被前一行判为值，不落到此处）
     if (t === '-c') i += 1; // git -c key=val 占两个 token
   }
   return null;
 }
 
+function gitSubcommandOf(segment) {
+  const r = gitSubAndArgs(segment);
+  return r ? r.sub : null;
+}
+
 /** 取段内子命令名之后的参数串（用于 branch/tag/remote 的 flag 细分）。 */
 function gitArgsAfter(sub, segment) {
-  const m = new RegExp(`\\b${sub}\\b`).exec(segment);
-  return m ? segment.slice(m.index + m[0].length).trim() : '';
+  const r = gitSubAndArgs(segment);
+  return r && r.sub === sub ? r.args : '';
 }
 
 /** 判定某个 git 子命令在该段内是否破坏性（返回 true = 应拒绝）。 */
