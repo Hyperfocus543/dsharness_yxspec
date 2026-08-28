@@ -229,10 +229,20 @@ function isRoundEndReason(reason) {
 function decide(roundNo, total, baselineTotal, goal, gateOk, maxIter) {
   const g = String(goal ?? '').trim()
   if (baselineTotal != null && total <= baselineTotal) return 'degrade'
+  // 目标解析：正则提取 "Total>=80" / "Total>80" / "Total >= 80"（含小数），
+  // 其余文本（如 "且门禁全绿"）视为附加条件。此前用 g.split('>=')[1] 硬切，
+  // 复合目标会得到 Number('80 且门禁全绿')=NaN → total>=NaN 恒 false，
+  // 复合 goal 永不收敛，且 gateOk 兜底对复合 goal 是死代码。
+  const m = /Total\s*([>]=?)\s*(\d+(?:\.\d+)?)/.exec(g)
   let goalMet = false
-  if (g.startsWith('Total>=')) goalMet = total >= Number(g.split('>=')[1])
-  else if (g.startsWith('Total>')) goalMet = total > Number(g.split('>')[1])
-  else goalMet = gateOk === true // 未给 goal / strict/drift 全绿 → 门禁全绿即达
+  if (m) {
+    const target = Number(m[2])
+    goalMet = m[1] === '>=' ? total >= target : total > target
+    // 复合目标（如 "Total>=80 且门禁全绿"）：分数达标后仍须门禁全绿
+    if (goalMet && g.length > m[0].length) goalMet = gateOk === true
+  } else {
+    goalMet = gateOk === true // 未给 goal / strict/drift 全绿 → 门禁全绿即达
+  }
   if (goalMet) return 'converge'
   if (roundNo >= (maxIter || DEFAULT_MAX_ITER)) return 'converge_by_maxiter'
   return 'continue'

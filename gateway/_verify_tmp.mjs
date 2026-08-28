@@ -1,0 +1,46 @@
+// 临时验证脚本（回归完即删）
+import { decide, parseSelfIterate } from './runtime-js/vendor/@yxspec/self-iteration/index.js'
+
+let fails = 0
+const check = (name, got, want) => {
+  const ok = JSON.stringify(got) === JSON.stringify(want)
+  if (!ok) fails++
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${name} => got ${JSON.stringify(got)}${ok ? '' : ` want ${JSON.stringify(want)}`}`)
+}
+
+// decide：复合目标（分数 + 门禁双条件）
+check('compound goal met, gateOk', decide(1, 90, null, 'Total>=80 且门禁全绿', true, 3), 'converge')
+check('compound goal met, gateFail', decide(1, 90, null, 'Total>=80 且门禁全绿', false, 3), 'continue')
+check('compound goal not met', decide(1, 70, null, 'Total>=80 且门禁全绿', true, 3), 'continue')
+check('compound goal maxiter', decide(3, 70, null, 'Total>=80 且门禁全绿', true, 3), 'converge_by_maxiter')
+// decide：简单目标
+check('simple Total>=80 met', decide(1, 90, null, 'Total>=80', true, 3), 'converge')
+check('simple Total>=80 below', decide(1, 70, null, 'Total>=80', true, 3), 'continue')
+check('simple Total>80 met', decide(1, 90, null, 'Total>80', true, 3), 'converge')
+check('spaced Total >= 80', decide(1, 85, null, 'Total >= 80', true, 3), 'converge')
+check('decimal Total>=85.5', decide(1, 86, null, 'Total>=85.5', true, 3), 'converge')
+check('decimal below', decide(1, 85, null, 'Total>=85.5', true, 3), 'continue')
+// decide：降级护栏
+check('degrade total<=baseline', decide(2, 85, 85, 'Total>=80', true, 3), 'degrade')
+check('degrade total<baseline', decide(2, 80, 85, 'Total>=80', true, 3), 'degrade')
+// decide：无 goal → 门禁全绿
+check('no goal gateOk', decide(1, 70, null, '', true, 3), 'converge')
+check('no goal gateFail', decide(1, 70, null, '', false, 3), 'continue')
+// decide：用满 maxiter
+check('maxiter', decide(3, 70, null, 'Total>=80', false, 3), 'converge_by_maxiter')
+
+// parseSelfIterate
+check('parse quoted goal', parseSelfIterate('/yxspec:self-iterate sqt-script-gen --goal "Total>=80 且门禁全绿" --max-iter=5'),
+  { stageRaw: 'sqt-script-gen', maxIter: 5, goal: 'Total>=80 且门禁全绿', resume: false })
+check('parse resume', parseSelfIterate('/yxspec:self-iterate --resume sqt_script_gen'),
+  { stageRaw: 'sqt_script_gen', maxIter: null, goal: null, resume: true })
+check('parse eq goal', parseSelfIterate('/yxspec:self-iterate --stage=sqt_script_gen --goal=Total>=80'),
+  { stageRaw: 'sqt_script_gen', maxIter: null, goal: 'Total>=80', resume: false })
+check('parse no stage', parseSelfIterate('/yxspec:self-iterate'), null)
+check('parse leading junk', parseSelfIterate('axyxspec:self-iterate sqt_script_gen'), null)
+check('parse trailing junk', parseSelfIterate('/yxspec:self-iterate sqt_script_gen-extra'), null)
+check('parse hyphen stage', parseSelfIterate('/yxspec:self-iterate sqt-script-gen'),
+  { stageRaw: 'sqt-script-gen', maxIter: null, goal: null, resume: false })
+
+console.log(fails === 0 ? '\nALL PASS' : `\n${fails} FAILED`)
+process.exit(fails === 0 ? 0 : 1)
