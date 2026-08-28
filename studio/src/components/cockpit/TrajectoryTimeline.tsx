@@ -1,17 +1,15 @@
 // =============================================================================
 // TrajectoryTimeline — 驾驶舱「轨迹」总览：全阶段轨迹时间轴
 // 数据源：网关 GET /api/trajectory-all（聚合所有阶段的执行记录，时间降序）。
-// 不再按阶段划分视图——所有轨迹按时间倒序汇成一条流：
+// 所有轨迹按时间倒序汇成一条流（不按阶段划分）：
 //   · 每行 = 一次阶段执行（阶段徽标 + 状态色 + 耗时/token/工具 + 时间）
-//   · 阶段徽标/时间列点击 → 打开该阶段详情（StageTraj 单阶段面板，内嵌复用）
-//   · 过滤：只显示失败/打回（排障聚焦）+ 阶段小计（每阶段记录数）
+//   · 阶段徽标点击 → 展开该阶段详情（TrajectoryPanel 复用）
+//   · 过滤：仅失败/打回/已回滚（排障聚焦）
 // 单模块轨迹在各自单元卡内联展示（TrajectoryPanel），本页 = 全局排障入口。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
 import React from 'react';
-import type { StageToken } from '../../data/types';
-import { STAGE_TABLE } from '../../data/stage-mapping';
 import { EmptyState, Icon } from '../ui';
 import { I } from '../ui/icons';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
@@ -148,21 +146,17 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   const rows = onlyFailed
     ? data.rows.filter((r) => r.status === 'failed' || r.status === 'blocked' || r.rolled_back)
     : data.rows;
-  // 阶段小计（有轨迹的阶段 + 记录数），点击打开该阶段详情
-  const stageSummaries = Object.entries(data.stageCounts).sort(
-    (a, b) => (data.stageCounts[b[0]] ?? 0) - (data.stageCounts[a[0]] ?? 0),
-  );
 
   return (
     <div className="space-y-3">
-      {/* 标题行：全阶段轨迹 · 总数 + 失败计数 + 过滤开关 + 刷新 */}
+      {/* 标题行：全部轨迹 · 总数 + 失败计数 + 过滤开关 + 刷新 */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-emerald-600">
             <Icon name={I.timer} size={15} weight="fill" />
           </span>
           <span className="text-sm font-bold text-zinc-800">全部轨迹</span>
-          <span className="text-xs text-zinc-400">（{data.total} 次执行 · {stageSummaries.length} 阶段）</span>
+          <span className="text-xs text-zinc-400">（{data.total} 次执行）</span>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button
@@ -191,29 +185,7 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
         </div>
       </div>
 
-      {/* 阶段小计条：每阶段记录数，点击打开该阶段详情 */}
-      {stageSummaries.length > 0 && (
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {stageSummaries.map(([stage, cnt]) => (
-            <button
-              key={stage}
-              type="button"
-              onClick={() => setOpenStage(openStage === stage ? null : stage)}
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono border transition-all active:scale-[0.98] ${
-                openStage === stage
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                  : 'bg-white border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
-              }`}
-              title={`${STAGE_TABLE[stage as StageToken]?.command ?? stage} · ${cnt} 次执行`}
-            >
-              {stage}
-              <span className="text-zinc-400">{cnt}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* 单阶段详情（点击阶段徽标/小计展开，复用 TrajectoryPanel） */}
+      {/* 单阶段详情（点击行内阶段徽标展开，复用 TrajectoryPanel） */}
       {openStage && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50/30 p-2 space-y-2 animate-fade-in-up">
           <div className="flex items-center justify-between">
