@@ -194,6 +194,14 @@ export const FEATURES = {
     cost: 'low', depends: [], available: true, defaultEnabled: false,
     ruleFile: null, maxChars: 0, uiOnly: true,
   },
+  'ui-git-workspace': {
+    id: 'ui-git-workspace',
+    name: 'Git 工作区管控',
+    desc: '工作区状态 + 阶段留痕 + 回滚留档（纯前端插件，开启后左侧出现「Git 工作区」功能卡）',
+    appliesTo: ['all'],
+    cost: 'low', depends: [], available: true, defaultEnabled: false,
+    ruleFile: null, maxChars: 0, uiOnly: true,
+  },
 }
 
 /** 内置功能 id 清单（用户自定义功能不在此列；运行时合并用 getFeatureMap）。 */
