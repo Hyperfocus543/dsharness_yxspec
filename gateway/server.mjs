@@ -739,12 +739,16 @@ const server = createServer(async (req, res) => {
     // 单个脏文件 diff 预览（hover 用）：GET /api/git/diff?path=<repo-relative>&staged=1
     // 留痕 diff 预览（阶段留痕行 hover）：同端点 + from/to commit 范围参数（range 模式，只读 git diff）
     // 只读 git diff；untracked 无基线 → status:'untracked'（前端提示无 diff 可预览）
+    // path 校验只在「脏文件模式」下必须：commit 范围模式（from 是合法 hex）由
+    // getFileDiff 自己判 range，不读 path（留痕 diff 预览 = pathless range 请求），
+    // 不能在这层一刀切 400——否则 range 模式永远到不了 getFileDiff，预览恒失败。
     if (req.method === 'GET' && path === '/api/git/diff') {
       const p = url.searchParams.get('path') ?? ''
       const staged = url.searchParams.get('staged') === '1' || url.searchParams.get('staged') === 'true'
       const from = url.searchParams.get('from')
       const to = url.searchParams.get('to')
-      if (!p) return json(res, 400, { ok: false, error: 'path required' })
+      const rangeMode = typeof from === 'string' && from.trim() !== '' && /^[0-9a-fA-F]{4,40}$/.test(from)
+      if (!p && !rangeMode) return json(res, 400, { ok: false, error: 'path required' })
       return json(res, 200, await getFileDiff({ path: p, staged, from, to }))
     }
 

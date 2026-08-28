@@ -243,8 +243,11 @@ const TraceDiffPreview: React.FC<{ base: string | null; target: string | null; o
     if (!usable) return;
     let cancelled = false;
     setLoading(true);
-    // range 模式：path 传空（网关 commit 范围模式不读路径），from/to 指定 diff 范围
-    getGitDiff('', false, { from: base ?? undefined, to: target ?? undefined })
+    // range 模式：path 传空（网关 commit 范围模式不读路径），from/to 指定 diff 范围。
+    // 首条留痕无上一条 commit（base=null）：只传 to，diff from 缺失时等价
+    // `git diff <to>`（to..工作区），且不会把 "undefined" 字符串发出去（网关
+    // from 校验只认 4-40 位 hex，undefined 会判成脏文件模式 → 空 path 400）。
+    getGitDiff('', false, base ? { from: base, to: target ?? undefined } : { to: target ?? undefined })
       .then((d) => {
         if (!cancelled) setData(d);
       })
