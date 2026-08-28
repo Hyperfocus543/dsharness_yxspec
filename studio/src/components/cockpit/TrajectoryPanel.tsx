@@ -170,6 +170,12 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
     }
   }, [stage, confirming, reload]);
 
+  // git 留痕 → seq 映射（该阶段留痕的 commit/tag）；瀑布行按 seq 对齐展示。
+  // 放在 early-return 之前（rules-of-hooks）：loading/error/无数据分支先 return 时，
+  // 本组件仍保持与主渲染一致的 hook 数量，否则从骨架切到数据渲染会
+  // 「Rendered more hooks than during the previous render」崩溃（见 TrajectoryTimeline 同款注释）。
+  const gitBySeq = React.useMemo(() => gitTraceBySeq(gitTraces), [gitTraces]);
+
   // 空态：加载中（骨架，带 aria-busy）/ 加载失败（错误态）/ 网关未起或从未执行
   if (loading) {
     return (
@@ -211,8 +217,6 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
   const gate = view.status;
   const badge = gate ? GATE_BADGE[gate.status] : null;
   const rows = (view.rows ?? []).slice(-10).reverse(); // 最近 10 条，新→旧
-  // git 留痕 → seq 映射（该阶段留痕的 commit/tag）；瀑布行按 seq 对齐展示
-  const gitBySeq = React.useMemo(() => gitTraceBySeq(gitTraces), [gitTraces]);
 
   return (
     <div className="space-y-3">
