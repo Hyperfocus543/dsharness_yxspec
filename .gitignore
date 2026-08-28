@@ -20,6 +20,10 @@ night/manifest.json
 night/SUMMARY.md
 night/stop-flag
 night/commit-msg.txt
+night/AUDIT_SUMMARY.md
+night/audit-backups/
+night/audit-run*.log
+night/audit-review-list.md
 
 # Gateway runtime artifacts (运行时产物，不入库)
 gateway/runtime-js/runtime-data/

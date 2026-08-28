@@ -34,6 +34,7 @@ import { listInstalledPlugins } from './lib/installed.mjs'
 import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
+import { getStatus, getStageRecords, recordRollback } from './lib/git.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
@@ -713,6 +714,45 @@ const server = createServer(async (req, res) => {
         return json(res, code, r)
       }
       console.log(`[gateway] 轨迹回滚: stage=${stage} rollbackId=${r.rollbackId} seq=${r.seq}${r.already ? '（幂等命中）' : ''}`)
+      return json(res, 200, r)
+    }
+
+    // ---------- git 工作区状态 API（lib/git.mjs，只读 git + 追加审计 JSONL） ----------
+    // 红线：网关只"只读执行 git + 追加审计 JSONL"，绝不执行 git reset / git push。
+    // git 不可用（不是仓库/未装 git）时三个端点都优雅降级：仍返回 200，
+    // 带 gitAvailable:false + error 字段，前端按 gitAvailable 渲染降级态。
+    //   GET /api/git/status               → 工作区状态（分支/HEAD/脏文件/领先落后/最近提交）
+    //   GET /api/git/commits?stage=<token> → 阶段 ↔ commit ↔ tag 对照表（轨迹 × git log）
+    //   POST /api/git/rollback {stage,seq,commit,reason} → 回滚审计留档（只追加 JSONL，不执行 git）
+    if (req.method === 'GET' && path === '/api/git/status') {
+      return json(res, 200, await getStatus())
+    }
+
+    if (req.method === 'GET' && path === '/api/git/commits') {
+      const stage = url.searchParams.get('stage') ?? ''
+      if (!stage) return json(res, 400, { ok: false, error: 'stage required' })
+      return json(res, 200, await getStageRecords(stage))
+    }
+
+    if (req.method === 'POST' && path === '/api/git/rollback') {
+      let body = {}
+      try {
+        const raw = await readBody(req)
+        body = raw && typeof raw === 'object' ? raw : {}
+      } catch {
+        body = {}
+      }
+      const r = await recordRollback({
+        stage: typeof body.stage === 'string' ? body.stage : undefined,
+        seq: typeof body.seq === 'number' ? body.seq : Number(body.seq),
+        commit: typeof body.commit === 'string' ? body.commit : undefined,
+        reason: typeof body.reason === 'string' ? body.reason : undefined,
+      })
+      if (!r.ok) {
+        const code = r.error === 'unknown-stage' ? 400 : r.error === 'bad-request' ? 400 : r.error === 'write-failed' ? 500 : 409
+        return json(res, code, r)
+      }
+      console.log(`[gateway] /api/git/rollback: stage=${r.stage} seq=${r.seq}${r.already ? '（幂等命中）' : ''}`)
       return json(res, 200, r)
     }
 

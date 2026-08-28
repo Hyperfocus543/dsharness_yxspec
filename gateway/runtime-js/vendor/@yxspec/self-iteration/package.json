@@ -1,0 +1,11 @@
+{
+  "name": "@yxspec/self-iteration",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "自迭代轮次状态机 + 评分 + 基线护栏结构化（DSH harness Cordis 插件）：订阅 session/event 识别 /yxspec:self-iterate 轮次会话、插件侧维护 run-state.json（上下文管控核心）、注册 self_iter_score 确定性评分 tool（禁 LLM 自评）、留痕 runtime-data/trajectory/self_iteration/、脚本不可用时优雅降级到提示词路径",
+  "private": true
+}

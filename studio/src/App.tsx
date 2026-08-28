@@ -30,7 +30,8 @@ const App: React.FC = () => {
   const suggestNext = useStageStore((s) => s.suggestNext);
   const loadingStages = useStageStore((s) => s.loading);
   const toasts = useToastStore((s) => s.toasts);
-  // 功能商店订阅：ui-report（周报）是纯 UI 插件，启用才显示左侧「周报」功能卡
+  // 功能商店订阅：ui-report（周报）/ ui-git-workspace（Git 工作区）是纯 UI 插件，
+  // 启用才显示左侧对应功能卡
   const features = useFeatureStore((s) => s.features);
   const loadFeatures = useFeatureStore((s) => s.load);
   // 首次挂载加载功能列表（决定周报卡是否显示）
@@ -45,18 +46,26 @@ const App: React.FC = () => {
     () => features.some((f) => f.id === 'ui-report' && f.enabled),
     [features],
   );
+  // ui-git-workspace 是否启用（feature 未加载/未找到 → 关；用户也可在功能商店里开）
+  const gitWorkspaceEnabled = React.useMemo(
+    () => features.some((f) => f.id === 'ui-git-workspace' && f.enabled),
+    [features],
+  );
 
   // hash 路由：`#/cockpit` 直达 + 刷新保留当前卡；null=收起面板
   const [activeCard, setActiveCard] = useCardFromHash();
   const [selectedTaskFile, setSelectedTaskFile] = React.useState<string>(
     'task_sqt_case_design.md',
   );
-  // 周报插件被关闭时，若当前正停在周报页 → 自动切回驾驶舱（避免面板悬在已隐藏的功能上）
+  // 周报/Git 工作区插件被关闭时，若当前正停在对应页 → 自动切回驾驶舱（避免面板悬在已隐藏的功能上）
   React.useEffect(() => {
-    if (!reportEnabled && activeCard === 'report') {
+    if (
+      (!reportEnabled && activeCard === 'report') ||
+      (!gitWorkspaceEnabled && activeCard === 'git-workspace')
+    ) {
       setActiveCard('cockpit');
     }
-  }, [reportEnabled, activeCard, setActiveCard]);
+  }, [reportEnabled, gitWorkspaceEnabled, activeCard, setActiveCard]);
   // 产物详情抽屉（需求 3）：点击阶段节点打开
   const [drawerStage, setDrawerStage] = React.useState<{ token: StageToken; label: string } | null>(
     null,
@@ -123,7 +132,12 @@ const App: React.FC = () => {
         ) : (
           <>
             {/* 左侧：功能卡栏（<768px 折叠为顶部横向滚动条） */}
-            <SideNav activeCard={activeCard} reportEnabled={reportEnabled} onSelect={setActiveCard} />
+            <SideNav
+              activeCard={activeCard}
+              reportEnabled={reportEnabled}
+              gitWorkspaceEnabled={gitWorkspaceEnabled}
+              onSelect={setActiveCard}
+            />
 
             {/* 中央：执行终端（工作台，占满剩余宽度） */}
             <TerminalSection activeCard={activeCard !== null} onCollapse={() => setActiveCard(null)} />

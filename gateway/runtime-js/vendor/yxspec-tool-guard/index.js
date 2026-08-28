@@ -9,6 +9,11 @@
 //   2. 门控检查：当前阶段上游阶段未完成（dsh_state 里非 done）→ 结构性
 //      拒绝该阶段全部工具调用（禁行），模型被迫停下，无法跳过上游。
 //
+// 叠加约束（git 命令级守卫，只作用于 bash 工具的命令内容）：
+//   3. bash 工具命令若含破坏性 git 操作（push/reset/clean/checkout -f/rm -rf/
+//      cherry-pick/rebase/merge/stash drop/remote add 等）→ deny；只读 git 命令
+//      放行。与 1/2 相互独立，bash 过阶段白名单后再按命令内容判定。
+//
 // 当前阶段来源（实时解析，guard 回调每次调用时读取）：
 //   1. 环境变量 YXSPEC_STAGE（测试/显式指定，网关可经 launch.env 注入）
 //   2. dsh_state.current（动态，真实全流程每轮阶段自动变化，主推）
@@ -21,6 +26,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 /** 阶段 → 白名单工具。全 25 阶段，按阶段大类分面（与网关 stages.mjs 语义一致）。 */
+
+/** subagent 委派相关全局工具名（@deepseek-ai/dsh-tool-subagent / -control 装配注册）。
+ *  report 是 child-scope 工具（仅可继续子 agent 可见），不在此列表；
+ *  send_message / interrupt_agent 用于后台/可继续子 agent 管理，一并放行。 */
+const SUBAGENT_TOOLS = ['subagent', 'subagent_fork', 'send_message', 'interrupt_agent'];
+
 const STAGE_ALLOWED = {
   // 分析/需求类（PRD/SYS/SWE/SQT 需求分析、架构、策略）：检索 + 状态 + 只读
   init: ['fs', 'read', 'bash'],
@@ -34,11 +45,13 @@ const STAGE_ALLOWED = {
   swe_coding_plan: ['fs', 'read', 'bash'],
   // 编码/验证类：只读 + 写（write/fs/bash），不做外部检索
   swe_coding_do: ['fs', 'read', 'write', 'bash'],
-  swe_static_verify: ['fs', 'read', 'write', 'bash'],
-  swe_coding_verify: ['fs', 'read', 'write', 'bash'],
-  swe_coding_verify_pc: ['fs', 'read', 'write', 'bash'],
-  swe_unit_verify: ['fs', 'read', 'bash'],
-  swe_integration_verify: ['fs', 'read', 'bash'],
+  // 验证/评审类：放开 subagent 并行委派（并行 reviewer；子 agent 在同一阶段白名单内工作，
+  // 且被 toolFilter 禁掉再委派/agent 控制，只读 review + bash 只读命令）
+  swe_static_verify: ['fs', 'read', 'write', 'bash', ...SUBAGENT_TOOLS],
+  swe_coding_verify: ['fs', 'read', 'write', 'bash', ...SUBAGENT_TOOLS],
+  swe_coding_verify_pc: ['fs', 'read', 'write', 'bash', ...SUBAGENT_TOOLS],
+  swe_unit_verify: ['fs', 'read', 'bash', ...SUBAGENT_TOOLS],
+  swe_integration_verify: ['fs', 'read', 'bash', ...SUBAGENT_TOOLS],
   // 测试类
   sqt_strategy: ['fs', 'read', 'bash', 'weknora_ask'],
   sqt_tr: ['fs', 'read', 'bash', 'weknora_ask'],
@@ -87,10 +100,79 @@ const STAGE_UPSTREAM = {
   swe_release_promote: ['swe_release'],
 };
 
+// =============================================================================
+// git 命令级守卫（bash 工具命令内容判定，叠加在阶段白名单之上，二者独立生效）
+// 策略：只读白名单放行；非只读 git 子命令一律拒绝（默认拒绝，宁可误伤不放过）。
+// 复合命令（&& || ; | 换行）按 shell 分隔符切段逐段判定，任一段命中破坏性
+// git 操作即整体拒绝。核心拦截：push / reset / clean / checkout -f /
+//   checkout -- / rm -rf / cherry-pick / rebase / merge / stash drop / remote add 等。
+// =============================================================================
+
+/** 只读/安全 git 子命令（无 flag 争议，直接放行）。 */
+const GIT_READONLY_SUBS = new Set([
+  'status', 'diff', 'log', 'show', 'rev-parse', 'blame',
+  'ls-files', 'ls-tree', 'describe', 'shortlog', 'whatchanged',
+  'grep', 'count-objects', 'help', 'version',
+]);
+
+/** 从一段 shell 命令中提取 git 子命令名（跳过 git 全局选项，如 -c/-C/--no-pager）。 */
+function gitSubcommandOf(segment) {
+  const m = /\bgit(?:\.exe)?\b/.exec(segment);
+  if (!m) return null;
+  const tokens = (segment.slice(m.index + m[0].length).match(/\S+/g) || []).slice(0, 8);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (!t.startsWith('-')) return t;
+    if (t === '-c' || t.startsWith('-c=')) i += 1; // git -c key=val 占两个 token
+  }
+  return null;
+}
+
+/** 取段内子命令名之后的参数串（用于 branch/tag/remote 的 flag 细分）。 */
+function gitArgsAfter(sub, segment) {
+  const m = new RegExp(`\\b${sub}\\b`).exec(segment);
+  return m ? segment.slice(m.index + m[0].length).trim() : '';
+}
+
+/** 判定某个 git 子命令在该段内是否破坏性（返回 true = 应拒绝）。 */
+function gitSubUnsafe(sub, segment) {
+  if (GIT_READONLY_SUBS.has(sub)) return false;
+  if (sub === 'branch') {
+    // 破坏性：-d/-D 删除、-m/-M 重命名、-c/-C 复制、-u 改 upstream、--delete
+    return /-(?:d|D|m|M|c|C|u)(?:\s|$)|--delete|--set-upstream|--unset-upstream/.test(
+      gitArgsAfter('branch', segment),
+    );
+  }
+  if (sub === 'tag') {
+    // 只读：无参（列出）或 -l/--list；其余（打标签/删标签/带 flag）拒绝
+    return !/^(?:-l|--list)?$/.test(gitArgsAfter('tag', segment));
+  }
+  if (sub === 'remote') {
+    // 只读：无参（列出）、-v/--verbose、show；其余（add/remove/rm/set-url/...）拒绝
+    const first = (gitArgsAfter('remote', segment).split(/\s+/)[0] || '').replace(/^[\s"'`]+/, '');
+    return !(first === '' || first === '-v' || first === '--verbose' || first === 'show');
+  }
+  return true; // 非只读白名单内的 git 子命令，默认拒绝
+}
+
+/** git 命令级守卫入口：返回中文 deny 文案；放行返回 null。 */
+function gitGuardDeny(command) {
+  if (typeof command !== 'string' || command.trim() === '') return null;
+  const denied = [];
+  for (const seg of command.split(/(?:&&|\|\||\n|;|\|)/)) {
+    const sub = gitSubcommandOf(seg);
+    if (sub && gitSubUnsafe(sub, seg)) denied.push(sub);
+  }
+  if (denied.length === 0) return null;
+  return `[yxspec-tool-guard] git 命令级拦截：${denied.join('/')} 被禁止。当前工作区受 git 管控，仅允许只读命令（status/diff/log/branch/rev-parse/show/tag -l 等），禁止 push/reset/clean/checkout -f/rm -rf/cherry-pick/rebase/merge/stash drop 等破坏性操作，请改用只读命令`;
+}
+
 export const name = 'yxspec-tool-guard';
 
 /** 导出白名单表（单测/驾驶舱诊断复用）。 */
 export { STAGE_ALLOWED };
+/** 导出 git 命令级守卫判定（单测/驾驶舱诊断复用）。 */
+export { gitGuardDeny, gitSubcommandOf };
 
 /** 声明对 tools 服务的依赖（cordis 注入检查）。 */
 export const inject = ['tools'];
@@ -163,6 +245,13 @@ export function apply(ctx, input = {}) {
     // 工具裁剪：该阶段白名单外 deny
     if (allowed && !allowed.includes(name)) {
       return `[yxspec-tool-guard] 阶段 ${stage} 仅允许 ${allowed.join('/')}，工具 ${name} 被结构性拦截`;
+    }
+
+    // git 命令级守卫：仅对 bash 工具叠加（命令级判定，不触碰其他工具/命令）。
+    // 放在阶段裁剪之后，阶段白名单判定优先级不变；bash 过阶段后再查命令内容。
+    if (name === 'bash' && exec.arguments?.command) {
+      const deny = gitGuardDeny(String(exec.arguments.command));
+      if (deny) return deny;
     }
     return undefined;
   });

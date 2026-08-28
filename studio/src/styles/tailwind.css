@@ -95,3 +95,12 @@ button:not(:disabled):focus-visible,
 ::-webkit-scrollbar-thumb:hover {
   background: #b0aea5; /* Warm Silver */
 }
+
+/* 横滚条隐藏：保留滚动能力、不占竖向空间（最近会话 / 快捷模板等横向行）。
+   横向 scrollbar 语义价值低（鼠标滚轮/触控板横滚即可），视觉净空更划算。 */
+.scrollbar-hide {
+  scrollbar-width: none; /* Firefox */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chromium/Edge */
+}

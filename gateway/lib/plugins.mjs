@@ -54,6 +54,9 @@ const INSTALLED_PLUGIN_META = {
   weknora: { desc: '知识库检索（WeKnora），第一原则「检索优先」' },
   'graph-memory': { desc: '跨会话图记忆（sqlite + embedding），长流程上下文连续' },
   'yxspec-tool-guard': { desc: '工具守卫：coding 阶段结构性拦截白名单外工具 + 门控' },
+  'aspice-trajectory': { desc: '阶段执行轨迹聚合 + 门控证据（append-only JSONL）' },
+  'git-workspace': { desc: '阶段收尾 git tag 留痕 + 审计 JSONL（只读工作树，autoCommit 默认关）' },
+  'yxspec-self-iteration': { desc: '自迭代轮次状态机 + 评分 tool + 基线护栏结构化（只读同事脚本，禁 LLM 自评）' },
 }
 
 /**
@@ -65,7 +68,7 @@ const CANDIDATE_META = [
   {
     id: 'subagent',
     name: 'subagent（并行子代理）',
-    desc: 'agent 委派子 agent 并行执行——验证/评审阶段并行提效（spawn 全新 / fork 继承父历史）',
+    desc: 'agent 委派子 agent 并行执行——验证/评审阶段并行 reviewer 提效（spawn 全新独立 context / fork 继承父历史）。maxDepth=1 只允许一层委派防失控；toolFilter 裁剪 child 工具面（禁再委派 + 禁 agent 控制），reviewer 聚焦产物本身',
     assembly: `
 - id: subagent
   name: '@deepseek-ai/dsh-subagent'
@@ -87,15 +90,29 @@ const CANDIDATE_META = [
     provider: spawn
     toolName: subagent
     enableRunInBackground: false
+    maxDepth: 1
+    toolFilter:
+      deny:
+        - subagent
+        - subagent_fork
+        - send_message
+        - interrupt_agent
 - id: tool-subagent-fork
   name: '@deepseek-ai/dsh-tool-subagent'
   config:
     provider: fork
     toolName: subagent_fork
-    enableRunInBackground: false`,
+    enableRunInBackground: false
+    maxDepth: 1
+    toolFilter:
+      deny:
+        - subagent
+        - subagent_fork
+        - send_message
+        - interrupt_agent`,
     deps: [],
     guard: true,
-    evidence: '.dsh/验证报告-DSH候选能力可达性-20260826.md §2.1',
+    evidence: '.dsh/验证报告-DSH候选能力可达性-20260826.md §2.1；tool-subagent README（maxDepth 需 provider depthLimit、toolFilter 需 provider toolFilter 能力，spawn/fork 均具备）；dsh-tools restrict()（toolFilter.deny 必须是已注册全局工具名，故只裁本候选装配自带的 subagent 系工具）',
   },
   {
     id: 'session-query',
@@ -118,8 +135,15 @@ const CANDIDATE_META = [
     name: 'ralph（fresh-agent 原子循环）',
     desc: 'fresh child + 不可变目标原子轮次——与自迭代「原子轮次 + 防污染」咬合',
     assembly: `
+- id: workflow-worker-thread
+  name: '@deepseek-ai/dsh-workflow-worker-thread'
+  config:
+    provider: spawn
 - id: tool-ralph
-  name: '@deepseek-ai/dsh-tool-ralph'`,
+  name: '@deepseek-ai/dsh-tool-ralph'
+  config:
+    subagentProvider: spawn
+    maxRounds: 64`,
     deps: [],
     guard: true,
     evidence: '.dsh/验证报告-DSH候选能力可达性-20260826.md §2.3',

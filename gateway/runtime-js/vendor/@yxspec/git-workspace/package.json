@@ -1,0 +1,11 @@
+{
+  "name": "@yxspec/git-workspace",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "description": "阶段收尾 git tag 留痕 + 审计 JSONL：订阅 session/event，阶段结束（turn/end 且 reason 为阶段收尾）时打 yxspec/<stage>/<seq> tag、写 runtime-data/git-workspace/<stage>/<stage>-<seq>.jsonl",
+  "private": true
+}

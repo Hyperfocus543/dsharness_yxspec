@@ -1184,6 +1184,125 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<an
 }
 
 // =============================================================================
+// Git 工作区管控 API（网关 /api/git*）
+// 数据源：后端经 @yxspec/tool-guard 白名单的只读 git 命令（status/log/branch）采集，
+// 以及 .dsh/git-audit/ 下的阶段留痕（阶段↔commit↔tag）记录。
+// 红线：前端不执行 git —— 一切 git 操作都走网关 API；回滚只留档不执行。
+// 失败一律返回 null（网关未起/路由未就绪时降级），不阻塞功能卡使用。
+// =============================================================================
+
+/** 单个脏文件条目（git status --porcelain 语义）。 */
+export interface GitDirtyFile {
+  path: string;
+  /** added | modified | deleted | renamed | untracked | conflict */
+  status: string;
+  /** 是否已暂存（index 区）；porcelain XY 首列非空即 staged */
+  staged: boolean;
+}
+
+/** 单条 commit 摘要（工作区管控卡「最近提交」数据源）。 */
+export interface GitRecentCommit {
+  hash: string;
+  message: string;
+  at: string | null;
+}
+
+/** GET /api/git/status 响应：工作区管控卡头部数据源。 */
+export interface GitStatus {
+  gitAvailable: boolean;
+  branch: string | null;
+  head: string | null;
+  dirtyFiles: GitDirtyFile[];
+  ahead: number;
+  behind: number;
+  error?: string | null;
+  /** 最近提交（时间倒序，最多 5 条即可）；后端 git log 采集，可为空数组 */
+  recent?: GitRecentCommit[];
+  /** 后端实际字段名：/api/git/status 返回 recentCommits */
+  recentCommits?: GitRecentCommit[];
+}
+
+/** 单条阶段留痕记录（阶段↔commit↔tag 对照）。 */
+export interface GitStageTrace {
+  seq: number;
+  commit: string;
+  tag: string | null;
+  status: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** GET /api/git/status：拉工作区状态；失败返回 null。 */
+export async function getGitStatus(): Promise<GitStatus | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/git/status`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as GitStatus;
+  } catch {
+    return null;
+  }
+}
+
+/** GET /api/git/commits?stage=：拉某阶段的 commit/tag 留痕轨迹；失败返回 null。 */
+export async function getGitCommits(stage: string): Promise<GitStageTrace[] | null> {
+  try {
+    const res = await fetch(
+      `${GATEWAY_BASE}/api/git/commits?stage=${encodeURIComponent(stage)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as
+      | GitStageTrace[]
+      | { traces?: GitStageTrace[] }
+      | { records?: GitStageTrace[] };
+    if (Array.isArray(data)) return data;
+    if (Array.isArray((data as { traces?: GitStageTrace[] })?.traces)) {
+      return (data as { traces: GitStageTrace[] }).traces;
+    }
+    if (Array.isArray((data as { records?: GitStageTrace[] })?.records)) {
+      return (data as { records: GitStageTrace[] }).records;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST /api/git/rollback 入参：只留档，不执行 git。 */
+export interface GitRollbackParams {
+  stage: string;
+  seq: number;
+  commit: string;
+  reason: string;
+}
+
+/** POST /api/git/rollback 响应（后端留档确认）。 */
+export interface GitRollbackResult {
+  ok: boolean;
+  message?: string;
+  error?: string;
+}
+
+/**
+ * 记录回滚指令（POST /api/git/rollback）。网关只把「某阶段某 commit 因何回滚」
+ * 追加到该阶段轨迹 JSONL（rollback 审计行），不执行任何 git 操作；成功返回留档确认，失败抛错。
+ */
+export async function recordGitRollback(params: GitRollbackParams): Promise<GitRollbackResult> {
+  const res = await fetch(`${GATEWAY_BASE}/api/git/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  const data = (await res.json().catch(() => null)) as GitRollbackResult | null;
+  if (!res.ok) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  return data || { ok: false };
+}
+
+// =============================================================================
 // 浏览器模式下的解析器（与 Rust 解析器等价）
 // =============================================================================
 

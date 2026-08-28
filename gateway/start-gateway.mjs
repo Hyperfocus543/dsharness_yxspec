@@ -25,6 +25,8 @@ if (!env.YXSPEC_TRAJECTORY_ROOT) {
 }
 
 const port = process.argv[2] ?? '8787';
+// 端口经 env 传给子进程：server.mjs 读 GATEWAY_PORT（见 server.mjs:40）。修复：副本冒烟需指定端口
+if (!env.GATEWAY_PORT) env.GATEWAY_PORT = port;
 const child = spawn(process.execPath, ['server.mjs'], { cwd: process.cwd(), env, stdio: 'inherit' });
 child.on('exit', (code) => { console.log(`[start-gateway] server.mjs 退出 code=${code}`); process.exit(code ?? 1); });
 process.on('SIGTERM', () => child.kill('SIGTERM'));

@@ -11,14 +11,25 @@ import { FUNCTION_CARDS, type FunctionCard } from '../../navigation';
 interface SideNavProps {
   activeCard: FunctionCard | null;
   reportEnabled: boolean;
+  gitWorkspaceEnabled: boolean;
   onSelect: (card: FunctionCard | null) => void;
 }
 
-export const SideNav: React.FC<SideNavProps> = ({ activeCard, reportEnabled, onSelect }) => {
-  // 可显示的左侧功能卡：周报仅当 ui-report 启用时出现
+export const SideNav: React.FC<SideNavProps> = ({
+  activeCard,
+  reportEnabled,
+  gitWorkspaceEnabled,
+  onSelect,
+}) => {
+  // 可显示的左侧功能卡：周报仅当 ui-report 启用时出现；Git 工作区仅当 ui-git-workspace 启用时出现
   const visibleCards = React.useMemo(
-    () => FUNCTION_CARDS.filter((c) => c.id !== 'report' || reportEnabled),
-    [reportEnabled],
+    () =>
+      FUNCTION_CARDS.filter(
+        (c) =>
+          (c.id !== 'report' || reportEnabled) &&
+          (c.id !== 'git-workspace' || gitWorkspaceEnabled),
+      ),
+    [reportEnabled, gitWorkspaceEnabled],
   );
   return (
     <aside className="w-52 shrink-0 border-r bg-white flex flex-col p-2 gap-1.5 overflow-y-auto md:w-52 max-md:absolute max-md:left-0 max-md:right-0 max-md:top-0 max-md:z-20 max-md:w-full max-md:flex-row max-md:overflow-x-auto max-md:overflow-y-hidden max-md:border-r-0 max-md:border-b max-md:items-stretch max-md:flex-nowrap">

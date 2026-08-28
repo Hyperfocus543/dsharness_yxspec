@@ -13,6 +13,7 @@ import { ResumeBanner } from './components/cockpit/ResumeBanner';
 // ReportExport 由 FE-2 子 agent 实现（零 props，导出名 ReportExport）。
 import { ReportExport } from './components/cockpit/ReportExport';
 import { ModelSettings } from './components/settings/ModelSettings';import { PluginCenter } from './components/plugin/PluginCenter';
+import { GitWorkspaceCard } from './components/plugin/GitWorkspaceCard';
 
 export const DEFAULT_TASKS_FILES = [
   'task_init.md',
@@ -71,6 +72,8 @@ export function renderFunctionCard(card: FunctionCard, ctx: FunctionCardCtx) {
       return <PluginCenter />;
     case 'settings':
       return <ModelSettings />;
+    case 'git-workspace':
+      return <GitWorkspaceCard />;
     default:
       return null;
   }

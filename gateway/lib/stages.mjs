@@ -627,6 +627,26 @@ export function extractStageKnowledge(token, maxLen = 6000) {
 }
 
 // =============================================================================
+// 验证/评审阶段（subagent 并行 reviewer）
+//   这些阶段放开 subagent 工具面（tool-guard STAGE_ALLOWED 已放行），且产物
+//   通常多维度独立可验（正确性/质量/符合性/覆盖…）。模型在此应把独立维度
+//   委派给并行子 agent（各自独立 context，一次 assistant 消息并发发起），
+//   收齐结果再综合，而非串行逐个自验。
+// =============================================================================
+const PARALLEL_REVIEW_STAGES = new Set([
+  'swe_static_verify',
+  'swe_coding_verify',
+  'swe_coding_verify_pc',
+  'swe_unit_verify',
+  'swe_integration_verify',
+])
+
+/** 该阶段是否启用 subagent 并行 reviewer 引导。 */
+export function isParallelReviewStage(token) {
+  return PARALLEL_REVIEW_STAGES.has(token)
+}
+
+// =============================================================================
 // prompt 构造
 //   general=false（默认）：执行指定阶段并生成产物（模板驱动）
 //   general=true：不绑定阶段，仅读当前状态回答咨询类问题（分析/解释/进度等）
@@ -736,6 +756,19 @@ ${knowledgeBlock}
   parts.push(`## 门控扫描结果（前端注入，不靠你自行发现）`)
   parts.push(JSON.stringify(gate ?? null, null, 2))
 
+  // 验证/评审阶段：引导并行委派子 agent（并行 reviewer）
+  if (!general && isParallelReviewStage(token)) {
+    parts.push(``)
+    parts.push(`## 验证/评审阶段：并行 reviewer（subagent 委派）`)
+    parts.push(`- 本阶段启用 subagent 并行委派。若产物存在多个可独立验证的方面，请在**一次 assistant 消息里并行发起多个 subagent 委派**（每个 reviewer 独立 context，各自针对一个独立维度），然后收齐全部结果再做综合判定。`)
+    parts.push(`- 委派工具：subagent（spawn，全新 context，子 agent 看不到本对话，prompt 必须自包含）；subagent_fork（fork，继承本对话已完成轮次）。`)
+    parts.push(`- 子 agent 已做限制：depth=1（子 agent 不能再委派）；工具面裁掉 subagent/subagent_fork/send_message/interrupt_agent，只保留读写/执行类工具（并受本阶段白名单约束）。`)
+    parts.push(`- 典型用法（举例，勿照抄）：产物为多模块代码时 → 同时委派「模块A 正确性评审」「模块B 正确性评审」「整体符合性与质量评审」三个 reviewer；产物为 spec 文档时 → 同时委派「需求覆盖」「接口一致性」「完整性/规范性」三个 reviewer。`)
+    parts.push(`- 委派 prompt 要点：注明待验产物路径、验证标准（本阶段规范/验收条件）、只读评审要求（禁止改动产物）、以及回报格式（结论 + 证据 + 问题清单）。`)
+    parts.push(`- 全部 reviewer 返回后：综合各维度结论，识别冲突/遗漏，必要时对个别点补充委派或就地复核；最终在阶段总结里列出「并行委派了几路、各自结论、综合结论」。`)
+    parts.push(`- 不要用子 agent 替代必须在本 context 完成的产物落盘动作；委派只用于「读+判断」，最终产物/报告由你本人写出。`)
+  }
+
   parts.push(``)
   parts.push(`## 产物规范`)
   parts.push(`请按以下要求生成产物：`)
@@ -753,6 +786,10 @@ ${knowledgeBlock}
     parts.push(`## 工具限制`)
     parts.push(`- 本阶段只允许使用 fs（文件读写）和 bash（执行命令）工具`)
     parts.push(`- 禁止调用 create_goal / todo_write 之外的任何 agent 编排工具、web 搜索、外部 API 工具`)
+    // 验证/评审类 restrictTools 阶段同时放开 subagent 并行 reviewer（见上方并行引导段）
+    if (isParallelReviewStage(token)) {
+      parts.push(`- 例外：本阶段允许 subagent 并行委派（见上方「并行 reviewer」段）——委派仅限只读评审任务，子 agent 禁止改动产物、禁止嵌套再委派`)
+    }
     parts.push(`- 需要多次文件操作时，一次 tool_call 并行发起，避免逐文件串行往返`)
   } else {
     parts.push(``)

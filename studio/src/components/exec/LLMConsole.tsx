@@ -12,7 +12,7 @@ import { STAGE_TABLE, STAGE_ORDER } from '../../data/stage-mapping';
 import { SessionList } from '../chat/SessionList';
 import { ToolTraceInline } from '../chat/ToolTraceInline';
 import { renderMarkdown } from '../../utils/markdown';
-import { Icon, StatusDot, Button, EmptyState, SectionLabel } from '../ui';
+import { Icon, StatusDot, Button, EmptyState } from '../ui';
 import { I } from '../ui/icons';
 import {
   SlashCommandMenu,
@@ -177,20 +177,15 @@ export const LLMConsole: React.FC = () => {
 
   const connTone = connState === 'ok' ? 'ok' : connState === 'err' ? 'err' : 'idle';
   const connLabel = connState === 'ok' ? '已连接执行网关' : connState === 'err' ? '网关未连接' : '检查连接…';
-  // 快捷指令模板：默认收起（顶部信息收敛），点「快捷」展开
-  const [templatesOpen, setTemplatesOpen] = React.useState(false);
 
   return (
     <div className="flex flex-col h-full">
-      {/* 顶栏一行：会话管理 + 连接状态 + 模式切换 + 快捷指令（信息收敛为单行） */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
+      {/* 工具栏：会话选择在左；模式切换 + 连接状态靠右 */}
+      <div className="flex items-center gap-3 mb-1.5 whitespace-nowrap">
         <SessionList />
-        <div className="flex items-center gap-1.5 text-xs">
-          <StatusDot tone={connTone} />
-          <span className="text-zinc-500">{connLabel}</span>
-        </div>
+        <span className="flex-1" />
         {/* 模式切换（紧凑分段控件） */}
-        <div className="flex items-center gap-0.5 bg-zinc-100 border border-zinc-200 rounded p-0.5">
+        <div className="flex items-center gap-0.5 bg-zinc-100 border border-zinc-200 rounded p-0.5 shrink-0">
           <button
             className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all active:scale-[0.98] ${
               mode === 'agent'
@@ -216,107 +211,71 @@ export const LLMConsole: React.FC = () => {
             </button>
           )}
         </div>
-        {/* 快捷指令折叠开关 */}
-        <button
-          className={`text-[11px] px-2 py-0.5 rounded border transition-all active:scale-[0.98] inline-flex items-center gap-1 ${
-            templatesOpen
-              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-              : 'border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
-          }`}
-          onClick={() => setTemplatesOpen((o) => !o)}
-          aria-expanded={templatesOpen}
-          title="快捷指令模板"
-        >
-          <Icon name={I.bolt} size={12} />
-          快捷
-          <Icon name={templatesOpen ? I.caretDown : I.caretRight} size={10} />
-        </button>
+        {/* 连接状态：右端常驻 */}
+        <div className="flex items-center gap-1.5 text-xs shrink-0">
+          <StatusDot tone={connTone} />
+          <span className="text-zinc-500">{connLabel}</span>
+        </div>
       </div>
 
-      {/* 快捷指令模板（折叠区，默认收起） */}
-      {templatesOpen && (
-        <div className="mb-1.5 flex flex-wrap gap-1">
-          <Chip onClick={() => handleTemplate('请分析当前仓库的 25 个 ASPICE 阶段进度，看看现在卡在哪')}>阶段进度分析</Chip>
+      {/* 目标阶段 + 工具流式（合并一行，省竖高）：阶段/门控在左，agent 实时工具动作在右。
+          工具参数过长截断（flex-1 min-w-0 truncate），不折行；窗口过窄才兜底 wrap。 */}
+      {(currentStage || toolStatus) && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1 bg-zinc-50 border border-zinc-200 rounded text-xs min-w-0">
           {currentStage && (
             <>
-              <Chip onClick={() => handleTemplate(`请推进当前阶段 ${currentStage}，按门控要求生成产物`)}>
-                推进 {currentStage}
-              </Chip>
-              <Chip onClick={() => handleTemplate(`请解释 ${currentStage} 阶段的审查要点与产物要求`)}>
-                阶段解读
-              </Chip>
+              <span className="text-zinc-600 shrink-0">
+                目标阶段：
+                <strong className="font-mono text-zinc-900 ml-1">{currentStage}</strong>
+                <span className="text-zinc-400 ml-1.5">({STAGE_TABLE[currentStage]?.command})</span>
+              </span>
+              {stageGate ? (
+                <span
+                  className={`shrink-0 px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${
+                    stageGate.blocked
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-sage-100 text-sage-700'
+                  }`}
+                  title={stageGate.gateMessage || ''}
+                >
+                  <Icon name={stageGate.blocked ? I.close : I.check} size={12} weight="bold" />
+                  {stageGate.blocked ? `门控拦截：${stageGate.gateMessage || ''}` : '门控放行'}
+                </span>
+              ) : (
+                <span className="text-zinc-400 shrink-0">门控状态未知</span>
+              )}
             </>
           )}
-          {STAGE_ORDER.length > 0 && (
-            <Chip onClick={() => handleTemplate('请生成 SQT 测试用例设计的任务骨架（Markdown）')}>生成任务骨架</Chip>
-          )}
-        </div>
-      )}
-
-      {/* 目标阶段上下文条（P0-②）：当前阶段 + 门控，一行紧凑 */}
-      {currentStage && (
-        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1 bg-zinc-50 border border-zinc-200 rounded text-xs">
-          <span className="text-zinc-600">
-            目标阶段：
-            <strong className="font-mono text-zinc-900 ml-1">{currentStage}</strong>
-            <span className="text-zinc-400 ml-1.5">({STAGE_TABLE[currentStage]?.command})</span>
-          </span>
-          {stageGate ? (
-            <span
-              className={`px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${
-                stageGate.blocked
-                  ? 'bg-red-100 text-red-700'
-                  : 'bg-sage-100 text-sage-700'
-              }`}
-              title={stageGate.gateMessage || ''}
+          {toolStatus && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center gap-2 min-w-0 flex-1 animate-fade-in-up"
             >
-              <Icon name={stageGate.blocked ? I.close : I.check} size={12} weight="bold" />
-              {stageGate.blocked ? `门控拦截：${stageGate.gateMessage || ''}` : '门控放行'}
-            </span>
-          ) : (
-            <span className="text-zinc-400">门控状态未知</span>
-          )}
-        </div>
-      )}
-
-      {/* 事件级流式：agent 实时工具动作（边跑边看它在做什么）。
-          工具动作切换频繁：150ms 快速入场（ui-animation 高频率 UI 快速进入），reduced-motion 降级。 */}
-      {toolStatus && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`mb-2 px-2.5 py-1.5 rounded border text-xs flex items-center gap-2 min-w-0 animate-fade-in-up ${
-            toolStatus.kind === 'call'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : toolStatus.kind === 'result'
-                ? 'bg-zinc-50 border-zinc-200 text-zinc-600'
-                : 'bg-zinc-50 border-zinc-200 text-zinc-400'
-          }`}
-        >
-          <span className="shrink-0 inline-flex items-center gap-1.5">
-            {toolStatus.kind === 'call' ? (
-              <>
-                <Icon name={I.clock} size={12} weight="bold" className="animate-spin" />
-                正在调用
-              </>
-            ) : toolStatus.kind === 'result' ? (
-              <Icon name={I.check} size={12} weight="bold" />
-            ) : (
-              <Icon name={I.check} size={12} weight="bold" />
-            )}
-          </span>
-          <span className="font-mono font-semibold shrink-0">{toolStatus.name || '工具'}</span>
-          {toolStatus.args && (
-            <span className="flex-1 min-w-0 truncate font-mono text-zinc-500" title={toolStatus.args}>
-              {toolStatus.args}
-            </span>
-          )}
-          {toolStatus.error ? (
-            <span className="text-red-600 shrink-0">error: {toolStatus.error}</span>
-          ) : toolStatus.kind === 'result' ? (
-            <span className="text-sage-600 shrink-0">完成</span>
-          ) : (
-            <span className="text-amber-500 shrink-0 animate-pulse">…</span>
+              <span className="shrink-0 inline-flex items-center gap-1.5">
+                {toolStatus.kind === 'call' ? (
+                  <>
+                    <Icon name={I.clock} size={12} weight="bold" className="animate-spin text-emerald-700" />
+                    <span className="text-emerald-700">正在调用</span>
+                  </>
+                ) : (
+                  <Icon name={I.check} size={12} weight="bold" className="text-zinc-400" />
+                )}
+              </span>
+              <span className="font-mono font-semibold shrink-0 text-zinc-700">{toolStatus.name || '工具'}</span>
+              {toolStatus.args && (
+                <span className="flex-1 min-w-0 truncate font-mono text-zinc-500" title={toolStatus.args}>
+                  {toolStatus.args}
+                </span>
+              )}
+              {toolStatus.error ? (
+                <span className="text-red-600 shrink-0">error: {toolStatus.error}</span>
+              ) : toolStatus.kind === 'result' ? (
+                <span className="text-sage-600 shrink-0">完成</span>
+              ) : (
+                <span className="text-amber-500 shrink-0 animate-pulse">…</span>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -365,45 +324,64 @@ export const LLMConsole: React.FC = () => {
       </div>
 
       {/* 输入区 */}
-      <div className="mt-2 flex gap-2 relative">
-        {slashOpen && slashItems.length > 0 && (
-          <SlashCommandMenu
-            items={slashItems}
-            highlight={slashHighlight}
-            onSelect={onSlashSelect}
-            onHover={setSlashHighlight}
+      <div className="mt-2">
+        {/* 快捷对话模板：点击填入输入框（贴近派活动作，不占顶部、不折行、隐藏横滚条） */}
+        <div className="mb-1.5 flex items-center gap-1 overflow-x-auto scrollbar-hide">
+          <span className="text-zinc-400 shrink-0" title="点击填入输入框，回车发送">
+            <Icon name={I.bolt} size={12} />
+          </span>
+          <Chip onClick={() => handleTemplate('请分析当前仓库的 25 个 ASPICE 阶段进度，看看现在卡在哪')}>阶段进度分析</Chip>
+          {currentStage && (
+            <>
+              <Chip onClick={() => handleTemplate(`请解释 ${currentStage} 阶段的审查要点与产物要求`)}>
+                阶段解读
+              </Chip>
+            </>
+          )}
+          {STAGE_ORDER.length > 0 && (
+            <Chip onClick={() => handleTemplate('请生成 SQT 测试用例设计的任务骨架（Markdown）')}>生成任务骨架</Chip>
+          )}
+        </div>
+        <div className="flex gap-2 relative">
+          {slashOpen && slashItems.length > 0 && (
+            <SlashCommandMenu
+              items={slashItems}
+              highlight={slashHighlight}
+              onSelect={onSlashSelect}
+              onHover={setSlashHighlight}
+            />
+          )}
+          <textarea
+            ref={textareaRef}
+            className="flex-1 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+            rows={2}
+            placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
+            aria-label="派活指令输入框"
+            aria-expanded={slashOpen}
+            value={prompt}
+            onChange={(e) => onPromptChange(e.target.value)}
+            onKeyDown={onInputKeyDown}
           />
-        )}
-        <textarea
-          ref={textareaRef}
-          className="flex-1 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-          rows={2}
-          placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
-          aria-label="派活指令输入框"
-          aria-expanded={slashOpen}
-          value={prompt}
-          onChange={(e) => onPromptChange(e.target.value)}
-          onKeyDown={onInputKeyDown}
-        />
-        {loading && (
+          {loading && (
+            <Button
+              variant="danger"
+              onClick={cancel}
+              title="取消本轮 agent 执行（中断 harness runtime）"
+            >
+              <Icon name={I.stop} size={14} weight="fill" />
+              取消
+            </Button>
+          )}
           <Button
-            variant="danger"
-            onClick={cancel}
-            title="取消本轮 agent 执行（中断 harness runtime）"
+            variant="primary"
+            onClick={handleSend}
+            disabled={loading || !prompt.trim()}
+            title="发送命令。若网关不可达，会给出明确提示（不再静默禁用）。"
           >
-            <Icon name={I.stop} size={14} weight="fill" />
-            取消
+            <Icon name={I.send} size={14} />
+            {loading ? '执行中' : '派活'}
           </Button>
-        )}
-        <Button
-          variant="primary"
-          onClick={handleSend}
-          disabled={loading || !prompt.trim()}
-          title="发送命令。若网关不可达，会给出明确提示（不再静默禁用）。"
-        >
-          <Icon name={I.send} size={14} />
-          {loading ? '执行中' : '派活'}
-        </Button>
+        </div>
       </div>
     </div>
   );

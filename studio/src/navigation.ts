@@ -12,7 +12,8 @@ export type FunctionCard =
   | 'cockpit'
   | 'report'
   | 'plugins'
-  | 'settings';
+  | 'settings'
+  | 'git-workspace';
 
 export interface FunctionCardDef {
   id: FunctionCard;
@@ -26,4 +27,5 @@ export const FUNCTION_CARDS: FunctionCardDef[] = [
   { id: 'report', label: '周报', icon: I.fileText, hint: '进度导出' },
   { id: 'plugins', label: '插件中心', icon: I.plugs, hint: '功能开关 · 社区插件' },
   { id: 'settings', label: '设置', icon: I.gear, hint: '模型管理 · 网关' },
+  { id: 'git-workspace', label: 'Git 工作区', icon: I.branch, hint: '工作区状态 · 阶段留痕' },
 ];

@@ -1,0 +1,76 @@
+// =============================================================================
+// gitStore — Git 工作区管控状态（网关 /api/git*）
+// 数据源：网关经 @yxspec/tool-guard 白名单的只读 git 采集 + .dsh/git-audit/ 留痕。
+// 红线：前端不执行 git —— 本 store 只做状态镜像 + 刷新 + 回滚留档（不执行）。
+// 回滚成功后 push toast（调用方 UI 再补一句「不自动执行」）。
+// =============================================================================
+
+import { create } from 'zustand';
+import * as ipc from '../utils/ipc';
+import type { GitStatus, GitStageTrace } from '../utils/ipc';
+import { useToastStore } from './toastStore';
+
+interface GitStore {
+  /** GET /api/git/status 快照；未加载/失败为 null */
+  status: GitStatus | null;
+  /** status 是否在加载中 */
+  loading: boolean;
+  /** status 加载失败（网关未起）时置 true */
+  loadError: boolean;
+  refreshStatus: () => Promise<void>;
+  /** 当前已查询的阶段轨迹；未查询/失败为 null */
+  commits: GitStageTrace[] | null;
+  /** commits 是否在加载中 */
+  commitsLoading: boolean;
+  loadCommits: (stage: string) => Promise<void>;
+  /** 记录回滚留档（POST /api/git/rollback）；成功 push toast，失败抛错由调用方处理 */
+  rollback: (params: ipc.GitRollbackParams) => Promise<boolean>;
+}
+
+export const useGitStore = create<GitStore>((set) => ({
+  status: null,
+  loading: false,
+  loadError: false,
+
+  refreshStatus: async () => {
+    set({ loading: true, loadError: false });
+    try {
+      const data = await ipc.getGitStatus();
+      if (data) {
+        set({ status: data, loading: false, loadError: false });
+      } else {
+        set({ status: null, loading: false, loadError: true });
+      }
+    } catch {
+      set({ status: null, loading: false, loadError: true });
+    }
+  },
+
+  commits: null,
+  commitsLoading: false,
+
+  loadCommits: async (stage) => {
+    if (!stage) {
+      set({ commits: null, commitsLoading: false });
+      return;
+    }
+    set({ commitsLoading: true });
+    try {
+      const data = await ipc.getGitCommits(stage);
+      set({ commits: data ?? [], commitsLoading: false });
+    } catch {
+      set({ commits: [], commitsLoading: false });
+    }
+  },
+
+  rollback: async (params) => {
+    try {
+      const res = await ipc.recordGitRollback(params);
+      useToastStore.getState().push('success', '回滚指令已记录（不自动执行）');
+      return res?.ok !== false;
+    } catch (e: any) {
+      useToastStore.getState().push('error', `回滚留档失败：${e?.message || e}`);
+      throw e;
+    }
+  },
+}));

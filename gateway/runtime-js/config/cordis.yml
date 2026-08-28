@@ -138,3 +138,17 @@
 # append-only 写 gateway/runtime-data/trajectory/<stage>/<stage>-<seq>.jsonl
 - id: aspice-trajectory
   name: '@yxspec/aspice-trajectory'
+
+# ---- git-workspace（阶段收尾 git tag 留痕 + 审计 JSONL）----
+# 订阅 session/event，阶段结束（turn/end completed）时打 yxspec/<stage>/<seq> tag、
+# 写 runtime-data/git-workspace/<stage>/<stage>-<seq>.jsonl。
+# 默认只读（autoCommit 关，绝不动工作树）；tag 已有则 skip。
+- id: git-workspace
+  name: '@yxspec/git-workspace'
+
+# ---- yxspec-self-iteration（自迭代轮次状态机 + 评分 + 基线护栏结构化）----
+# 把同事自迭代从「SKILL 提示词执行」升级为 Cordis 插件：轮次状态机结构化
+# （上下文管控）、score_aggregate.py 注册为 self_iter_score tool（禁 LLM 自评）、
+# 每轮留痕写轨迹。只读同事脚本目录，优雅降级（脚本不可用 → 旧提示词路径）。
+- id: yxspec-self-iteration
+  name: '@yxspec/self-iteration'
