@@ -338,6 +338,7 @@ async function processPhaseEnd(stage, seq, reason, { root, autoCommit, input = {
     return audit
   }
   audit.status = 'tagged'
+  audit.tag = tagName // 与 skip/git-unavailable 分支一致：审计记录自包含 tag 名
 
   writeAudit(root, stage, seq, audit)
   return audit
