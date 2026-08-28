@@ -136,7 +136,8 @@ const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
  *      前缀的完整路径（`/usr/bin/git`、`C:\…\git.exe`）——路径形态必须紧邻 basename
  *      前有分隔符（`[\\/]git`），避免把 `mygit` 这类「以 git 结尾的非 git 命令」
  *      误判为调用。
- *  前边界只认 段首/空白（非引号）：`"git status"`（引号串非调用）不命中。 */
+ *  前边界认 段首/空白/shell 包装符（非引号）：`"git status"`（引号串非调用）不命中；
+ *  但 `(git …)` / `$(git …)` / `` `git …` ``（子 shell/命令替换）紧贴包装符也是合法调用。 */
 /** 解析段内 git 调用 → { sub, args }；无 git 调用 → null。
  *  sub  = 子命令名（token，非引号且不以 `-` 开头）；
  *  args = 子命令名之后到段尾的参数串（trimmed，用于 branch/tag/remote 的 flag 细分）。
@@ -152,9 +153,26 @@ function gitSubAndArgs(segment) {
   let m =
     /(?:^|\s)"([^"\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)"(?=\s|$)/i.exec(segment) ||
     /(?:^|\s)'([^'\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)'(?=\s|$)/i.exec(segment) ||
-    /(?:^|\s)(?:git(?:\.(?:exe|cmd|bat))?|[^\s"'`]*[\\/]git(?:\.(?:exe|cmd|bat))?)(?=\s|$)/i.exec(segment)
+    // 前边界除 段首/空白 外，再认 shell 包装符（`(` 子 shell、`$(`/`$( )` 命令替换、
+    // `{` 花括号组、`&` 后台、`` ` `` 反引号）：`(git reset --hard)` / `$(git push)`
+    // / `` `git clean -fd` `` 都是真实调用，此前只认 段首/空白，这些形态整段漏过守卫。
+    // 尾边界仍只认 空白/段尾（防 `import git;`、`pip install git+https://…` 误伤）。
+    // 反引号：`\s` 不含它，故另开独立分支（与引号路径分支并列，尾边界保持一致）。
+    /(?:^|\s)`([^`\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)`(?=\s|$)/i.exec(segment) ||
+    // 裸 git/路径形态：前边界为 段首/空白 或 shell 包装符（`(` 子 shell/`$(…)` 命令替换、
+    // `` ` `` 反引号、`{` 花括号组、`&` 后台、`;` 连排）——这些包装符后紧贴 git 词
+    // 都是真实调用；尾边界仍只认 空白/段尾（防 `import git;` / `pip install git+…` 误伤）。
+    /(?:^|[\s(&;`{])(?:git(?:\.(?:exe|cmd|bat))?|[^\s"'`]*[\\/]git(?:\.(?:exe|cmd|bat))?)(?=\s|$)/i.exec(segment)
   if (!m) return null
-  const after = segment.slice(m.index + m[0].length)
+  // 子命令名后到段尾的参数串：先剥掉尾部 shell 包装闭合符（`)` 子 shell/命令替换、
+  // `}` 花括号组、反引号）——`(git status)` 的 `status)`、`` `git status` `` 的
+  // `status`` 若原样进 token 切分，子命令会带后缀（`status)` ∉ 只读集）→ 只读误伤。
+  // 剥闭合符只删尾部包装字符，不影响参数内容判定。
+  const after = segment
+    .slice(m.index + m[0].length)
+    .replace(/[)\]}]$/, '')
+    .replace(/`$/, '')
+    .trim()
   const re = /"[^"\r\n]*"|'[^'\r\n]*'|\S+/g
   const tokens = []
   let tok
