@@ -123,10 +123,26 @@ const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
  *  边界用 `(?:^|\s)…(?=\s|$)` 而非 `\b…\b`：`\b` 只要求「非词字符」前后，
  *  会误伤 `pip install git+https://…`（git 后接 `+`）与 `import git;`（git 后接
  *  `.`/`;`）这类非 git 命令。git CLI 调用必然独立成词（前导空白/段首 + 后随
- *  空白/段尾），用空白边界才不会把 URL 片段/属性访问当成本命令。 */
+ *  空白/段尾），用空白边界才不会把 URL 片段/属性访问当成本命令。
+ *
+ *  git 可执行名支持路径形态（防漏网）：`/usr/bin/git`、`C:\…\git.exe`、
+ *  `git.cmd`/`git.bat`（Windows）以及引号包裹的完整路径都算 git 调用——
+ *  此前只认裸 `git`/`git.exe`，`/usr/bin/git reset --hard` 这类全路径调用
+ *  整段漏过守卫（sub=null → deny:false）。分支设计：
+ *    · 引号包裹完整路径（`"C:\Program Files\Git\bin\git.exe" reset`）——引号内
+ *      必须含路径分隔符 + git basename，杜绝把 `echo "git status"` 这类引号串
+ *      （无分隔符）误判为调用；
+ *    · 未引号形态：裸 git 可执行名（`git`/`git.exe`/`git.cmd`/`git.bat`）或带路径
+ *      前缀的完整路径（`/usr/bin/git`、`C:\…\git.exe`）——路径形态必须紧邻 basename
+ *      前有分隔符（`[\\/]git`），避免把 `mygit` 这类「以 git 结尾的非 git 命令」
+ *      误判为调用。
+ *  前边界只认 段首/空白（非引号）：`"git status"`（引号串非调用）不命中。 */
 function gitSubcommandOf(segment) {
-  const m = /(?:^|\s)git(?:\.exe)?(?=\s|$)/.exec(segment);
-  if (!m) return null;
+  let m =
+    /(?:^|\s)"([^"\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)"(?=\s|$)/i.exec(segment) ||
+    /(?:^|\s)'([^'\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)'(?=\s|$)/i.exec(segment) ||
+    /(?:^|\s)(?:git(?:\.(?:exe|cmd|bat))?|[^\s"'`]*[\\/]git(?:\.(?:exe|cmd|bat))?)(?=\s|$)/i.exec(segment)
+  if (!m) return null
   const tokens = (segment.slice(m.index + m[0].length).match(/\S+/g) || []).slice(0, 8);
   for (let i = 0; i < tokens.length; i += 1) {
     const t = tokens[i];
