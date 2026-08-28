@@ -62,6 +62,29 @@ function isStageToken(token) {
 }
 
 /**
+ * porcelain v1 XY → 语义化状态（前端 GitDirtyFile.status 契约：
+ * added | modified | deleted | renamed | untracked | conflict）。
+ * 优先级：暂存区 X 位冲突/重命名优先（'AA'/'DD' → conflict，'R' → renamed），
+ * 否则暂存态；再否则工作区态（Y 位）。裸码（如 'M'、'D'）及未知码兜底为 modified。
+ * 说明：git status --porcelain 短格式某些场景只输出单字符（如 rename/untracked 的
+ * 'R'/'??' 只占首字符，Y 位为空），故单独判首字符；'??' 两个字符都算未跟踪。
+ */
+function porcelainStatus(xy) {
+  const x = xy[0]
+  const y = xy[1] ?? ''
+  if (x === '?' && y === '?') return 'untracked'
+  if (x === 'R' || y === 'R') return 'renamed'
+  if ((x === 'A' && y === 'A') || (x === 'D' && y === 'D') || x === 'U' || y === 'U') return 'conflict'
+  if (x === 'A') return 'added'
+  if (x === 'D') return 'deleted'
+  if (x === 'M' || x === 'T') return 'modified'
+  if (y === 'A') return 'added'
+  if (y === 'D') return 'deleted'
+  if (y === 'M' || y === 'T') return 'modified'
+  return 'modified'
+}
+
+/**
  * 解析 git 仓库根（候选优先级见文件头）。全部失败 → null。
  * @returns {Promise<{root: string, source: string} | null>}
  */
@@ -153,7 +176,7 @@ export async function getStatus() {
     if (xy[0] === ' ' && xy[1] === ' ') continue
     base.dirtyFiles.push({
       path: line.slice(3),
-      status: xy,
+      status: porcelainStatus(xy), // 语义化（前端 DIRTY_STYLE 契约），staged 单独判定
       staged: xy[0] !== ' ' && xy[0] !== '?',
     })
   }
