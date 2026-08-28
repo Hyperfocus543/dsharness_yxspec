@@ -1231,6 +1231,10 @@ export interface GitStageTrace {
   commit: string;
   tag: string | null;
   status: string;
+  /** 已被回滚（后端追加 rollback 审计行后合并置 true，不回改 status 字段；前端据此显示「已回滚」） */
+  rolled_back?: boolean;
+  /** 回滚审计 id（`<stage>-<seq>`；未回滚为 null） */
+  rollbackId?: string | null;
   startedAt: string | null;
   finishedAt: string | null;
 }

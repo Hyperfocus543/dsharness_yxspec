@@ -88,9 +88,13 @@ const TraceRow: React.FC<{
   confirming: boolean;
   onRollback: () => void;
 }> = ({ rec, stage, confirming, onRollback }) => {
-  const statusLabel = TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
+  // 已回滚（后端置 rolled_back，不回改 status）：优先显示「已回滚」红标，并禁用回滚按钮
+  const rolledBack = rec.rolled_back === true;
+  const statusLabel = rolledBack ? '已回滚' : TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
+    <div className={`flex items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-xs transition-all group ${
+      rolledBack ? 'border-red-200' : 'border-zinc-200 hover:border-emerald-300'
+    }`}>
       <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500 font-mono" title={`第 ${rec.seq} 次执行`}>
         #{rec.seq}
       </span>
@@ -102,7 +106,17 @@ const TraceRow: React.FC<{
           {rec.tag}
         </span>
       )}
-      <span className="shrink-0 text-zinc-400">{statusLabel}</span>
+      {rolledBack ? (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200"
+          title={rec.rollbackId ? `回滚留档：${rec.rollbackId}` : undefined}
+        >
+          <Icon name={I.undo} size={11} />
+          {statusLabel}
+        </span>
+      ) : (
+        <span className="shrink-0 text-zinc-400">{statusLabel}</span>
+      )}
       <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">
         {rec.finishedAt ? relTimeOf(rec.finishedAt) : rec.startedAt ? `启动 ${relTimeOf(rec.startedAt)}` : '—'}
       </span>
@@ -114,8 +128,9 @@ const TraceRow: React.FC<{
         <button
           type="button"
           onClick={onRollback}
-          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98]"
-          title="记录回滚指令（只留档，不执行 git）"
+          disabled={rolledBack}
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+          title={rolledBack ? '该条留痕已回滚，无需再次记录' : '记录回滚指令（只留档，不执行 git）'}
         >
           <Icon name={I.undo} size={11} />
           回滚
@@ -248,14 +263,21 @@ export const GitWorkspaceCard: React.FC = () => {
 
   const doRollback = async () => {
     if (!confirmTarget || rolling) return;
+    // 目标已被标记回滚（如刷新时新拉的数据）→ 关闭确认态，防重复留档
+    if (confirmTarget.rolled_back === true) {
+      setConfirmTarget(null);
+      setRollbackReason('');
+      return;
+    }
     setRolling(true);
     try {
-      await rollback({
+      const ok = await rollback({
         stage: traceStage,
         seq: confirmTarget.seq,
         commit: confirmTarget.commit,
         reason: rollbackReason.trim() || '前端工作区管控（未填原因）',
       });
+      if (ok === false) return; // 后端返回 ok:false：保持确认态让用户可重试
       setConfirmTarget(null);
       setRollbackReason('');
       // 留档成功后续拉一次该阶段留痕，让「已回滚」状态可见
