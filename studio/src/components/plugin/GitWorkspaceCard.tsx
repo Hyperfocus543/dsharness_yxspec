@@ -355,6 +355,26 @@ export const GitWorkspaceCard: React.FC = () => {
   const [rollbackReason, setRollbackReason] = React.useState('');
   // 回滚留档提交中：禁用确认按钮 + 显示进度，防重复提交
   const [rolling, setRolling] = React.useState(false);
+  // 确认面板 DOM 引用 + 上一次确认目标：确认面板常驻挂载（切目标不重挂），
+  // 若在别的留痕行点了「回滚」，面板内容原地变但不在视区内、autoFocus 也不重触发，
+  // 用户看不到"现在确认的是哪条"——因此切目标时把面板滚进视区（面板头注明
+  // 留痕 #seq，配合目标行自身的「待确认」徽标，确认对象无歧义）。
+  const confirmRef = React.useRef<HTMLDivElement | null>(null);
+  const confirmingRef = React.useRef<GitStageTrace | null>(null);
+  React.useEffect(() => {
+    // 关闭确认态 → 重置上一次目标（下次打开由 autoFocus 负责首次滚入视区）
+    if (!confirmTarget) {
+      confirmingRef.current = null;
+      return;
+    }
+    // 目标已切到另一条留痕（same-trace 刷新/恢复确认态不重滚）：滚进视区
+    const changed =
+      confirmingRef.current !== null &&
+      (confirmingRef.current.seq !== confirmTarget.seq ||
+        confirmingRef.current.commit !== confirmTarget.commit);
+    confirmingRef.current = confirmTarget;
+    if (changed) confirmRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [confirmTarget]);
 
   // 挂载即拉一次工作区状态；初始 stage 对应轨迹也一起拉
   React.useEffect(() => {
@@ -691,11 +711,15 @@ export const GitWorkspaceCard: React.FC = () => {
         )}
       </div>
 
-      {/* 回滚确认态：原因输入 + 说明 */}
+      {/* 回滚确认态：原因输入 + 说明（常驻挂载；切目标时滚动进视区） */}
       {confirmTarget && (
-        <div className="rounded-lg border border-red-200 bg-red-50/40 p-2.5 space-y-2 animate-fade-in-up">
+        <div
+          ref={confirmRef}
+          className="rounded-lg border border-red-200 bg-red-50/40 p-2.5 space-y-2 animate-fade-in-up"
+        >
           <div className="text-xs text-zinc-700">
-            记录回滚：阶段 <span className="font-mono">{traceStage}</span> · commit{' '}
+            记录回滚：阶段 <span className="font-mono">{traceStage}</span> · 留痕{' '}
+            <span className="font-mono">#{confirmTarget.seq}</span> · commit{' '}
             <span className="font-mono">{shortHash(confirmTarget.commit)}</span>
           </div>
           {/* autoFocus：确认面板在卡片底部，滚动区折叠之外时自动滚入视区并直接可输入，
