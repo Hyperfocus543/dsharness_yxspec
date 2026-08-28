@@ -48,9 +48,19 @@ const LEVEL_STYLE: Record<string, string> = {
   D: 'bg-red-100 text-red-700 border-red-300',
 };
 
-/** 有分值的轮次（total 为数字）——评分趋势条数据源（纯读，无新接口）。 */
+/** 有分值的轮次（total 为数字）——评分趋势条数据源（纯读，无新接口）。
+ *  每轮去重成一条：rounds 是 score/v1 与 round/v1 两条留痕合并的（同轮 score 在
+ *  round 前），趋势条按轮画柱、柱高取该轮总分 —— 同轮两条一起画会把一轮画成两根
+ *  柱、R 标签重复。取 round 类型（含 verdict/baseline 判定信息）优先，仅有 score
+ *  时退回它；每轮恒一条，柱 key 用 r.round 稳定。 */
 function scoredRounds(s: SelfIterationStage): SelfIterationRound[] {
-  return s.rounds.filter((r) => r.total != null && Number.isFinite(r.total));
+  const byRound = new Map<number, SelfIterationRound>();
+  for (const r of s.rounds) {
+    if (r.total == null || !Number.isFinite(r.total)) continue;
+    const cur = byRound.get(r.round);
+    if (!cur || r.type === 'round') byRound.set(r.round, r); // 已有同轮 → round 判定留痕优先
+  }
+  return [...byRound.values()].sort((a, b) => a.round - b.round);
 }
 
 /**
@@ -107,7 +117,7 @@ const ScoreTrend: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
         {rows.map((r) => {
           const v = r.total as number;
           return (
-            <div key={`${r.round}-${r.type}`} className="relative flex-1 min-w-0 flex flex-col items-center gap-0.5 group">
+            <div key={r.round} className="relative flex-1 min-w-0 flex flex-col items-center gap-0.5 group">
               <div className="w-full flex items-end justify-center flex-1" style={{ height: 'calc(100% - 12px)' }}>
                 <div
                   className={`w-full max-w-[16px] rounded-sm transition-all ${
