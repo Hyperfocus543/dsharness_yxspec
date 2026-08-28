@@ -48,6 +48,101 @@ const LEVEL_STYLE: Record<string, string> = {
   D: 'bg-red-100 text-red-700 border-red-300',
 };
 
+/** 有分值的轮次（total 为数字）——评分趋势条数据源（纯读，无新接口）。 */
+function scoredRounds(s: SelfIterationStage): SelfIterationRound[] {
+  return s.rounds.filter((r) => r.total != null && Number.isFinite(r.total));
+}
+
+/**
+ * 阶段评分趋势条：把各轮 total 画成一条迷你柱状趋势（新→旧），
+ * 一眼看清自迭代分数是在涨还是跌。数据源 = 该阶段已有轮次留痕（纯前端聚合）。
+ *   · 只画有 total 的轮次；单轮/无分值 → 不渲染（不喧宾夺主）
+ *   · 柱高 = 分值 / 该阶段历史最高（高分满格，跨阶段可比）
+ *   · 趋势徽标：末轮 ≥ 历史峰值 → 绿色「新高」；末轮 < 峰值 → 琥珀「回落」；
+ *     与基线相比涨跌用「↑/↓/＝」标在标题行
+ *   · 每个柱 tooltip = R<N> + 总分 + 等级 + 收敛态；末轮判定 reason 尾行展示
+ * UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
+ */
+const ScoreTrend: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
+  const rows = scoredRounds(s);
+  if (rows.length < 2) return null; // 单轮无趋势可看，保持静默
+  const totals = rows.map((r) => r.total as number);
+  const baseline = totals[0]; // 首轮打分 = 基线（与判定逻辑同口径）
+  const last = totals[totals.length - 1];
+  const maxTotal = Math.max(...totals);
+  const lastRow = rows[totals.length - 1]; // 末轮留痕（含判定），tooltip/reason 汇总用
+  const isPeak = last >= maxTotal;
+  const dirLabel = last > baseline ? '↑' : last < baseline ? '↓' : '＝';
+  const dirTitle = `末轮 ${last} 相对首轮基线 ${baseline}：${last > baseline ? '提升' : last < baseline ? '回落' : '持平'}`;
+
+  // 柱高阈值：分值 0~100 时给最低可见高度，避免"有分但柱不可见"（纯 UI 保障）
+  const pct = (v: number) => Math.max(v > 0 ? 6 : 0, Math.round((v / maxTotal) * 100));
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50/60 px-2.5 py-2 space-y-1">
+      <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+        <span className="inline-flex items-center gap-1 shrink-0">
+          评分趋势
+          <span className="text-zinc-300">·</span>
+          <span className="tabular-nums">R{rows[0].round}→R{rows[rows.length - 1].round}</span>
+        </span>
+        <span className="inline-flex items-center gap-1.5 tabular-nums shrink-0" title={dirTitle}>
+          <span
+            className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded font-medium ${
+              isPeak
+                ? 'bg-sage-100 text-sage-700'
+                : 'bg-amber-100 text-amber-700'
+            }`}
+            title={isPeak ? `末轮 ${last} = 历史峰值，趋势向好` : `末轮 ${last} 低于历史峰值 ${maxTotal}（本轮回落）`}
+          >
+            {isPeak ? '新高' : '回落'}
+            <span className="font-mono">{last}</span>
+          </span>
+          <span className="text-zinc-400">{dirLabel}</span>
+          <span className="text-zinc-300">·</span>
+          <span className="text-zinc-500">最佳 <span className="font-semibold text-zinc-600">{maxTotal}</span></span>
+        </span>
+      </div>
+      <div className="flex items-end gap-1.5 h-7" role="img" aria-label={`阶段 ${s.token} 评分趋势：${rows.length} 轮，基线 ${baseline}，末轮 ${last}`}>
+        {rows.map((r) => {
+          const v = r.total as number;
+          return (
+            <div key={`${r.round}-${r.type}`} className="relative flex-1 min-w-0 flex flex-col items-center gap-0.5 group">
+              <div className="w-full flex items-end justify-center flex-1" style={{ height: 'calc(100% - 12px)' }}>
+                <div
+                  className={`w-full max-w-[16px] rounded-sm transition-all ${
+                    isPeak && v >= maxTotal ? 'bg-emerald-500 group-hover:bg-emerald-600' : 'bg-zinc-300 group-hover:bg-zinc-400'
+                  }`}
+                  style={{ height: `${pct(v)}%` }}
+                />
+              </div>
+              <span className="text-[9px] text-zinc-400 tabular-nums leading-none">R{r.round}</span>
+              <span
+                className="absolute -top-6 left-1/2 -translate-x-1/2 z-30 whitespace-nowrap rounded border border-zinc-200 bg-white shadow px-1.5 py-0.5 text-[10px] tabular-nums opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+              >
+                R{r.round} 总分 <span className="font-semibold text-zinc-700">{v}</span>
+                {r.level ? (
+                  <span className={`ml-1 px-0.5 rounded text-[9px] font-semibold border ${LEVEL_STYLE[r.level] || 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
+                    {r.level}
+                  </span>
+                ) : null}
+                {r.verdict === 'converge' || r.verdict === 'converge_by_maxiter' ? (
+                  <span className="ml-1 text-sage-700">收敛</span>
+                ) : null}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {lastRow?.reason ? (
+        <div className="text-[10px] text-zinc-400 truncate leading-tight" title={lastRow.reason}>
+          {lastRow.reason}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 /** ISO → 相对时间文案（刚刚 / N 分钟前 / N 小时前 / N 天前） */
 function relTimeOf(ts: string | null | undefined): string {
   if (!ts) return '—';
@@ -125,6 +220,8 @@ const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
         )}
         <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{s.rounds.length} 轮留痕</span>
       </div>
+      {/* 评分趋势（≥2 轮有分值才渲染）：一眼看清自迭代分数走向 */}
+      <ScoreTrend s={s} />
       <div className="space-y-1">
         {rows.map((r, i) => (
           <RoundRow key={`${r.round}-${r.type}-${i}`} r={r} />
