@@ -115,7 +115,11 @@ const GIT_READONLY_SUBS = new Set([
   'grep', 'count-objects', 'help', 'version',
 ]);
 
-/** 从一段 shell 命令中提取 git 子命令名（跳过 git 全局选项，如 -c/-C/--no-pager）。 */
+/** 需要带值 token 的 git 全局选项（-C/-c 双 token 形态占 2 个，`=` 连写形态占 1 个）。
+ *  跳过其值 token，否则 `git -C <dir> status` 会把目录误判为子命令名。 */
+const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
+
+/** 从一段 shell 命令中提取 git 子命令名（跳过 git 全局选项，如 -C/-c/--no-pager）。 */
 function gitSubcommandOf(segment) {
   const m = /\bgit(?:\.exe)?\b/.exec(segment);
   if (!m) return null;
@@ -123,7 +127,8 @@ function gitSubcommandOf(segment) {
   for (let i = 0; i < tokens.length; i += 1) {
     const t = tokens[i];
     if (!t.startsWith('-')) return t;
-    if (t === '-c' || t.startsWith('-c=')) i += 1; // git -c key=val 占两个 token
+    if (GIT_GLOBAL_VALUE_OPTS.has(t)) i += 1; // -C <dir> 占两个 token（带 = 连写的 -C=<dir> 已被前一行判为值，不落到此处）
+    if (t === '-c') i += 1; // git -c key=val 占两个 token
   }
   return null;
 }
