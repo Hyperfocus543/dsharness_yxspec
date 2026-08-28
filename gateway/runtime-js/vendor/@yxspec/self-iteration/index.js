@@ -264,6 +264,13 @@ function advanceState(st, roundNo, total, score, verdict) {
     if (typeof total === 'number') st.bestTotal = Math.round(total * 100) / 100
   }
   st.lastScore = null // 消费掉本轮打分暂存
+  // 比较基线锚定（"改前冻结快照"）：首轮打分即原始架构分数，冻结为 baseline，
+  // 后续轮次与之对比（decide 里 total <= baselineTotal → degrade 回滚）。
+  // 此前 baselineTotal 从未被写入 → 降级护栏永远不触发。空 run-state 重启 /
+  // 换阶段时 baseline 复位为 null，由新一轮首分重新锚定。
+  if (st.baselineTotal == null && typeof total === 'number') {
+    st.baselineTotal = Math.round(total * 100) / 100
+  }
   return st
 }
 
