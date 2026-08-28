@@ -237,17 +237,16 @@ const TraceDiffPreview: React.FC<{ base: string | null; target: string | null; o
   const [data, setData] = React.useState<GitDiffResult | null>(null);
   const [loading, setLoading] = React.useState(false);
 
-  // 无目标 commit 无法 diff；open 才拉取（避免无谓请求），相同 base/target 命中缓存
-  const usable = open && !!target && base !== target;
+  // 无目标 commit 无法 diff；首条留痕（base=null）无上一条可对比，不拉取；
+  // open 才拉取（避免无谓请求），相同 base/target 命中缓存
+  const usable = open && !!target && !!base && base !== target;
   React.useEffect(() => {
     if (!usable) return;
     let cancelled = false;
     setLoading(true);
     // range 模式：path 传空（网关 commit 范围模式不读路径），from/to 指定 diff 范围。
-    // 首条留痕无上一条 commit（base=null）：只传 to，diff from 缺失时等价
-    // `git diff <to>`（to..工作区），且不会把 "undefined" 字符串发出去（网关
-    // from 校验只认 4-40 位 hex，undefined 会判成脏文件模式 → 空 path 400）。
-    getGitDiff('', false, base ? { from: base, to: target ?? undefined } : { to: target ?? undefined })
+    // usable 已保证 base/target 均有值：`from...to` 三-dot 增量 diff。
+    getGitDiff('', false, { from: base, to: target })
       .then((d) => {
         if (!cancelled) setData(d);
       })
@@ -268,6 +267,9 @@ const TraceDiffPreview: React.FC<{ base: string | null; target: string | null; o
   }
   if (base === target) {
     return <TraceDiffNote text="该条留痕与上一条在同一 commit（无增量 diff）" />;
+  }
+  if (!base) {
+    return <TraceDiffNote text="首条留痕无上一条 commit 可对比，无增量 diff" />;
   }
 
   const diff = data?.diff;
