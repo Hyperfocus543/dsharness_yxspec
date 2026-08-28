@@ -437,6 +437,22 @@ async function execSelfIterScore(args, state) {
   }
 
   const parsed = parseScoreLine(res.stdout)
+  // 降级③：脚本正常退出但 stdout 无法解析（版本/输出格式变化、非本阶段错误消息）。
+  // 此时 parseScoreLine 返回 null，若把 `parsed:null` 当"成功打分"（degraded:false），
+  // execute 会用哨兵 -1 当作分数回填 tool 结果 → decide() 把 -1 当真分参与降级
+  // 判定（total<=baseline 恒真）→ 自迭代无限 degrade 死循环。无分可评必须显式降级，
+  // 不向 agent 抛 -1；且不暂存 lastScore（下方 execute 仅 res.ok && !res.degraded
+  // 才写盘），本轮按"无分轮"走 roundNo 兜底。
+  if (!parsed) {
+    return {
+      ok: true,
+      degraded: true,
+      reason: 'score-parse-failed',
+      message: `score_aggregate.py 输出无法解析（可能脚本版本/输出格式变化或非本阶段错误消息）。stdout: ${String(res.stdout).slice(0, 200)}。降级：请走提示词引导路径，禁止 LLM 手写分数。`,
+      error: null,
+      stdout: res.stdout, stderr: res.stderr,
+    }
+  }
   return {
     ok: true,
     degraded: false,
@@ -445,9 +461,7 @@ async function execSelfIterScore(args, state) {
     stdout: res.stdout,
     parsed,
     gateOk: inferGateOk(res.stdout),
-    message: parsed
-      ? `Master=${parsed.master} Stage=${parsed.stage} Total=${parsed.total} 等级=${parsed.level} 弱项=${parsed.weak.join(',') || '—'}`
-      : res.stdout,
+    message: `Master=${parsed.master} Stage=${parsed.stage} Total=${parsed.total} 等级=${parsed.level} 弱项=${parsed.weak.join(',') || '—'}`,
   }
 }
 
