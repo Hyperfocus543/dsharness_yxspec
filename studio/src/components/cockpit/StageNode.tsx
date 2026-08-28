@@ -10,6 +10,7 @@ import { I } from '../ui/icons';
 import { StageGateBar } from './StageGateBar';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import type { StageIterBadge } from '../../utils/stageIterBadge';
+import { gateEvidence, gateEvidenceTooltip, type GateEvidence } from '../../utils/gateEvidence';
 
 // 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
 // emerald(赤陶) 只留当前态/交互（ring、派活按钮、当前标签）
@@ -74,6 +75,28 @@ const IterBadge: React.FC<{ b: StageIterBadge }> = ({ b }) => {
   );
 };
 
+/** 轨迹门控徽标（全景卡 × 轨迹门控联动）：策略 artifact+trajectory 且有三态才渲染。
+ *  色随轨迹证据：通过 sage 绿 / 未验证 amber / 打回 red；tooltip 给门控证据详情。
+ *  数据源 = stageStore 已合并进 StageStatus 的 gate_policy/gate_trajectory/gate_reason
+ *  （GET /api/trajectory-gate 全量，与门控视图同数据源），零新请求。 */
+const GateEvidenceBadge: React.FC<{ ev: GateEvidence }> = ({ ev }) => {
+  const toneCls =
+    ev.tone === 'sage'
+      ? 'bg-sage-100 text-sage-700 border-sage-300'
+      : ev.tone === 'red'
+        ? 'bg-red-100 text-red-700 border-red-300'
+        : 'bg-amber-100 text-amber-700 border-amber-300';
+  return (
+    <span
+      className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[10px] font-semibold cursor-help"
+      title={`轨迹门控（hover 查看证据）\n${gateEvidenceTooltip(ev)}`}
+    >
+      <Icon name={I.tag} size={9} weight="fill" />
+      {ev.label}
+    </span>
+  );
+};
+
 interface StageNodeProps {
   token: string;
   mapping: StageMapping;
@@ -102,6 +125,9 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
   // 被阻塞时可跳去第一个未完成的上游（仅真阻塞时给点击）
   const gateUpstreams = gateBlocked ? mapping.upstream : [];
   const busy = sending && dispatchingCmd === mapping.command;
+  // 轨迹门控徽标（全景卡 × 轨迹门控联动）：策略 artifact+trajectory 且有三态才给，
+  // 数据源 = status 已合并的轨迹门控字段，零新请求（详见 gateEvidence.ts）。
+  const gateEv = React.useMemo(() => gateEvidence(status), [status]);
 
   // 卡片右上角悬浮"一键派活"：点击派活当前阶段，阻止冒泡避免误触卡片 onClick
   const handlePlayClick = (e: React.MouseEvent) => {
@@ -169,6 +195,8 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
         <span className="flex items-center gap-1.5 shrink-0">
           {/* 自迭代徽标：该阶段跑过自迭代（有分轮）才渲染，色随收敛/退化/迭代中 */}
           {iterBadge && <IterBadge b={iterBadge} />}
+          {/* 轨迹门控徽标：策略 artifact+trajectory 且有三态才渲染（hover 看门控证据） */}
+          {gateEv && <GateEvidenceBadge ev={gateEv} />}
           <span className={iconTone}>
             <Icon name={IconComp} size={16} />
           </span>
