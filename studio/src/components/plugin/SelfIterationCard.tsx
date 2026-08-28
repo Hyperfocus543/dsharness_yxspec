@@ -19,6 +19,15 @@ import {
   type SelfIterationRound,
   type SelfIterationStage,
 } from '../../utils/ipc';
+import {
+  summarizeStages,
+  convergedCount,
+  runningCount,
+  degradedCount,
+  bestBadgeLabel,
+  worstBadgeLabel,
+  type StageRunSummary,
+} from '../../utils/selfIterationSummary';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
 const VERDICT_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
@@ -211,6 +220,37 @@ const RoundRow: React.FC<{ r: SelfIterationRound }> = ({ r }) => {
   );
 };
 
+/** 单阶段 run 汇总徽标（跨阶段横截面）：收敛/退化色点 + 最佳分 + 最差轮次。
+ *  数据源 = 本卡已拉取的 SelfIterationOverview（纯前端聚合，零新接口）。 */
+const StageRunBadge: React.FC<{ s: StageRunSummary }> = ({ s }) => {
+  const bestLabel = bestBadgeLabel(s);
+  const worstLabel = worstBadgeLabel(s);
+  if (!bestLabel && !worstLabel) return null; // 无有分轮 → 不占位（静默降级）
+  const dot = s.degraded ? 'bg-red-500' : s.converged ? 'bg-sage-500' : 'bg-amber-500';
+  const dotTitle = s.degraded
+    ? '该阶段有轮次被判退化（低于基线回滚）'
+    : s.converged
+      ? '该阶段已收敛'
+      : '该阶段仍在迭代';
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md border border-zinc-200 bg-white text-[10px] font-mono text-zinc-600"
+      title={[
+        s.degraded ? '状态：退化（低于基线回滚）' : s.converged ? '状态：已收敛' : '状态：迭代中',
+        bestLabel ? `最佳：${bestLabel}` : null,
+        worstLabel ? `最差轮：${worstLabel}` : null,
+      ].filter((l): l is string => Boolean(l)).join(' · ')}
+    >
+      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} aria-hidden title={dotTitle} />
+      <span className="max-w-[96px] truncate" title={s.token}>
+        {s.token}
+      </span>
+      {bestLabel && <span className="text-sage-700 shrink-0">↑{bestLabel}</span>}
+      {worstLabel && <span className="text-zinc-400 shrink-0">↓{worstLabel}</span>}
+    </span>
+  );
+};
+
 /** 单阶段评分线：阶段名 + 最近状态 + 轮次瀑布（新→旧 或 全部） */
 const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
   // 轮次留痕时间升序，展示新→旧（最近一次判定在最上）
@@ -334,6 +374,18 @@ export const SelfIterationCard: React.FC = () => {
   const { state, stages } = data;
   const empty = stages.length === 0;
 
+  // 跨阶段 run 汇总（纯前端聚合）：收敛/退化/进行中计数 + 每阶段最佳分/最差轮。
+  // 数据源 = 本卡已拉取的 SelfIterationOverview，零新接口；空数据 → 空数组，不渲染。
+  const summaries = React.useMemo(() => summarizeStages(data), [data]);
+  const summaryStats = React.useMemo(
+    () => ({
+      converged: convergedCount(summaries),
+      running: runningCount(summaries),
+      degraded: degradedCount(summaries),
+    }),
+    [summaries],
+  );
+
   return (
     <div className="p-4 space-y-4">
       {/* 标题行 + 刷新 */}
@@ -403,6 +455,38 @@ export const SelfIterationCard: React.FC = () => {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 跨阶段 run 汇总：收敛/退化/进行中计数 + 各阶段最佳分/最差轮（新→旧）。
+          数据源 = 本卡已拉取的 SelfIterationOverview，纯前端聚合，零新接口；
+          无留痕（empty）时隐藏，不喧宾夺主。 */}
+      {!empty && summaries.length > 0 && (
+        <div className="rounded-lg border border-zinc-200 bg-white p-2.5 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap text-[11px] text-zinc-500">
+            <span className="inline-flex items-center gap-1 font-medium">
+              <Icon name={I.gauge} size={12} />
+              自迭代 run 汇总
+            </span>
+            <span className="inline-flex items-center gap-1 shrink-0" title="已收敛阶段（latest 判定 converge）">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-sage-500" aria-hidden />
+              收敛 {summaryStats.converged}
+            </span>
+            <span className="inline-flex items-center gap-1 shrink-0" title="仍在该阶段迭代 / 未收敛">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" aria-hidden />
+              迭代中 {summaryStats.running}
+            </span>
+            <span className="inline-flex items-center gap-1 shrink-0" title="有轮次低于基线被判定退化">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" aria-hidden />
+              退化 {summaryStats.degraded}
+            </span>
+            <span className="ml-auto text-[10px] text-zinc-300">best ↑ 最佳 · ↓ 最差轮</span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {summaries.map((s) => (
+              <StageRunBadge key={s.token} s={s} />
+            ))}
+          </div>
         </div>
       )}
 
