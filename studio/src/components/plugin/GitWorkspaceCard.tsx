@@ -366,8 +366,11 @@ export const GitWorkspaceCard: React.FC = () => {
   // 最近 5 条 commit（取带 message 的，倒序排列）；后端字段 recentCommits，旧字段 recent 兜底
   const recent = [...(status?.recentCommits ?? status?.recent ?? [])].slice(0, 5);
   const tags = status?.tags ?? [];
+  // git 连接态：status 存在时 loadError 必为 false（loadError 会在上方 early-return 成
+  // EmptyState，见 403-425 行），因此本分支实际只有两态 —— git 可用（sage 绿）或
+  // git 不可用（amber 警告：网关在线但工作区非 git 仓库 / 未装 git）。
+  // 旧实现把 !gitOk 渲染成「未连接」灰标，与下方红色 error 条语义冲突（网关明明连着）。
   const gitOk = status?.gitAvailable === true;
-  const connected = gitOk && !loadError;
 
   const doRollback = async () => {
     if (!confirmTarget || rolling) return;
@@ -466,12 +469,12 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
           <span
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
-              connected ? 'bg-sage-100 text-sage-700' : 'bg-zinc-100 text-zinc-500'
+              gitOk ? 'bg-sage-100 text-sage-700' : 'bg-amber-100 text-amber-800'
             }`}
-            title={connected ? 'git 可用（网关已连）' : 'git 不可用或网关离线'}
+            title={gitOk ? 'git 可用（网关已连）' : '网关在线但 git 不可用：工作区非 git 仓库或未安装 git（详见下方错误条）'}
           >
-            <span className={`inline-block w-1.5 h-1.5 rounded-full ${connected ? 'bg-sage-500' : 'bg-zinc-400'}`} aria-hidden />
-            {connected ? '已连接' : '未连接'}
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${gitOk ? 'bg-sage-500' : 'bg-amber-500'}`} aria-hidden />
+            {gitOk ? '已连接' : 'git 不可用'}
           </span>
         </div>
         <div className="font-mono text-zinc-800 text-sm truncate" title={status.branch ?? ''}>
