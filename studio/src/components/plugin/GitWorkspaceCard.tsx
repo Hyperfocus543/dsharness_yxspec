@@ -461,7 +461,9 @@ export const GitWorkspaceCard: React.FC = () => {
             <Icon name={I.branch} size={15} weight="fill" />
           </span>
           <span className="text-sm font-bold text-zinc-800">Git 工作区管控</span>
-          <span className="text-xs text-zinc-400">（{dirtyCount} 处改动）</span>
+          <span className="text-xs text-zinc-400">
+            {gitOk ? `（${dirtyCount} 处改动）` : '（git 不可用，状态未知）'}
+          </span>
         </div>
         <button
           type="button"
@@ -537,9 +539,15 @@ export const GitWorkspaceCard: React.FC = () => {
       <div className="space-y-1.5">
         <SectionLabel>工作区状态</SectionLabel>
         {dirtyCount === 0 ? (
-          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
-            工作区干净，没有未提交的改动
-          </div>
+          gitOk ? (
+            <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
+              工作区干净，没有未提交的改动
+            </div>
+          ) : (
+            <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-amber-200 rounded-lg">
+              git 不可用，无法读取工作区状态（非 git 仓库或未安装 git）
+            </div>
+          )
         ) : (
           <div className="space-y-1">
             {status.dirtyFiles.map((f: GitDirtyFile) => {
@@ -599,9 +607,15 @@ export const GitWorkspaceCard: React.FC = () => {
       <div className="space-y-1.5">
         <SectionLabel>最近提交</SectionLabel>
         {recent.length === 0 ? (
-          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
-            暂无 commit 记录
-          </div>
+          gitOk ? (
+            <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
+              暂无 commit 记录
+            </div>
+          ) : (
+            <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-amber-200 rounded-lg">
+              git 不可用，无法读取最近提交
+            </div>
+          )
         ) : (
           <div className="space-y-1">
             {recent.map((c) => (
