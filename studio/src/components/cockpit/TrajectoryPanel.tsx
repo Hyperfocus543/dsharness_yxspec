@@ -261,20 +261,41 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
             <Icon name={I.download} size={12} weight="bold" />
             {busy === 'export' ? '导出中…' : '导出 OTel'}
           </button>
-          {/* Phase 3：标记该阶段最新轨迹回滚（确认后调 /rollback；网关只发指令留档不执行 git） */}
-          <button
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border transition-all active:scale-[0.98] disabled:opacity-50 ${
-              confirming
-                ? 'border-red-400 bg-red-50 text-red-700'
-                : 'border-zinc-200 bg-white text-zinc-600 hover:border-red-300 hover:text-red-600'
-            }`}
-            onClick={handleRollback}
-            disabled={busy !== null || view.totalRuns === 0}
-            title={view.totalRuns === 0 ? '该阶段尚无轨迹可回滚' : '标记该阶段最新轨迹回滚（回滚协议：发指令留档）'}
-          >
-            <Icon name={I.undo} size={12} weight="bold" />
-            {busy === 'rollback' ? '标记中…' : confirming ? '确认回滚？' : '标记回滚'}
-          </button>
+          {/* Phase 3：标记该阶段最新轨迹回滚（确认后调 /rollback；网关只发指令留档不执行 git）。
+              两段式确认带逃生门：先点「标记回滚」进入确认态（按钮变红 + 并排出现「取消」），
+              再点「确认回滚」才真正发指令留档——避免误点后无路可退被迫执行。 */}
+          {confirming ? (
+            <>
+              <button
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border border-red-400 bg-red-50 text-red-700 transition-all active:scale-[0.98] disabled:opacity-50"
+                onClick={handleRollback}
+                disabled={busy !== null || view.totalRuns === 0}
+                title={view.totalRuns === 0 ? '该阶段尚无轨迹可回滚' : '确认标记该阶段最新轨迹回滚（发指令留档，不执行 git）'}
+              >
+                <Icon name={I.undo} size={12} weight="bold" />
+                {busy === 'rollback' ? '标记中…' : '确认回滚'}
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300 hover:text-zinc-600 transition-all active:scale-[0.98] disabled:opacity-50"
+                onClick={() => setConfirming(false)}
+                disabled={busy !== null}
+                title="取消回滚"
+              >
+                取消
+              </button>
+            </>
+          ) : (
+            <button
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-600 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50"
+              onClick={handleRollback}
+              disabled={busy !== null || view.totalRuns === 0}
+              title={view.totalRuns === 0 ? '该阶段尚无轨迹可回滚' : '标记该阶段最新轨迹回滚（回滚协议：发指令留档）'}
+            >
+              <Icon name={I.undo} size={12} weight="bold" />
+              标记回滚
+            </button>
+          )}
         </div>
       </div>
 
