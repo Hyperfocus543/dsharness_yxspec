@@ -191,7 +191,7 @@ function emptyState(stage) {
     converged: false,
     status: 'running', // running | converged | dropped | stopped
     stopPoint: null,
-    baselineSnapshot: null,
+    baselineTotal: null, // 比较基线（首轮打分冻结，advanceState 锚定 / decide 降级判定）
     bestTotal: null,
     lastScore: null, // { total, level, weak, gateOk }（本轮打分暂存）
     updatedAt: now,
