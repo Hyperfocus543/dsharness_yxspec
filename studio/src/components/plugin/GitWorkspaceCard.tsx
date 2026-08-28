@@ -19,6 +19,7 @@ import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
 import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace } from '../../utils/ipc';
+import { gitTraceBase } from '../../utils/gitTrace';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -595,7 +596,7 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
         ) : commits && commits.length > 0 ? (
           <div className="space-y-1">
-            {commits.map((rec, i) => (
+            {commits.map((rec) => (
               <TraceRow
                 key={`${rec.seq}-${rec.commit}`}
                 rec={rec}
@@ -605,7 +606,7 @@ export const GitWorkspaceCard: React.FC = () => {
                   setConfirmTarget(rec);
                   setRollbackReason('');
                 }}
-                prevCommit={i > 0 ? commits[i - 1]?.commit ?? null : null}
+                prevCommit={gitTraceBase(commits, rec.seq)}
                 gitOk={gitOk}
               />
             ))}
