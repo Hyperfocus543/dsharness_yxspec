@@ -18,6 +18,8 @@ import { StageNode } from './StageNode';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
+import { fetchSelfIteration, type SelfIterationOverview } from '../../utils/ipc';
+import { stageIterBadges } from '../../utils/stageIterBadge';
 
 /** 流程组顺序（ASPICE V+ 权威顺序，流程条 + 分组网格共用） */
 const GROUP_ORDER = ['ACQ', 'SYS', 'HWE', 'SWE', 'SQT', 'COMP', 'REL'] as const;
@@ -282,6 +284,21 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
   const [hoverToken, setHoverToken] = React.useState<string | null>(null);
   // 卡片内联轨迹展开（每个单元卡独立展示/调取本模块轨迹，点按钮展开收起）
   const [trajOpen, setTrajOpen] = React.useState<Set<string>>(new Set());
+  // 阶段自迭代徽标（全景卡 × 自迭代联动）：mount 时拉一次 /api/self-iteration，
+  // 只读展示，失败静默降级（自迭代卡不可用不影响全景卡）。
+  const [iterData, setIterData] = React.useState<SelfIterationOverview | null>(null);
+  const iterBadges = React.useMemo(() => stageIterBadges(iterData), [iterData]);
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchSelfIteration()
+      .then((d) => {
+        if (!cancelled) setIterData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 打开视图自动定位到当前进行阶段（略过上方的已实现阶段）：
   // mount 后 / loading 结束 / currentStage 变化时各滚一次；ref 去重，轮询刷新不重复滚
@@ -370,6 +387,7 @@ export const StagePanorama: React.FC<StagePanoramaProps> = ({
                             onSelectStage={onSelectStage}
                             onViewTrajectory={onViewTrajectory}
                             expanded={trajExpanded}
+                            iterBadge={iterBadges.get(token) ?? null}
                             onToggleTrajectory={(t) => {
                               setTrajOpen((prev) => {
                                 const next = new Set(prev);

@@ -9,6 +9,7 @@ import { Icon } from '../ui';
 import { I } from '../ui/icons';
 import { StageGateBar } from './StageGateBar';
 import { TrajectoryPanel } from './TrajectoryPanel';
+import type { StageIterBadge } from '../../utils/stageIterBadge';
 
 // 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
 // emerald(赤陶) 只留当前态/交互（ring、派活按钮、当前标签）
@@ -42,6 +43,37 @@ const STATUS_ICON_TONE: Record<string, string> = {
   stale: 'text-purple-600',
 };
 
+/** 阶段自迭代徽标（全景卡 × 自迭代联动）：有分轮才渲染。
+ *  色随判定：收敛 sage 绿 / 退化 red / 迭代中 amber；tooltip 给分数/轮次/判定原因。
+ *  数据源 = StagePanorama 已拉取的 /api/self-iteration（与自迭代卡同接口），零新请求。 */
+const IterBadge: React.FC<{ b: StageIterBadge }> = ({ b }) => {
+  const toneCls =
+    b.tone === 'converged'
+      ? 'bg-sage-100 text-sage-700 border-sage-300'
+      : b.tone === 'degraded'
+        ? 'bg-red-100 text-red-700 border-red-300'
+        : 'bg-amber-100 text-amber-700 border-amber-300';
+  const toneTitle =
+    b.tone === 'converged' ? '已收敛' : b.tone === 'degraded' ? '退化（低于基线回滚）' : '迭代中';
+  return (
+    <span
+      className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold ${toneCls}`}
+      title={[
+        `自迭代：${toneTitle}`,
+        `最佳分 R${b.rounds} 轮 · ${b.total}`,
+        b.verdict ? `判定：${b.verdict}` : null,
+        b.reason ? `原因：${b.reason}` : null,
+      ]
+        .filter((l): l is string => Boolean(l))
+        .join('\n')}
+    >
+      <Icon name={I.chartBar} size={10} weight="fill" />
+      <span className="tabular-nums">{b.total}</span>
+      <span className="text-[9px] font-normal opacity-70">R{b.rounds}</span>
+    </span>
+  );
+};
+
 interface StageNodeProps {
   token: string;
   mapping: StageMapping;
@@ -55,9 +87,11 @@ interface StageNodeProps {
   expanded?: boolean;
   /** 轨迹展开/收起切换回调 */
   onToggleTrajectory?: (token: string) => void;
+  /** 阶段自迭代徽标数据（全景卡 × 自迭代联动；有分轮才给 → 卡片渲染迷你徽标） */
+  iterBadge?: StageIterBadge | null;
 }
 
-export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage, onViewTrajectory, expanded, onToggleTrajectory }) => {
+export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, isCurrent, onSelectStage, onViewTrajectory, expanded, onToggleTrajectory, iterBadge }) => {
   const color = STATUS_COLOR[status.status] || STATUS_COLOR.pending;
   const IconComp = STATUS_ICON[status.status] || STATUS_ICON.pending;
   const iconTone = STATUS_ICON_TONE[status.status] || 'text-zinc-400';
@@ -132,8 +166,12 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
       </button>
       <div className="flex items-center justify-between">
         <span className="text-xs font-mono text-zinc-500">{mapping.aspice}</span>
-        <span className={iconTone}>
-          <Icon name={IconComp} size={16} />
+        <span className="flex items-center gap-1.5 shrink-0">
+          {/* 自迭代徽标：该阶段跑过自迭代（有分轮）才渲染，色随收敛/退化/迭代中 */}
+          {iterBadge && <IterBadge b={iterBadge} />}
+          <span className={iconTone}>
+            <Icon name={IconComp} size={16} />
+          </span>
         </span>
       </div>
       <div className="text-sm font-semibold mt-1 break-words text-zinc-800" title={token}>
