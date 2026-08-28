@@ -9,6 +9,11 @@
 // 顶部统计：通过 / 待产物 / 阻塞 计数。
 // dshState 为 null → 「等待 dsh_state 加载」占位；gate 为 null（如 init）→「无门控」。
 // command 从 STAGE_TABLE[token].command 取。
+//
+// 轨迹门控徽标（叠层，不取代三态底色）：gate_policy==='artifact+trajectory' 的
+// 阶段在卡片右上叠加「迹」徽标，色随轨迹证据三态（gate_trajectory），
+// hover 显示门控证据 tooltip（策略/轨迹三态/原因/产物命中）。数据源 =
+// stageStore 已拉取的 /api/trajectory-gate 全量汇总，不额外发请求。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
@@ -60,11 +65,41 @@ const STATE_LABEL: Record<GateState, string> = {
   none: '无门控',
 };
 
+/** 轨迹证据三态 → 徽标文案/样式（与 TrajectoryPanel GATE_BADGE 语义一致）。 */
+const TRAJ_BADGE: Record<string, { label: string; cls: string; tone: 'sage' | 'amber' | 'red' }> = {
+  verified: { label: '迹·通过', cls: 'bg-sage-100 text-sage-700 border-sage-300', tone: 'sage' },
+  unverified: { label: '迹·未验证', cls: 'bg-amber-100 text-amber-700 border-amber-300', tone: 'amber' },
+  blocked: { label: '迹·打回', cls: 'bg-red-100 text-red-700 border-red-300', tone: 'red' },
+};
+
+/** 门控打回/警告原因 → 人类可读文案（与 useStageDispatch 契约一致）。 */
+const REASON_TEXT: Record<string, string> = {
+  'trajectory-blocked': '轨迹证据打回（failed/interrupted/反复失败）',
+  'trajectory-unverified': '轨迹存在但缺关键证据（无 turn/end 或全工具失败）',
+  'no-trajectory': '无轨迹记录（该阶段从未执行）',
+  'artifact-passed-no-trajectory': '产物命中但无轨迹（策略 artifact+trajectory 需证据）',
+  'artifact-missing': '产物缺失',
+  'upstream-blocked': '上游阶段未完成',
+};
+
 export const GateOverview: React.FC = () => {
   const dshState = useStageStore((s) => s.dshState);
   const stages = useStageStore((s) => s.stages);
   const { dispatch, sending, dispatchingCmd } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
+
+  // 轨迹门控汇总（stageStore 已在 loadDshState 时拉取 /api/trajectory-gate 全量，
+  // 各阶段 gate_trajectory/gate_policy/gate_reason 已合并进 stages）——直接复用，
+  // 不额外发请求。数据缺失（网关未起/未拉取）→ undefined，卡片不渲染「迹」徽标。
+  const trajGateOf = React.useCallback((token: string) => {
+    const s = stages[token as StageToken];
+    if (!s?.gate_policy) return null;
+    return {
+      policy: s.gate_policy,
+      status: s.gate_trajectory ?? null,
+      reason: s.gate_reason ?? null,
+    };
+  }, [stages]);
 
   const cards = React.useMemo<GateCardData[]>(() => {
     if (!dshState?.stages) return [];
@@ -187,6 +222,7 @@ export const GateOverview: React.FC = () => {
                       statusLabel={stages[token]?.status}
                       busy={busy(token)}
                       onClick={() => dispatchFor(token)}
+                      trajGate={trajGateOf(token)}
                     />
                   );
                 })}
@@ -223,22 +259,42 @@ const StatTile: React.FC<{
   );
 };
 
+/** 轨迹门控叠加信息（GateOverview 透传；null = 非轨迹策略/无数据 → 不渲染徽标）。 */
+interface TrajGateInfo {
+  policy: 'artifact' | 'artifact+trajectory';
+  status: 'verified' | 'unverified' | 'blocked' | null;
+  reason: string | null;
+}
+
 const GateCard: React.FC<{
   card: GateCardData;
   statusLabel?: string;
   busy: boolean;
   onClick: () => void;
-}> = ({ card, statusLabel, busy, onClick }) => {
+  trajGate?: TrajGateInfo | null;
+}> = ({ card, statusLabel, busy, onClick, trajGate }) => {
   const tone = STATE_TONE[card.state];
   const label = STATE_LABEL[card.state];
   // 异常（待产物 / 阻塞）才可点击派活；通过 / 无门控为纯展示
   const actionable = card.state === 'pending_spec' || card.state === 'blocked';
   const cmd = STAGE_TABLE[card.token]?.command || '';
+  // 轨迹证据徽标：仅 artifact+trajectory 策略显示；无三态时按「未验证」兜底（产物命中但无轨迹）
+  const trajBadge = trajGate?.policy === 'artifact+trajectory'
+    ? TRAJ_BADGE[trajGate.status ?? 'unverified']
+    : null;
+  const trajTooltip = [
+    `门控策略：${trajGate?.policy ?? 'artifact'}`,
+    `产物：${card.gate?.spec_hit ? '已命中' : '缺失'}`,
+    `轨迹证据：${trajGate?.status ? (TRAJ_BADGE[trajGate.status]?.label ?? trajGate.status) : '未参与/无数据'}`,
+    trajGate?.reason ? `判定：${REASON_TEXT[trajGate.reason] ?? trajGate.reason}` : null,
+  ]
+    .filter((l): l is string => Boolean(l))
+    .join('\n');
 
   return (
     <button
       type="button"
-      className={`text-left rounded-lg border-2 p-2.5 transition-all ${tone.border} ${tone.bg} ${
+      className={`text-left relative rounded-lg border-2 p-2.5 transition-all ${tone.border} ${tone.bg} ${
         actionable
           ? 'cursor-pointer hover:shadow-md active:scale-[0.98]'
           : 'cursor-default'
@@ -250,6 +306,15 @@ const GateCard: React.FC<{
           : cmd || `未定义命令（gate 为 null）`
       }
     >
+      {trajBadge && (
+        <span
+          className={`absolute -top-2 -right-2 px-1.5 py-0.5 rounded-full border text-[10px] font-semibold shadow-sm inline-flex items-center gap-0.5 ${trajBadge.cls}`}
+          title={`轨迹证据（hover 查看门控证据）\n${trajTooltip}`}
+        >
+          <Icon name={I.tag} size={9} weight="fill" />
+          {trajBadge.label}
+        </span>
+      )}
       <div className="flex items-center justify-between gap-1">
         <span className="text-xs font-mono text-zinc-500 truncate">
           {STAGE_TABLE[card.token]?.aspice || '—'}

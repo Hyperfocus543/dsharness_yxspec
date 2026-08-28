@@ -70,6 +70,7 @@ import {
   ArrowSquareOut,
   PlugsConnected,
   Storefront,
+  Tag,
 } from '@phosphor-icons/react';
 
 export const I = {
@@ -140,6 +141,7 @@ export const I = {
   arrowSquareOut: ArrowSquareOut,
   plugs: PlugsConnected,
   storefront: Storefront,
+  tag: Tag,
 } as const;
 
 export type IconName = keyof typeof I;
