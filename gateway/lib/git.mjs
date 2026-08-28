@@ -160,6 +160,7 @@ export async function getStatus() {
       base.recentCommits.push({
         hash: sp === -1 ? line.trim() : line.slice(0, sp),
         subject: sp === -1 ? '' : line.slice(sp + 1),
+        message: sp === -1 ? '' : line.slice(sp + 1), // 与前端 GitRecentCommit.message 对齐（原只发 subject → 前端 message 恒缺，提交说明列显示"无提交说明"）
       })
     }
   }
