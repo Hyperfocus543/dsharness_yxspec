@@ -153,8 +153,13 @@ function gitSubUnsafe(sub, segment) {
     );
   }
   if (sub === 'tag') {
-    // 只读：无参（列出）或 -l/--list；其余（打标签/删标签/带 flag）拒绝
-    return !/^(?:-l|--list)?$/.test(gitArgsAfter('tag', segment));
+    // 只读：无参（列出）、-l/--list [pattern]（列出过滤，如 `git tag -l 'v1.*'`）。
+    // pattern 是列出参数不是子命令，此前 ^(?:-l|--list)?$ 把带 pattern 的只读列出
+    // 误判为拒绝（误伤）；pattern 以 - 开头的一律按不匹配处理（宁可误伤不放过，
+    // 防 `-l -d`/`-l --delete` 这类 flag 混排）。其余（打标签/删标签/带 flag）拒绝。
+    const after = gitArgsAfter('tag', segment);
+    if (after === '' || /^-l(?:[ \t]+[^-]\S*)?$/.test(after) || /^--list(?:[ \t]+[^-]\S*)?$/.test(after)) return false;
+    return true;
   }
   if (sub === 'remote') {
     // 只读：无参（列出）、-v/--verbose、show；其余（add/remove/rm/set-url/...）拒绝
