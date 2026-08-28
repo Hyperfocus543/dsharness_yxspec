@@ -15,9 +15,11 @@ gateway/runtime-data/trajectory/
 
 # night 运行时产物（编排脚本入库，日志/清单不入）
 night/log/
+night/log-night2/
 night/*.out
 night/manifest.json
 night/SUMMARY.md
+night/SUMMARY-night2.md
 night/stop-flag
 night/commit-msg.txt
 night/AUDIT_SUMMARY.md
