@@ -11,6 +11,9 @@ set -u
 ROOT="D:/Work/04_Temp/yxspec-studio-release"
 NIGHT="$ROOT/night"
 CLAUDE_BIN="/c/Users/Administrator/AppData/Roaming/npm/claude"
+# Git bash 的 timeout（cmd 环境 PATH 会解析到 C:\Windows\System32\timeout.exe，必须显式绝对路径）
+TIMEOUT_BIN="/usr/bin/timeout"
+[ -x "$TIMEOUT_BIN" ] || TIMEOUT_BIN=""
 MAX_CONSECUTIVE_FAIL=3          # 连续失败停轮（不是停整晚，换下一任务类型）
 END_AT="${END_AT:-13:00}"        # 到点自动停（24h HH:MM）
 START=$(date +%s)
@@ -57,10 +60,17 @@ run_agent() {
   local TASK="$1" ROUND="$2" PROMPT="$3" OUT="$LOG_DIR/$TASK-r$ROUND.out"
   local TIMEOUT_S="${4:-1800}"   # 默认 30 分钟；verify 传短超时
   log "  → 子代理 $TASK 第${ROUND}轮 (${OUT##*/}) 超时=${TIMEOUT_S}s"
-  (cd "$ROOT" && timeout "$TIMEOUT_S" "$CLAUDE_BIN" -p "$PROMPT" \
-    --dangerously-skip-permissions \
-    --output-format text \
-    2>&1 | tee "$OUT")
+  if [ -n "$TIMEOUT_BIN" ]; then
+    (cd "$ROOT" && "$TIMEOUT_BIN" "$TIMEOUT_S" "$CLAUDE_BIN" -p "$PROMPT" \
+      --dangerously-skip-permissions \
+      --output-format text \
+      2>&1 | tee "$OUT")
+  else
+    (cd "$ROOT" && "$CLAUDE_BIN" -p "$PROMPT" \
+      --dangerously-skip-permissions \
+      --output-format text \
+      2>&1 | tee "$OUT")
+  fi
   local RC=${PIPESTATUS[0]}
   if [ "$RC" -eq 124 ]; then
     log "    ⚠️ 子代理 $TASK 超时(${TIMEOUT_S}s)被 kill，标记失败"
