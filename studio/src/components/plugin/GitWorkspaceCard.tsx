@@ -190,39 +190,39 @@ export const GitWorkspaceCard: React.FC = () => {
     }
   };
 
-  // ---- 加载骨架（仿 TrajectoryTimeline）----
-  if (loading) {
+  // ---- status 未就绪：加载骨架 / 失败 EmptyState ----
+  // loading 且已有内容时不打断：刷新时保留现有数据，不闪骨架（仅 status 缺失时出骨架/错误态）。
+  // 注：gitStore 出错时 status 也会被置 null，故内层只需判 loadError。
+  if (!status) {
+    if (loadError) {
+      return (
+        <div className="p-4 space-y-3">
+          <div className="border border-zinc-200 rounded-lg bg-white">
+            <EmptyState
+              icon={I.branch}
+              title="Git 工作区不可用"
+              hint="网关未响应或未启动（/api/git/status 拿不到状态）。确认 server.mjs 运行中，再点下方重试。"
+            />
+          </div>
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => refreshStatus().catch(() => {})}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+            >
+              <Icon name={I.refresh} size={11} />
+              重试
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2" role="status" aria-busy="true" aria-label="正在加载 Git 工作区状态">
         <div className="h-4 bg-zinc-200 rounded animate-pulse w-1/3" />
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="h-8 bg-zinc-100 rounded animate-pulse" />
         ))}
-      </div>
-    );
-  }
-
-  // ---- 失败 EmptyState（网关未起 / 路由未就绪）----
-  if (loadError || !status) {
-    return (
-      <div className="p-4 space-y-3">
-        <div className="border border-zinc-200 rounded-lg bg-white">
-          <EmptyState
-            icon={I.branch}
-            title="Git 工作区不可用"
-            hint="网关未响应或未启动（/api/git/status 拿不到状态）。确认 server.mjs 运行中，再点下方重试。"
-          />
-        </div>
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={() => refreshStatus().catch(() => {})}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
-          >
-            <Icon name={I.refresh} size={11} />
-            重试
-          </button>
-        </div>
       </div>
     );
   }
@@ -241,11 +241,12 @@ export const GitWorkspaceCard: React.FC = () => {
         <button
           type="button"
           onClick={() => refreshStatus().catch(() => {})}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+          disabled={loading}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
           title="刷新工作区状态"
         >
           <Icon name={I.refresh} size={11} />
-          刷新
+          {loading ? '刷新中…' : '刷新'}
         </button>
       </div>
 
