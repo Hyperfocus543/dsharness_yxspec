@@ -353,6 +353,8 @@ export const GitWorkspaceCard: React.FC = () => {
   // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）。
   // 放 ref 而非 state：hover 只是"临时预览"（映射成 open 的中间层），
   // 不参与渲染；点按/键盘的"固定 diff"（open）才是受控源。
+  // 固定 diff 展开时抑制全部 hover 预览（openFile !== null 即禁），
+  // 保证任意时刻至多一个浮层——否则钉住 A 再悬停 B 会叠出第二块 diff。
   const hoverFileRef = React.useRef<string | null>(null);
   // 固定展开 diff 的文件路径（点击 diff 按钮或空格/回车切换；最多一个浮层）
   const [openFile, setOpenFile] = React.useState<string | null>(null);
@@ -561,7 +563,10 @@ export const GitWorkspaceCard: React.FC = () => {
                       {openFile === f.path ? '收起' : 'diff'}
                     </button>
                   </div>
-                  <DirtyDiffPreview file={f} open={openFile === f.path || (hoverEnabled && hoverFileRef.current === f.path)} />
+                  <DirtyDiffPreview
+                    file={f}
+                    open={openFile === f.path || (hoverEnabled && openFile === null && hoverFileRef.current === f.path)}
+                  />
                 </div>
               );
             })}
