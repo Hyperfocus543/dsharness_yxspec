@@ -176,6 +176,7 @@ export const GitWorkspaceCard: React.FC = () => {
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
   // 最近 5 条 commit（取带 message 的，倒序排列）；后端字段 recentCommits，旧字段 recent 兜底
   const recent = [...(status?.recentCommits ?? status?.recent ?? [])].slice(0, 5);
+  const tags = status?.tags ?? [];
   const gitOk = status?.gitAvailable === true;
   const connected = gitOk && !loadError;
 
@@ -294,6 +295,24 @@ export const GitWorkspaceCard: React.FC = () => {
                 领先 {status.ahead} · 落后 {status.behind}
               </span>
             )}
+          </div>
+        )}
+        {/* tag 清单：普通/注解/远端 tag 徽标流（git for-each-ref refs/tags，最多 20 个） */}
+        {tags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+            <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400 shrink-0">
+              <Icon name={I.tag} size={11} />
+              {tags.length} 个 tag
+            </span>
+            {tags.map((t) => (
+              <span
+                key={t}
+                className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+                title={t}
+              >
+                {t}
+              </span>
+            ))}
           </div>
         )}
       </div>

@@ -96,6 +96,7 @@ export async function getStatus() {
     ahead: 0,
     behind: 0,
     recentCommits: [],
+    tags: [],
     root: null,
     error: null,
   }
@@ -106,12 +107,16 @@ export async function getStatus() {
   }
   base.root = gr.root
   const cwd = gr.root
-  const [statusR, headR, logR] = await Promise.all([
+  const [statusR, headR, logR, tagR] = await Promise.all([
     // -c core.quotepath=false：含非 ASCII（中文）的文件路径以原始 UTF-8 输出，
     // 而不是 `"docs/\345\271\263..."` 这类 octal 转义（前端直接可读/可直接拼接路径）。
     runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-b'], { cwd }),
     runGit(['rev-parse', '--short', 'HEAD'], { cwd }),
-    runGit(['log', '--oneline', '-5'], { cwd }),
+    // 富格式 log：hash + unix 时间戳 + subject（与 getStageRecords 同款 format，
+    // 便于前端展示提交时间；subject 不换行，message 兜底取 subject）
+    runGit(['log', '-5', '--date=unix', '--format=%h%x09%ct%x09%s'], { cwd }),
+    // tag 清单：refname:short（普通/注解/远端 tag 均显示，按字母序）
+    runGit(['for-each-ref', 'refs/tags', '--sort=-creatordate', '--format=%(refname:short)'], { cwd }),
   ])
   if (!statusR.ok) {
     base.error =
@@ -156,14 +161,20 @@ export async function getStatus() {
   if (logR.ok) {
     for (const line of logR.stdout.split('\n')) {
       if (!line.trim()) continue
-      const sp = line.indexOf(' ')
+      const [hash, ct, ...subjectParts] = line.split('\t')
+      const sec = Number(ct)
+      const subject = subjectParts.join('\t') || ''
       base.recentCommits.push({
-        hash: sp === -1 ? line.trim() : line.slice(0, sp),
-        subject: sp === -1 ? '' : line.slice(sp + 1),
-        message: sp === -1 ? '' : line.slice(sp + 1), // 与前端 GitRecentCommit.message 对齐（原只发 subject → 前端 message 恒缺，提交说明列显示"无提交说明"）
+        hash: hash || line.trim(),
+        subject,
+        message: subject, // 与前端 GitRecentCommit.message 对齐
+        at: Number.isFinite(sec) && sec > 0 ? new Date(sec * 1000).toISOString() : null,
       })
     }
   }
+  base.tags = tagR.ok
+    ? tagR.stdout.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20)
+    : []
   base.gitAvailable = true
   base.error = null
   return base

@@ -1204,6 +1204,7 @@ export interface GitDirtyFile {
 export interface GitRecentCommit {
   hash: string;
   message: string;
+  /** 提交时间（ISO 字符串；后端未采集/不可用时 null → 前端显示「—」） */
   at: string | null;
 }
 
@@ -1220,6 +1221,8 @@ export interface GitStatus {
   recent?: GitRecentCommit[];
   /** 后端实际字段名：/api/git/status 返回 recentCommits */
   recentCommits?: GitRecentCommit[];
+  /** 仓库 tag 清单（普通/注解/远端 tag，按创建时间倒序，最多 20 个；无 → 空数组） */
+  tags?: string[];
 }
 
 /** 单条阶段留痕记录（阶段↔commit↔tag 对照）。 */
