@@ -207,6 +207,7 @@ export const GitWorkspaceCard: React.FC = () => {
   const refreshStatus = useGitStore((s) => s.refreshStatus);
   const commits = useGitStore((s) => s.commits);
   const commitsLoading = useGitStore((s) => s.commitsLoading);
+  const commitsError = useGitStore((s) => s.commitsError);
   const loadCommits = useGitStore((s) => s.loadCommits);
   const rollback = useGitStore((s) => s.rollback);
   const pushToast = useToastStore((s) => s.push);
@@ -453,7 +454,7 @@ export const GitWorkspaceCard: React.FC = () => {
             ))}
           </select>
           <span className="text-[10px] text-zinc-400">
-            {commitsLoading ? '加载中…' : `${commits?.length ?? 0} 条留痕`}
+            {commitsLoading ? '加载中…' : commitsError ? '加载失败' : `${commits?.length ?? 0} 条留痕`}
           </span>
         </div>
         {commitsLoading ? (
@@ -461,6 +462,19 @@ export const GitWorkspaceCard: React.FC = () => {
             {Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="h-8 bg-zinc-100 rounded animate-pulse" />
             ))}
+          </div>
+        ) : commitsError ? (
+          // 加载失败 ≠ 无留痕：给专属错误态 + 重试，避免把网关故障误报成「该阶段暂无留痕记录」
+          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-red-200 rounded-lg space-y-1.5">
+            <div>该阶段留痕加载失败（网关未响应）</div>
+            <button
+              type="button"
+              onClick={() => loadCommits(traceStage).catch(() => {})}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+            >
+              <Icon name={I.refresh} size={11} />
+              重试
+            </button>
           </div>
         ) : commits && commits.length > 0 ? (
           <div className="space-y-1">

@@ -22,6 +22,8 @@ interface GitStore {
   commits: GitStageTrace[] | null;
   /** commits 是否在加载中 */
   commitsLoading: boolean;
+  /** commits 加载失败（网关未起/路由未就绪）——失败与「该阶段真无留痕」必须区分，否则 UI 会误报空态 */
+  commitsError: boolean;
   loadCommits: (stage: string) => Promise<void>;
   /** 记录回滚留档（POST /api/git/rollback）；成功 push toast，失败抛错由调用方处理 */
   rollback: (params: ipc.GitRollbackParams) => Promise<boolean>;
@@ -48,18 +50,24 @@ export const useGitStore = create<GitStore>((set) => ({
 
   commits: null,
   commitsLoading: false,
+  commitsError: false,
 
   loadCommits: async (stage) => {
     if (!stage) {
-      set({ commits: null, commitsLoading: false });
+      set({ commits: null, commitsLoading: false, commitsError: false });
       return;
     }
-    set({ commitsLoading: true });
+    set({ commitsLoading: true, commitsError: false });
     try {
       const data = await ipc.getGitCommits(stage);
-      set({ commits: data ?? [], commitsLoading: false });
+      if (data) {
+        set({ commits: data, commitsLoading: false, commitsError: false });
+      } else {
+        // 请求完成但拿不到有效数据（网关失败/null 响应）→ 与「真无留痕」区分，标记错误供 UI 给重试
+        set({ commits: [], commitsLoading: false, commitsError: true });
+      }
     } catch {
-      set({ commits: [], commitsLoading: false });
+      set({ commits: [], commitsLoading: false, commitsError: true });
     }
   },
 
