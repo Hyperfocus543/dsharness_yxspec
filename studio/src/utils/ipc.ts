@@ -1255,7 +1255,7 @@ export async function getGitStatus(): Promise<GitStatus | null> {
 /** 单个脏文件的 diff 预览（GET /api/git/diff；hover 用，只读 git diff）。 */
 export interface GitDiffResult {
   ok: boolean;
-  /** untracked=无基线 / staged=暂存区 diff / modified=工作区 diff / deleted=删除（diff 可能为空） */
+  /** untracked=无基线 / staged=暂存区 diff / modified=工作区 diff / deleted=删除（diff 可能为空） / range=commit 范围 diff */
   status?: string;
   path?: string;
   /** 是否预览暂存区改动（staged=1） */
@@ -1273,13 +1273,20 @@ export interface GitDiffResult {
  * 拉取单个脏文件的 diff 预览；失败/无基线返回 null（前端静默降级）。
  * @param path 仓库内相对路径（与 GitDirtyFile.path 一致）
  * @param staged 预览暂存区改动（true）还是工作区改动（false，缺省）
+ * @param opts 可选 { from, to } —— commit 范围模式（阶段留痕 diff：展示 from...to 增量改动）
  */
-export async function getGitDiff(path: string, staged = false): Promise<GitDiffResult | null> {
+export async function getGitDiff(
+  path: string,
+  staged = false,
+  opts?: { from?: string | null; to?: string | null },
+): Promise<GitDiffResult | null> {
   try {
-    const res = await fetch(
-      `${GATEWAY_BASE}/api/git/diff?path=${encodeURIComponent(path)}&staged=${staged ? 1 : 0}`,
-      { headers: { Accept: 'application/json' } },
-    );
+    const q = new URLSearchParams({ path, staged: staged ? '1' : '0' });
+    if (opts?.from) q.set('from', opts.from);
+    if (opts?.to) q.set('to', opts.to);
+    const res = await fetch(`${GATEWAY_BASE}/api/git/diff?${q.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
     if (!res.ok) return null;
     return (await res.json()) as GitDiffResult;
   } catch {

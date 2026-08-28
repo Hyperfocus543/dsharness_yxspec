@@ -301,43 +301,61 @@ export async function getStageRecords(stage) {
 }
 
 /**
- * GET /api/git/diff 数据源：单个脏文件的 diff 预览。
+ * GET /api/git/diff 数据源：脏文件 diff 预览（默认）或留痕 commit 范围 diff。
  * 只读执行 git（无 shell），供工作区管控卡 hover 预览改动内容。
  * 入参：
  *   - path  仓库相对路径（反斜杠归一为斜杠；必须落在仓库内，杜绝跨仓读取）
  *   - staged=true 预览已暂存改动（--cached，X 位暂存态）；缺省预览工作区改动
- * 判定逻辑（与 getStatus 的 porcelain XY 语义一致，便于预览"状态对应哪个 diff"）：
+ *   - from / to（可选 commit hash）：传入后进 commit 范围模式 —— 跳过脏文件判定，
+ *     直接 diff `from...to`（含二者之间的所有文件，三-dot 语义）。留痕 diff 预览用
+ *     （阶段留痕行 hover 展示该条 commit 相对上一条留痕 commit 的改动）。
+ *     仅 from 无 to 时 diff `from`（等价 from..工作区）。两者缺省则走脏文件模式。
+ * 脏文件模式判定逻辑（与 getStatus 的 porcelain XY 语义一致，便于预览"状态对应哪个 diff"）：
  *   - untracked（??）→ git 没有索引/HEAD 基线可 diff → status:'untracked'（前端提示无基线）
  *   - deleted（工作区删除）→ HEAD → 工作区路径 diff 可能为空文件，用 note 兜底
  *   - 其余（modified/added/renamed/conflict，含 staged）→ 标准 two-dot diff
  * 返回 { ok, status, path, staged, diff, stats, error }；任何 git 失败 → { ok:false, error }。
  * 红线：路径不参与 shell 拼接（execFile 数组透传）；只读 git diff，绝不写文件。
  */
-export async function getFileDiff({ path, staged = false } = {}) {
+export async function getFileDiff({ path, staged = false, from = null, to = null } = {}) {
   const p = typeof path === 'string' ? path.replace(/\\/g, '/').trim() : ''
-  if (!p || p === '.') return { ok: false, error: 'bad-request', message: 'path 不能为空' }
-  // 防路径逃逸：拒绝绝对路径 / 盘符 / 父目录前缀，只能指向仓库内相对路径
-  if (p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..')) {
-    return { ok: false, error: 'bad-request', message: 'path 必须为仓库内相对路径' }
+  const fromStr = typeof from === 'string' && from.trim() ? from.trim() : null
+  const toStr = typeof to === 'string' && to.trim() ? to.trim() : null
+  const commitRangeMode = fromStr !== null && /^[0-9a-fA-F]{4,40}$/.test(fromStr)
+  // 脏文件模式才强制 path（仓库相对路径）；commit 范围模式不读路径，无需校验
+  if (!commitRangeMode) {
+    if (!p || p === '.') return { ok: false, error: 'bad-request', message: 'path 不能为空' }
+    // 防路径逃逸：拒绝绝对路径 / 盘符 / 父目录前缀，只能指向仓库内相对路径
+    if (p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..')) {
+      return { ok: false, error: 'bad-request', message: 'path 必须为仓库内相对路径' }
+    }
   }
   const gr = await resolveGitRoot()
   if (!gr) return { ok: false, error: 'not-a-git-repo', message: '未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库）' }
   const cwd = gr.root
 
-  // 先判定文件状态：untracked 无基线可 diff；deleted 用 --stat 兜底（diff 全删）
-  const st = await runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--', p], { cwd })
-  const line = (st.ok ? st.stdout.split('\n').find((l) => l.slice(3) === p) : null) ?? ''
-  const xy = line.slice(0, 2)
-  const isUntracked = xy[0] === '?' && xy[1] === '?'
-  const isDeleted = porcelainStatus(xy) === 'deleted'
-
-  // 参数组装（execFile 数组透传，无 shell）
+  // 脏文件模式才需要 porcelain 状态判定；range 模式直接整仓 diff（状态置 'range'）
+  let isDeleted = false
   const args = ['-c', 'core.quotepath=false', 'diff']
-  if (staged) args.push('--cached')
-  if (isUntracked) {
-    return { ok: true, status: 'untracked', path: p, staged, diff: null, stats: null, note: 'untracked 文件无索引/HEAD 基线，无 diff 可预览' }
+  if (commitRangeMode) {
+    // 三-dot：from 到 to 的增量改动；仅 from → diff from → 工作区。
+    // 范围参数放 `--` 之前（`-- <path>` 会把 commit 名当 pathspec），不带 --cached。
+    if (toStr) args.push(`${fromStr}...${toStr}`)
+    else args.push(fromStr)
+  } else {
+    // 脏文件模式：先判定文件状态（untracked 无基线可 diff；deleted 用 --stat 兜底）
+    const st = await runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--', p], { cwd })
+    const line = (st.ok ? st.stdout.split('\n').find((l) => l.slice(3) === p) : null) ?? ''
+    const xy = line.slice(0, 2)
+    const isUntracked = xy[0] === '?' && xy[1] === '?'
+    isDeleted = porcelainStatus(xy) === 'deleted'
+    if (isUntracked) {
+      return { ok: true, status: 'untracked', path: p, staged, diff: null, stats: null, note: 'untracked 文件无索引/HEAD 基线，无 diff 可预览' }
+    }
+    if (staged) args.push('--cached')
+    if (isDeleted) args.push('--stat') // 已删除文件 diff 为空，--stat 兜底给行数
+    args.push('--', p)
   }
-  args.push('--', p)
   const res = await runGit(args, { cwd })
   if (!res.ok) return { ok: false, error: res.error, message: 'git diff 执行失败' }
   const diff = (res.stdout ?? '').slice(0, 8000)
@@ -350,7 +368,7 @@ export async function getFileDiff({ path, staged = false } = {}) {
   }
   return {
     ok: true,
-    status: isDeleted ? 'deleted' : staged ? 'staged' : 'modified',
+    status: commitRangeMode ? 'range' : isDeleted ? 'deleted' : staged ? 'staged' : 'modified',
     path: p,
     staged,
     diff: diff || null,

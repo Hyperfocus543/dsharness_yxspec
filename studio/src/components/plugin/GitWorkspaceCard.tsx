@@ -81,20 +81,30 @@ const CommitRow: React.FC<{ hash: string; message: string; at: string | null }> 
   </div>
 );
 
-/** 阶段留痕行：seq + commit + tag + 状态 + 时间 + 回滚按钮 */
+/** 阶段留痕行：seq + commit + tag + 状态 + 时间 + 回滚按钮 + hover diff 预览 */
 const TraceRow: React.FC<{
   rec: GitStageTrace;
   stage: string;
   confirming: boolean;
   onRollback: () => void;
-}> = ({ rec, stage, confirming, onRollback }) => {
+  /** 上一条留痕的 commit（diff 基线；无 → null） */
+  prevCommit?: string | null;
+}> = ({ rec, stage, confirming, onRollback, prevCommit }) => {
   // 已回滚（后端置 rolled_back，不回改 status）：优先显示「已回滚」红标，并禁用回滚按钮
   const rolledBack = rec.rolled_back === true;
   const statusLabel = rolledBack ? '已回滚' : TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
+  // 留痕 diff 预览：hover 显示该条 commit 相对上一条留痕 commit 的改动（两条相邻留痕 = 一个 diff 单元）。
+  // 纯 hover 浮层，与脏文件 diff 预览同款交互；回滚确认态下收起，避免两浮层叠加。
+  const [diffOpen, setDiffOpen] = React.useState(false);
   return (
-    <div className={`flex items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-xs transition-all group ${
-      rolledBack ? 'border-red-200' : 'border-zinc-200 hover:border-emerald-300'
-    }`}>
+    <div
+      className={`relative flex items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-xs transition-all group ${
+        rolledBack ? 'border-red-200' : 'border-zinc-200 hover:border-emerald-300'
+      }`}
+      onMouseEnter={() => setDiffOpen(true)}
+      onMouseLeave={() => setDiffOpen(false)}
+      title="悬停查看该条留痕相对上一条的改动 diff"
+    >
       <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500 font-mono" title={`第 ${rec.seq} 次执行`}>
         #{rec.seq}
       </span>
@@ -136,6 +146,7 @@ const TraceRow: React.FC<{
           回滚
         </button>
       )}
+      <TraceDiffPreview base={prevCommit ?? null} target={rec.commit || null} open={diffOpen && !confirming} />
     </div>
   );
 };
@@ -214,6 +225,98 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean }> = ({ fil
     </div>
   );
 };
+
+/** 留痕 diff 预览浮层：hover 阶段留痕行 → 拉取该条 commit 相对前一留痕 commit 的改动。
+ *  数据源 GET /api/git/diff?path=<range>&from=&to=（网关 commit 范围模式，只读 git diff，零新增后端端点）。
+ *  无留痕记录/仅一条/commit 缺失/网关不可用 → 各自降级提示，不阻塞行交互。 */
+const TraceDiffPreview: React.FC<{ base: string | null; target: string | null; open: boolean }> = ({
+  base,
+  target,
+  open,
+}) => {
+  const [data, setData] = React.useState<GitDiffResult | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  // 无目标 commit 无法 diff；open 才拉取（避免无谓请求），相同 base/target 命中缓存
+  const usable = open && !!target && base !== target;
+  React.useEffect(() => {
+    if (!usable) return;
+    let cancelled = false;
+    setLoading(true);
+    // range 模式：path 传空（网关 commit 范围模式不读路径），from/to 指定 diff 范围
+    getGitDiff('', false, { from: base ?? undefined, to: target ?? undefined })
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch(() => {
+        if (!cancelled) setData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [usable, base, target]);
+
+  if (!open) return null;
+  if (!target) {
+    return <TraceDiffNote text="该条留痕无 commit 关联，无法预览改动" />;
+  }
+  if (base === target) {
+    return <TraceDiffNote text="该条留痕与上一条在同一 commit（无增量 diff）" />;
+  }
+
+  const diff = data?.diff;
+  return (
+    <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-zinc-200 bg-white shadow-lg p-2.5 space-y-1.5 animate-fade-in-up">
+      <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+        <span className="font-mono text-zinc-600 truncate min-w-0" title={base ? `${base}...${target}` : target}>
+          {base ? `${base.slice(0, 7)}…${target.slice(0, 7)}` : target.slice(0, 7)}
+        </span>
+        {data?.stats && (
+          <span className="ml-auto shrink-0 tabular-nums">
+            <span className="text-emerald-600">+{data.stats.added}</span>
+            <span className="text-red-600"> -{data.stats.removed}</span>
+          </span>
+        )}
+      </div>
+      {loading ? (
+        <div className="text-[11px] text-zinc-400 py-1">正在加载留痕 diff…</div>
+      ) : diff ? (
+        <pre className="max-h-56 overflow-auto text-[10px] leading-relaxed font-mono whitespace-pre bg-zinc-50 rounded-md p-2">
+          {diff.split('\n').map((line, i) => {
+            const cls = line.startsWith('+')
+              ? 'text-emerald-700 bg-emerald-50/60'
+              : line.startsWith('-')
+                ? 'text-red-600 bg-red-50/60'
+                : line.startsWith('@@')
+                  ? 'text-zinc-500'
+                  : '';
+            return (
+              <span key={i} className={`block w-full ${cls}`}>
+                {line || ' '}
+              </span>
+            );
+          })}
+        </pre>
+      ) : data?.status === 'untracked' || data?.note ? (
+        <div className="text-[11px] text-zinc-400 py-1">{data.note || '该 commit 相对上一条留痕无可见改动'}</div>
+      ) : data ? (
+        <div className="text-[11px] text-zinc-400 py-1">该条留痕暂无可见改动</div>
+      ) : (
+        <div className="text-[11px] text-zinc-400 py-1">留痕 diff 不可用（网关未响应或 commit 不在当前仓库）</div>
+      )}
+    </div>
+  );
+};
+
+/** TraceDiffPreview 的降级文案小节点（纯文本，不触发 diff 请求）。 */
+const TraceDiffNote: React.FC<{ text: string }> = ({ text }) => (
+  <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-zinc-200 bg-white shadow-lg p-2.5 animate-fade-in-up">
+    <div className="text-[11px] text-zinc-400 py-1">{text}</div>
+  </div>
+);
 
 export const GitWorkspaceCard: React.FC = () => {
   const status = useGitStore((s) => s.status);
@@ -526,7 +629,7 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
         ) : commits && commits.length > 0 ? (
           <div className="space-y-1">
-            {commits.map((rec) => (
+            {commits.map((rec, i) => (
               <TraceRow
                 key={`${rec.seq}-${rec.commit}`}
                 rec={rec}
@@ -536,6 +639,7 @@ export const GitWorkspaceCard: React.FC = () => {
                   setConfirmTarget(rec);
                   setRollbackReason('');
                 }}
+                prevCommit={i > 0 ? commits[i - 1]?.commit ?? null : null}
               />
             ))}
           </div>

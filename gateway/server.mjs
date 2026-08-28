@@ -737,12 +737,15 @@ const server = createServer(async (req, res) => {
     }
 
     // 单个脏文件 diff 预览（hover 用）：GET /api/git/diff?path=<repo-relative>&staged=1
+    // 留痕 diff 预览（阶段留痕行 hover）：同端点 + from/to commit 范围参数（range 模式，只读 git diff）
     // 只读 git diff；untracked 无基线 → status:'untracked'（前端提示无 diff 可预览）
     if (req.method === 'GET' && path === '/api/git/diff') {
       const p = url.searchParams.get('path') ?? ''
       const staged = url.searchParams.get('staged') === '1' || url.searchParams.get('staged') === 'true'
+      const from = url.searchParams.get('from')
+      const to = url.searchParams.get('to')
       if (!p) return json(res, 400, { ok: false, error: 'path required' })
-      return json(res, 200, await getFileDiff({ path: p, staged }))
+      return json(res, 200, await getFileDiff({ path: p, staged, from, to }))
     }
 
     if (req.method === 'POST' && path === '/api/git/rollback') {
