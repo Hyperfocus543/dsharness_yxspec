@@ -119,9 +119,13 @@ const GIT_READONLY_SUBS = new Set([
  *  跳过其值 token，否则 `git -C <dir> status` 会把目录误判为子命令名。 */
 const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
 
-/** 从一段 shell 命令中提取 git 子命令名（跳过 git 全局选项，如 -C/-c/--no-pager）。 */
+/** 从一段 shell 命令中提取 git 子命令名（跳过 git 全局选项，如 -C/-c/--no-pager）。
+ *  边界用 `(?:^|\s)…(?=\s|$)` 而非 `\b…\b`：`\b` 只要求「非词字符」前后，
+ *  会误伤 `pip install git+https://…`（git 后接 `+`）与 `import git;`（git 后接
+ *  `.`/`;`）这类非 git 命令。git CLI 调用必然独立成词（前导空白/段首 + 后随
+ *  空白/段尾），用空白边界才不会把 URL 片段/属性访问当成本命令。 */
 function gitSubcommandOf(segment) {
-  const m = /\bgit(?:\.exe)?\b/.exec(segment);
+  const m = /(?:^|\s)git(?:\.exe)?(?=\s|$)/.exec(segment);
   if (!m) return null;
   const tokens = (segment.slice(m.index + m[0].length).match(/\S+/g) || []).slice(0, 8);
   for (let i = 0; i < tokens.length; i += 1) {
