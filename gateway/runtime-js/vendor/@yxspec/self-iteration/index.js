@@ -132,10 +132,21 @@ function parseSelfIterate(prompt) {
   const stageRaw0 = flagVal('stage')
   const resume = /(?:^|\s)--resume(?:\s|$)/.test(rest)
 
-  // stage：优先显式 --stage=，否则取命令后第一个非 flag 裸词（阶段命令名/token）
+  // stage：优先显式 --stage=，否则取命令后第一个非 flag 裸词（阶段命令名/token）。
+  // 剥离带值 flag 时须与 flagVal 支持的形态对称（`--key=val` / `--key "带空格值"` /
+  // `--key '单引号'` / `--key val`）。此前只剥 `=` 连写与裸 flag，导致
+  // `--goal "Total>=80 且门禁全绿" sqt-script-gen` 这类 flag 在前的写法把引号值
+  // `"Total>=80` 当成本阶段（resolveStageToken 失败 → 静默降级不开 run）。
+  // 只剥已知带值 flag（与 flagVal 取值口径一致）；布尔 flag --resume 不带值，单独剥。
   let stageRaw = stageRaw0
   if (!stageRaw) {
-    const after = rest.replace(/--[\w-]+(?:\s*=\s*(?:"[^"]*"|\S+))?/g, ' ').trim()
+    const after = rest
+      .replace(
+        /--(?:max-iter|goal|stage|round|repo-root|run-dir|session)(?:\s*=\s*(?:"[^"]*"|'[^']*'|\S+)|(?:\s+(?:"[^"]*"|'[^']*'|\S+)))?/g,
+        ' ',
+      )
+      .replace(/--resume(?:\s|$)/g, ' ')
+      .trim()
     const first = after.split(/\s+/)[0] || ''
     if (first) stageRaw = first
   }

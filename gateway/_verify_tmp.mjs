@@ -36,9 +36,19 @@ check('parse resume', parseSelfIterate('/yxspec:self-iterate --resume sqt_script
   { stageRaw: 'sqt_script_gen', maxIter: null, goal: null, resume: true })
 check('parse eq goal', parseSelfIterate('/yxspec:self-iterate --stage=sqt_script_gen --goal=Total>=80'),
   { stageRaw: 'sqt_script_gen', maxIter: null, goal: 'Total>=80', resume: false })
-check('parse no stage', parseSelfIterate('/yxspec:self-iterate'), null)
+// 无 stage / 非法 stage：parseSelfIterate 只做参数抽取（松散），合法性由
+// resolveStageToken 在下游判（apply() 里 resolve 失败 → log + 提示词路径降级）。
+// 因此这里断言"返回对象 + stageRaw 原样"，而不是 parse 阶段就拒掉。
+check('parse no stage', parseSelfIterate('/yxspec:self-iterate'),
+  { stageRaw: null, maxIter: null, goal: null, resume: false })
 check('parse leading junk', parseSelfIterate('axyxspec:self-iterate sqt_script_gen'), null)
-check('parse trailing junk', parseSelfIterate('/yxspec:self-iterate sqt_script_gen-extra'), null)
+check('parse trailing junk', parseSelfIterate('/yxspec:self-iterate sqt_script_gen-extra'),
+  { stageRaw: 'sqt_script_gen-extra', maxIter: null, goal: null, resume: false })
+// flag 值在 stage 前（空格分隔带值 flag）→ stage 提取不被 flag 值污染
+check('parse goal before stage', parseSelfIterate('/yxspec:self-iterate --goal "Total>=80 且门禁全绿" sqt-script-gen'),
+  { stageRaw: 'sqt-script-gen', maxIter: null, goal: 'Total>=80 且门禁全绿', resume: false })
+check('parse maxiter before stage', parseSelfIterate('/yxspec:self-iterate --max-iter 5 sqt_script_gen'),
+  { stageRaw: 'sqt_script_gen', maxIter: 5, goal: null, resume: false })
 check('parse hyphen stage', parseSelfIterate('/yxspec:self-iterate sqt-script-gen'),
   { stageRaw: 'sqt-script-gen', maxIter: null, goal: null, resume: false })
 
