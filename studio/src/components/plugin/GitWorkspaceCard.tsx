@@ -89,10 +89,23 @@ const TraceRow: React.FC<{
   onRollback: () => void;
   /** 上一条留痕的 commit（diff 基线；无 → null） */
   prevCommit?: string | null;
-}> = ({ rec, stage, confirming, onRollback, prevCommit }) => {
+  /** git 是否可用（决定回滚按钮禁用与提示语：git 不可用时 commit 恒 null） */
+  gitOk?: boolean;
+}> = ({ rec, stage, confirming, onRollback, prevCommit, gitOk }) => {
   // 已回滚（后端置 rolled_back，不回改 status）：优先显示「已回滚」红标，并禁用回滚按钮
   const rolledBack = rec.rolled_back === true;
   const statusLabel = rolledBack ? '已回滚' : TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
+  // commit 缺失（git 不可用时后端照常返回记录、但 commit 恒 null）→ 回滚留档必 400，
+  // 直接在行内禁用并给原因，避免点出确认面板后提交必失败。回滚语义：reset 到"该条 commit"，
+  // 无 commit 就没有可回滚的落点。
+  const noCommit = !rec.commit;
+  const rollbackTitle = rolledBack
+    ? '该条留痕已回滚，无需再次记录'
+    : noCommit
+      ? gitOk
+        ? '该条留痕无 commit 关联，无法记录回滚'
+        : 'git 不可用：留痕无 commit 关联，无法记录回滚'
+      : '记录回滚指令（只留档，不执行 git）';
   // 留痕 diff 预览：hover 显示该条 commit 相对上一条留痕 commit 的改动（两条相邻留痕 = 一个 diff 单元）。
   // 纯 hover 浮层，与脏文件 diff 预览同款交互；回滚确认态下收起，避免两浮层叠加。
   const [diffOpen, setDiffOpen] = React.useState(false);
@@ -138,9 +151,9 @@ const TraceRow: React.FC<{
         <button
           type="button"
           onClick={onRollback}
-          disabled={rolledBack}
+          disabled={rolledBack || noCommit}
           className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-          title={rolledBack ? '该条留痕已回滚，无需再次记录' : '记录回滚指令（只留档，不执行 git）'}
+          title={rollbackTitle}
         >
           <Icon name={I.undo} size={11} />
           回滚
@@ -653,6 +666,7 @@ export const GitWorkspaceCard: React.FC = () => {
                   setRollbackReason('');
                 }}
                 prevCommit={i > 0 ? commits[i - 1]?.commit ?? null : null}
+                gitOk={gitOk}
               />
             ))}
           </div>
