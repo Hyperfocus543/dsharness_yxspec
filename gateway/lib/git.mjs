@@ -174,8 +174,14 @@ export async function getStatus() {
     if (line.length < 3) continue
     const xy = line.slice(0, 2)
     if (xy[0] === ' ' && xy[1] === ' ') continue
+    // 重命名条目（R 位）：porcelain v1 输出 `XY old -> new`（箭头分隔源/目标）。
+    // 路径取 ` -> ` 之后的目标路径（前端契约 path=当前工作区相对路径），
+    // 否则会把整串 `old -> new` 当路径（diff 预览/回滚按此路径会 404）。
+    let path = line.slice(3)
+    const arrow = path.indexOf(' -> ')
+    if (arrow >= 0) path = path.slice(arrow + 4)
     base.dirtyFiles.push({
-      path: line.slice(3),
+      path,
       status: porcelainStatus(xy), // 语义化（前端 DIRTY_STYLE 契约），staged 单独判定
       staged: xy[0] !== ' ' && xy[0] !== '?',
     })
