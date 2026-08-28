@@ -118,10 +118,6 @@ const CANDIDATE_META = [
     name: 'ralph（fresh-agent 原子循环）',
     desc: 'fresh child + 不可变目标原子轮次——与自迭代「原子轮次 + 防污染」咬合',
     assembly: `
-- id: workflow
-  name: '@deepseek-ai/dsh-workflow'
-- id: workflow-worker-thread
-  name: '@deepseek-ai/dsh-workflow-worker-thread'
 - id: tool-ralph
   name: '@deepseek-ai/dsh-tool-ralph'`,
     deps: [],
