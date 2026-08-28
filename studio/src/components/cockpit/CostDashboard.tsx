@@ -148,7 +148,6 @@ export const CostDashboard: React.FC = () => {
 
   // 阶段级耗时分布 bar（取最大耗时归一化）
   const maxElapsed = perStage.reduce((m, s) => Math.max(m, s.elapsedMs), 0) || 1;
-  const maxTokens = perStage.reduce((m, s) => Math.max(m, s.promptTokens + s.completionTokens), 0) || 1;
 
   return (
     <div className="space-y-3">
@@ -257,9 +256,6 @@ export const CostDashboard: React.FC = () => {
             perStage.slice(0, 12).map((s) => {
               const aspice = STAGE_TABLE[s.token as keyof typeof STAGE_TABLE]?.aspice || '';
               const pct = Math.max(2, Math.round((s.elapsedMs / maxElapsed) * 100));
-              const tokPct = hasTokenData
-                ? Math.max(2, Math.round(((s.promptTokens + s.completionTokens) / maxTokens) * 100))
-                : 0;
               return (
                 <div key={s.token} className="flex items-center gap-2 text-xs">
                   <span className="w-36 shrink-0 font-mono text-zinc-600 truncate" title={`${s.token}${aspice ? ` · ${aspice}` : ''}`}>
