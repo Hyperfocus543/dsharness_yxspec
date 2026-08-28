@@ -112,7 +112,10 @@ function parseSelfIterate(prompt) {
   const m = /(?:^|[^\w])yxspec:self-iterate\b/.exec(text)
   if (!m) return null
   const rest = text.slice(m.index + m[0].length)
-  if (!/^[\s.,;:!?，。；：！？、)）]|$/.test(rest)) return null // 命令后必须边界
+  // 命令后必须边界（空白/标点/结尾）。原写法 `/^[边界]|$/` 因 `|` 优先级问题：
+  // `$` 分支未锚定 → 该检查恒真（死代码），命令后接任意字符（如 `-swe`）也放行。
+  // 修正为 `/^(?:[边界]|$)/`，与 stages.mjs resolveStage 边界规则对齐。
+  if (!/^(?:[\s.,;:!?，。；：！？、)）]|$)/.test(rest)) return null
 
   // 参数提取：--key=value / --key "value with space" / --key value / --flag
   const flagVal = (key) => {
