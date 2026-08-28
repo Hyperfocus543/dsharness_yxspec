@@ -5,9 +5,12 @@
 //   - 订阅 session/event（root ctx 直达，前提：声明 `inject: ['sessions']`，
 //     见 aspice-trajectory 头注释 2026-08-27 实测）；
 //   - 从 agent/inbox/spliced 注入 prompt 命中阶段命令（复用网关 stages.mjs
-//     权威表）即开"本次阶段执行"；seq 以轨迹权威目录（YXSPEC_TRAJECTORY_ROOT，
-//     同 aspice-trajectory）scan 同名目录最大 seq + 1 对齐（轨迹在 turn/end
-//     同步落盘，比本插件的异步 git 动作先到，无竞态）；
+//     权威表）即开"本次阶段执行"；seq 在命中时按轨迹权威目录（YXSPEC_TRAJECTORY_ROOT，
+//     同 aspice-trajectory）scan 同名目录最大 seq + 1 预分配并存入 session 记录。
+//     必须在 inbox/spliced 预分配、不能在 turn/end 现算：turn/end 时 aspice-trajectory
+//     （装配在 git-workspace 之前）已同步落盘本次轨迹文件，此时 scan 返回 max+1
+//     = 本次 seq+1，打的 tag 恒比轨迹 seq 大 1（前端「阶段↔commit/tag」按 seq
+//     对齐会错位）。inbox/spliced 在 turn/end 之前且本次文件未落盘 → 拿到正确 seq；
 //   - 阶段结束判定：turn/end 事件，且 reason.kind 属于阶段命令收尾
 //     （completed=正常收尾，打 tag + 审计；max-tokens/error/aborted/
 //     interrupted/blocked/stage-switch 均为异常，不满足收尾条件，不打 tag
@@ -107,7 +110,9 @@ function promptFromInbox(data) {
 }
 
 /** 某阶段现有最大 seq + 1（scan 轨迹权威目录，与 aspice-trajectory 同 seq 对齐）。
- *  轨迹在 turn/end 同步落盘，早于本插件的异步 git 动作，无竞态。 */
+ *  必须在 inbox/spliced 预分配时调用（此时本次轨迹未落盘，返回正确 seq）；
+ *  不得在 turn/end 调用——届时 aspice-trajectory 已同步落盘本次轨迹，scan
+ *  返回 max+1 = 本次 seq+1，tag 序号会整体错位 +1。 */
 function nextSeqFor(stage) {
   const root = process.env.YXSPEC_TRAJECTORY_ROOT || DEFAULT_TRAJ_ROOT
   try {
@@ -168,8 +173,8 @@ export function apply(ctx, input = {}) {
   log(`apply() invoked; root=${root}; autoCommit=${cfgAutoCommit}; stages=${CMD_TOKENS ? CMD_TOKENS.size : '(unavailable)'}`)
 
   // sessionId -> 当前活动阶段记录（open；turn/end 后置 done 并清空，异常收尾也清）。
-  // 仅记录"开过哪个阶段"，seq 在 turn/end 时按轨迹权威目录现算（与轨迹对齐，
-  // 续跑/换阶段不再 pre-allocate seq）。
+  // seq 在 inbox/spliced 命中阶段时预分配（与 aspice-trajectory 同策略：此刻本次
+  // 轨迹未落盘，scan 拿正确 seq；turn/end 现算会因 aspice 已落盘而恒大 1，见头部注释）。
   const sessions = new Map()
 
   const finishStage = (sessionId, reason) => {
@@ -177,7 +182,7 @@ export function apply(ctx, input = {}) {
     sessions.delete(sessionId)
     if (!rec) return // 没有对应记录（阶段命令未命中/轨迹插件未开）→ 纯 log 降级
     const stage = rec.stage
-    const seq = nextSeqFor(stage)
+    const seq = rec.seq ?? nextSeqFor(stage)
     // 打 tag + 写审计：承诺 catch 全吞，绝不抛到事件回调。
     processPhaseEnd(stage, seq, reason, { root, autoCommit: cfgAutoCommit, input })
       .then((audit) => log(`audit ${stage}/${stage}-${String(seq).padStart(3, '0')}.jsonl ${audit.status}${audit.tag ? ' tag=' + audit.tag : ''}`))
@@ -188,13 +193,13 @@ export function apply(ctx, input = {}) {
     if (!event || typeof event.type !== 'string') return
     const sessionId = String(session.id)
 
-    // ---- 阶段边界：注入 prompt 命中阶段命令 → 记录本次执行（同阶段续跑不重开）----
+    // ---- 阶段边界：注入 prompt 命中阶段命令 → 预分配 seq 并记录本次执行（同阶段续跑不重开）----
     if (event.type === 'agent/inbox/spliced') {
       const prompt = promptFromInbox(event.data)
       const token = stageOfPrompt(prompt)
       if (!token) return // 通用咨询/无阶段命令 → 不记录
       if (sessions.has(sessionId)) return // 同阶段续跑（未 turn/end 不重开）
-      sessions.set(sessionId, { stage: token })
+      sessions.set(sessionId, { stage: token, seq: nextSeqFor(token) })
       return
     }
 
