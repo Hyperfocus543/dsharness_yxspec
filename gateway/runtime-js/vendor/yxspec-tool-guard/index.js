@@ -143,7 +143,10 @@ function gitSubcommandOf(segment) {
     /(?:^|\s)'([^'\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)'(?=\s|$)/i.exec(segment) ||
     /(?:^|\s)(?:git(?:\.(?:exe|cmd|bat))?|[^\s"'`]*[\\/]git(?:\.(?:exe|cmd|bat))?)(?=\s|$)/i.exec(segment)
   if (!m) return null
-  const tokens = (segment.slice(m.index + m[0].length).match(/\S+/g) || []).slice(0, 8);
+  // 引号包裹片段（含空格/反斜杠）整体成一个 token：`git -C "C:\Program Files\p" status`
+  // 若按 \S+ 裸拆，路径会被拆成 `"C:\Program` / `Files\p"`，-C 只跳过"一段"后
+  // 路径片段被当子命令名 → gitSubUnsafe 默认拒绝 → 只读 status 被误伤拦截。
+  const tokens = (segment.slice(m.index + m[0].length).match(/"[^"\r\n]*"|'[^'\r\n]*'|\S+/g) || []).slice(0, 8);
   for (let i = 0; i < tokens.length; i += 1) {
     const t = tokens[i];
     if (!t.startsWith('-')) return t;
