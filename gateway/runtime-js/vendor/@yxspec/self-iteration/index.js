@@ -616,9 +616,10 @@ export function apply(ctx, input = {}) {
     const total = last?.total ?? null
     const baselineTotal = st.baselineTotal ?? null
     const gateOk = last?.gateOk ?? null
-    const verdict = total == null
-      ? (roundNo >= (st.maxIter || DEFAULT_MAX_ITER) ? 'converge_by_maxiter' : 'continue')
-      : decide(roundNo, total, baselineTotal, st.goal, gateOk, st.maxIter)
+    // 无打分（score tool 降级/未调用）也走 decide：total 缺失时凭 roundNo 判
+    // 继续 / 用满 —— roundNo 已含历史轮次计数，配合下面无条件 advanceState，
+    // 无打分轮也推进轮次，防止 roundNo 永远停在 1、converge_by_maxiter 永不触发。
+    const verdict = decide(roundNo, total, baselineTotal, st.goal, gateOk, st.maxIter)
 
     appendTrajectory(trajRoot, stage, {
       type: 'self-iteration/round/v1',
@@ -634,7 +635,10 @@ export function apply(ctx, input = {}) {
       at: new Date().toISOString(),
     })
 
-    if (total != null) advanceState(st, roundNo, total, last, verdict)
+    // 无条件推进轮次（含无打分轮）：roundNo 来自 st.rounds，未推进则下一轮复用
+    // 同号（rounds 为空 → 恒 1），maxIter 永不达 → 自迭代死循环。total 缺失的
+    // 轮次照常留痕（total:null），不加分不锚定基线，只推进计数与 status。
+    advanceState(st, roundNo, total, last, verdict)
     st.lastScore = null // 无论如何清空本轮打分暂存（防泄漏到下一轮）
     writeRunState(stateRoot, st)
     log(`round ${roundNo} ${stage} verdict=${verdict} total=${total} baseline=${baselineTotal} -> ${st.status}`)
