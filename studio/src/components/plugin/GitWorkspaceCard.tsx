@@ -6,7 +6,7 @@
 //   · 脏文件列表：路径 + 状态色标（新增/修改/删除/未暂存），空则「工作区干净」
 //   · commit 历史：最近 5 条（message + hash + 相对时间）
 //   · 阶段留痕：输入/选择 stage → 列出该阶段 commit/tag 对照（复用 getGitCommits）
-//   · 回滚按钮：选中一条留痕 → 确认 → recordGitRollback（只留档）→ toast 提示不自动执行
+//   · 回滚按钮：选中一条留痕 → 底部唯一确认面板（填原因）→ recordGitRollback（只留档）→ toast 提示不自动执行
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
@@ -86,11 +86,8 @@ const TraceRow: React.FC<{
   rec: GitStageTrace;
   stage: string;
   confirming: boolean;
-  rolling: boolean;
   onRollback: () => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-}> = ({ rec, stage, confirming, rolling, onRollback, onCancel, onConfirm }) => {
+}> = ({ rec, stage, confirming, onRollback }) => {
   const statusLabel = TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
   return (
     <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
@@ -110,23 +107,8 @@ const TraceRow: React.FC<{
         {rec.finishedAt ? relTimeOf(rec.finishedAt) : rec.startedAt ? `启动 ${relTimeOf(rec.startedAt)}` : '—'}
       </span>
       {confirming ? (
-        <span className="shrink-0 inline-flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={rolling}
-            className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[11px] hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {rolling ? '提交中…' : '确认回滚'}
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={rolling}
-            className="px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-zinc-500 text-[11px] hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            取消
-          </button>
+        <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-50 border border-red-200 text-red-700 text-[11px]">
+          待确认
         </span>
       ) : (
         <button
@@ -192,6 +174,8 @@ export const GitWorkspaceCard: React.FC = () => {
       });
       setConfirmTarget(null);
       setRollbackReason('');
+      // 留档成功后续拉一次该阶段留痕，让「已回滚」状态可见
+      loadCommits(traceStage).catch(() => {});
     } catch {
       // 失败 toast 已在 store 内 push；保持确认态让用户可改原因重试
     } finally {
@@ -401,13 +385,10 @@ export const GitWorkspaceCard: React.FC = () => {
                 rec={rec}
                 stage={traceStage}
                 confirming={confirmTarget?.seq === rec.seq && confirmTarget?.commit === rec.commit}
-                rolling={rolling}
                 onRollback={() => {
                   setConfirmTarget(rec);
                   setRollbackReason('');
                 }}
-                onCancel={() => setConfirmTarget(null)}
-                onConfirm={doRollback}
               />
             ))}
           </div>
