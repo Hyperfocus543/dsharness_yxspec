@@ -97,11 +97,21 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
       )}
       {/* 悬浮"一键派活"按钮（hover 显示；派活中常驻显示可点击的取消按钮，点击终止 runtime）。
           空闲时 pointer-events-none，避免隐形按钮挡在卡片右上角拦截点击冒泡。
-          固定在右上角（-top-2 -right-2），与左上角"当前"徽标互不重叠。 */}
-      <span
+          固定在右上角（-top-2 -right-2），与左上角"当前"徽标互不重叠。
+          a11y：真按钮（可键盘聚焦/读屏可读）；空闲态是 hover 揭示的隐藏操作 →
+          不进 tab 序（tabIndex=-1）+ aria-hidden，避免键盘用户 Tabbing 到隐形按钮。 */}
+      <button
+        type="button"
+        tabIndex={busy ? 0 : -1}
+        aria-hidden={busy ? undefined : true}
+        aria-label={
+          busy
+            ? cancelling ? `终止中：${mapping.command}` : `点击终止执行：${mapping.command}（已执行 ${elapsedSec}s）`
+            : `一键派活：${mapping.command}`
+        }
         className={`absolute -top-2 -right-2 px-1.5 py-1 rounded-full text-white shadow-sm inline-flex items-center gap-1 transition-all active:scale-[0.98] ${
           busy
-            ? 'bg-red-500 hover:bg-red-600 opacity-100 cursor-pointer pointer-events-auto'
+            ? 'bg-red-500 hover:bg-red-600 opacity-100 cursor-pointer'
             : 'bg-emerald-600 opacity-0 group-hover:opacity-100 hover:bg-emerald-700 cursor-pointer pointer-events-none group-hover:pointer-events-auto'
         }`}
         title={
@@ -119,7 +129,7 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
         ) : (
           <Icon name={I.play} size={12} weight="fill" />
         )}
-      </span>
+      </button>
       <div className="flex items-center justify-between">
         <span className="text-xs font-mono text-zinc-500">{mapping.aspice}</span>
         <span className={iconTone}>
