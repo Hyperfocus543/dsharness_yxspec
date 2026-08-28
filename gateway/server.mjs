@@ -35,6 +35,7 @@ import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
 import { getStatus, getStageRecords, getFileDiff, recordRollback } from './lib/git.mjs'
+import { selfIterationOverview } from './lib/self-iteration.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8787)
@@ -774,6 +775,14 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/api/cost') {
       const cost = buildCostStats()
       return json(res, 200, cost)
+    }
+
+    // 自迭代打分结果：GET /api/self-iteration
+    // 读 @yxspec/self-iteration 插件落盘的 run-state.json + self_iteration/*.jsonl
+    // （runtime-data，纯只读）。从未跑过自迭代 / 网关未起 → 空数据（state:null,
+    // stages:[]），前端据此渲染「尚未执行自迭代」空态，不阻塞驾驶舱。
+    if (req.method === 'GET' && path === '/api/self-iteration') {
+      return json(res, 200, selfIterationOverview())
     }
 
     // 断点续跑：GET /api/resume

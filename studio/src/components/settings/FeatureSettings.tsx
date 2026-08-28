@@ -31,7 +31,7 @@ const COST_LABEL: Record<string, string> = { low: '低', medium: '中', high: '�
 const FEATURE_GROUPS: { label: string; ids: string[] }[] = [
   { label: '需求规则', ids: ['prd-gq6', 'prd-iq', 'prd-mq', 'prd-rq', 'prd-eq', 'sys-granularity', 'sys-aq', 'sys-fix'] },
   { label: '质量与审查', ids: ['swe-arch-terms', 'review-checklist', 'coding-rules'] },
-  { label: '流程机制', ids: ['knowledge-first', 'tool-restrict', 'audit-ledger', 'ui-report', 'ui-git-workspace'] },
+  { label: '流程机制', ids: ['knowledge-first', 'tool-restrict', 'audit-ledger', 'ui-report', 'ui-git-workspace', 'ui-self-iteration'] },
 ];
 
 /** 把 appliesTo（['all'] / ['review'] / token[]）转成可读的阶段清单 */

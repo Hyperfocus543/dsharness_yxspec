@@ -14,6 +14,7 @@ import { ResumeBanner } from './components/cockpit/ResumeBanner';
 import { ReportExport } from './components/cockpit/ReportExport';
 import { ModelSettings } from './components/settings/ModelSettings';import { PluginCenter } from './components/plugin/PluginCenter';
 import { GitWorkspaceCard } from './components/plugin/GitWorkspaceCard';
+import { SelfIterationCard } from './components/plugin/SelfIterationCard';
 
 export const DEFAULT_TASKS_FILES = [
   'task_init.md',
@@ -74,6 +75,8 @@ export function renderFunctionCard(card: FunctionCard, ctx: FunctionCardCtx) {
       return <ModelSettings />;
     case 'git-workspace':
       return <GitWorkspaceCard />;
+    case 'self-iteration':
+      return <SelfIterationCard />;
     default:
       return null;
   }

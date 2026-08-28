@@ -1341,6 +1341,85 @@ export async function recordGitRollback(params: GitRollbackParams): Promise<GitR
 }
 
 // =============================================================================
+// 自迭代打分结果 API（网关 /api/self-iteration）
+// 数据源：@yxspec/self-iteration 插件落盘的 run-state.json + self_iteration/*.jsonl
+// （runtime-data，纯只读）。从未跑过自迭代 / 网关未起 → 空数据（state:null,
+// stages:[]），前端渲染「尚未执行自迭代」空态，不阻塞驾驶舱。
+// =============================================================================
+
+/** 单条轮次留痕（score/v1 与 round/v1 统一成一条展示行）。 */
+export interface SelfIterationRound {
+  /** score=打分留痕 / round=轮次判定留痕 */
+  type: 'score' | 'round';
+  round: number;
+  total: number | null;
+  master: number | null;
+  stageScore: number | null;
+  level: string | null;
+  weak: string[];
+  gateOk: boolean;
+  /** continue | converge | converge_by_maxiter | degrade */
+  verdict: string | null;
+  baselineTotal: number | null;
+  status: string | null;
+  reason: string | null;
+  at: string | null;
+}
+
+/** 单个阶段的聚合（有留痕才出现）。 */
+export interface SelfIterationStage {
+  token: string;
+  label: string;
+  aspice: string;
+  command: string;
+  rounds: SelfIterationRound[];
+  latest: SelfIterationRound | null;
+  converged: boolean;
+}
+
+/** run-state.json 摘要（无 run → null）。 */
+export interface SelfIterationState {
+  stage: string | null;
+  currentRound: number;
+  maxIter: number;
+  goal: string;
+  status: string;
+  converged: boolean;
+  baselineTotal: number | null;
+  bestTotal: number | null;
+  lastScore: {
+    total: number | null;
+    level: string | null;
+    weak: string[];
+    gateOk: boolean;
+  } | null;
+  updatedAt: string | null;
+}
+
+/** GET /api/self-iteration 响应。 */
+export interface SelfIterationOverview {
+  ok: boolean;
+  state: SelfIterationState | null;
+  stages: SelfIterationStage[];
+}
+
+/** 拉取自迭代打分结果；失败返回 null（网关未起/路由未就绪时降级）。 */
+export async function fetchSelfIteration(): Promise<SelfIterationOverview | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/self-iteration`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as SelfIterationOverview;
+    if (!data || typeof data !== 'object') return null;
+    if (!Array.isArray(data.stages)) data.stages = [];
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
 // 浏览器模式下的解析器（与 Rust 解析器等价）
 // =============================================================================
 

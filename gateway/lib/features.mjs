@@ -202,6 +202,14 @@ export const FEATURES = {
     cost: 'low', depends: [], available: true, defaultEnabled: false,
     ruleFile: null, maxChars: 0, uiOnly: true,
   },
+  'ui-self-iteration': {
+    id: 'ui-self-iteration',
+    name: '自迭代评分展示',
+    desc: '自迭代轮次打分 + 收敛判定（纯前端插件，读 @yxspec/self-iteration 留痕，开启后左侧出现「自迭代评分」功能卡）',
+    appliesTo: ['all'],
+    cost: 'low', depends: [], available: true, defaultEnabled: false,
+    ruleFile: null, maxChars: 0, uiOnly: true,
+  },
 }
 
 /** 内置功能 id 清单（用户自定义功能不在此列；运行时合并用 getFeatureMap）。 */

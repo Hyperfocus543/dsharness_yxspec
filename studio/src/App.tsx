@@ -51,6 +51,11 @@ const App: React.FC = () => {
     () => features.some((f) => f.id === 'ui-git-workspace' && f.enabled),
     [features],
   );
+  // ui-self-iteration 是否启用（feature 未加载/未找到 → 关；用户也可在功能商店里开）
+  const selfIterationEnabled = React.useMemo(
+    () => features.some((f) => f.id === 'ui-self-iteration' && f.enabled),
+    [features],
+  );
 
   // hash 路由：`#/cockpit` 直达 + 刷新保留当前卡；null=收起面板
   const [activeCard, setActiveCard] = useCardFromHash();
@@ -61,11 +66,12 @@ const App: React.FC = () => {
   React.useEffect(() => {
     if (
       (!reportEnabled && activeCard === 'report') ||
-      (!gitWorkspaceEnabled && activeCard === 'git-workspace')
+      (!gitWorkspaceEnabled && activeCard === 'git-workspace') ||
+      (!selfIterationEnabled && activeCard === 'self-iteration')
     ) {
       setActiveCard('cockpit');
     }
-  }, [reportEnabled, gitWorkspaceEnabled, activeCard, setActiveCard]);
+  }, [reportEnabled, gitWorkspaceEnabled, selfIterationEnabled, activeCard, setActiveCard]);
   // 产物详情抽屉（需求 3）：点击阶段节点打开
   const [drawerStage, setDrawerStage] = React.useState<{ token: StageToken; label: string } | null>(
     null,
@@ -136,6 +142,7 @@ const App: React.FC = () => {
               activeCard={activeCard}
               reportEnabled={reportEnabled}
               gitWorkspaceEnabled={gitWorkspaceEnabled}
+              selfIterationEnabled={selfIterationEnabled}
               onSelect={setActiveCard}
             />
 
