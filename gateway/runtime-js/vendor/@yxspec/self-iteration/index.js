@@ -231,7 +231,7 @@ function isRoundEndReason(reason) {
 
 /**
  * 判定本轮 verdict（与同事 loop_engine.decide 语义对齐）：
- *   - 降级：总分 < 比较基线，且 total <= baselineTotal → degrade
+ *   - 降级：总分 < 比较基线（严格小于；持平 = 未退化，不算降级）→ degrade
  *   - 收敛：goal 达（Total>=N / Total>N / 门禁全绿）→ converge
  *   - 用满：round >= maxIter → converge_by_maxiter
  *   - 否则 continue
@@ -240,9 +240,12 @@ function isRoundEndReason(reason) {
 function decide(roundNo, total, baselineTotal, goal, gateOk, maxIter) {
   const g = String(goal ?? '').trim()
   // 降级判定只在"本轮确实有分"时才有意义：total 缺失（score tool 降级/未调用）时
-  // `total <= baselineTotal` 恒真（null<=N），会无限 degrade、converge_by_maxiter
+  // `total < baselineTotal` 恒真（null<N），会无限 degrade、converge_by_maxiter
   // 永不触发 → 自迭代死循环。无分轮不判降级，交由下方 roundNo>=maxIter 兜底收束。
-  if (total != null && baselineTotal != null && total <= baselineTotal) return 'degrade'
+  // 严格小于（`<` 而非 `<=`）：持平 = 本轮与基线同分，不算退化。否则 baseline 冻结后
+  // 首次改分仍与基线同分（如 baseline=80、goal "Total>=80"、本轮 80）会被误判 degrade，
+  // goal 已达标也不 converge，白白回滚。
+  if (total != null && baselineTotal != null && total < baselineTotal) return 'degrade'
   // 目标解析：正则提取 "Total>=80" / "Total>80" / "Total >= 80"（含小数），
   // 其余文本（如 "且门禁全绿"）视为附加条件。此前用 g.split('>=')[1] 硬切，
   // 复合目标会得到 Number('80 且门禁全绿')=NaN → total>=NaN 恒 false，

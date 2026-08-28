@@ -21,7 +21,8 @@ check('spaced Total >= 80', decide(1, 85, null, 'Total >= 80', true, 3), 'conver
 check('decimal Total>=85.5', decide(1, 86, null, 'Total>=85.5', true, 3), 'converge')
 check('decimal below', decide(1, 85, null, 'Total>=85.5', true, 3), 'continue')
 // decide：降级护栏
-check('degrade total<=baseline', decide(2, 85, 85, 'Total>=80', true, 3), 'degrade')
+check('tie total=baseline goal met -> converge', decide(2, 85, 85, 'Total>=80', true, 3), 'converge')
+check('tie total=baseline goal not met -> continue', decide(2, 85, 85, 'Total>=90', true, 3), 'continue')
 check('degrade total<baseline', decide(2, 80, 85, 'Total>=80', true, 3), 'degrade')
 // decide：无 goal → 门禁全绿
 check('no goal gateOk', decide(1, 70, null, '', true, 3), 'converge')

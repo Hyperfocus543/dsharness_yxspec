@@ -38,7 +38,7 @@ ok(r2 === 'sqt_script_gen', `resolveStageToken sqt_script_gen -> ${r2}`)
 const d = decide
 ok(d(3, 85, 60, 'Total>=80 且门禁全绿', true, 5) === 'converge', 'decide converge (goal+gate)')
 ok(d(3, 85, 60, 'Total>=80 且门禁全绿', false, 5) === 'continue', 'decide gate-blocked -> continue')
-ok(d(3, 55, 60, 'Total>=80', true, 5) === 'degrade', 'decide degrade (total<=baseline)')
+ok(d(3, 55, 60, 'Total>=80', true, 5) === 'degrade', 'decide degrade (total<baseline)')
 ok(d(3, 65, 60, 'Total>=80', true, 5) === 'continue', 'decide continue (below goal)')
 ok(d(5, 55, null, 'Total>=80', true, 5) === 'converge_by_maxiter', 'decide maxiter')
 ok(d(1, null, null, 'Total>=80', null, 3) === 'continue', 'decide no-score continue')
