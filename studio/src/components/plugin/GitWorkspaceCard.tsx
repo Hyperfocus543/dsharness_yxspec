@@ -232,8 +232,14 @@ export const GitWorkspaceCard: React.FC = () => {
   }, [traceStage, loadCommits]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
-  // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）
-  const [hoverFile, setHoverFile] = React.useState<string | null>(null);
+  // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）。
+  // 放 ref 而非 state：hover 只是"临时预览"（映射成 open 的中间层），
+  // 不参与渲染；点按/键盘的"固定 diff"（open）才是受控源。
+  const hoverFileRef = React.useRef<string | null>(null);
+  // 固定展开 diff 的文件路径（点击 diff 按钮或空格/回车切换；最多一个浮层）
+  const [openFile, setOpenFile] = React.useState<string | null>(null);
+  // 鼠标悬停是否仍生效（触屏/纯键盘场景自动关闭 hover 预览，避免无法移出的固定浮层）
+  const [hoverEnabled, setHoverEnabled] = React.useState(true);
   // 最近 5 条 commit（取带 message 的，倒序排列）；后端字段 recentCommits，旧字段 recent 兜底
   const recent = [...(status?.recentCommits ?? status?.recent ?? [])].slice(0, 5);
   const tags = status?.tags ?? [];
@@ -394,12 +400,17 @@ export const GitWorkspaceCard: React.FC = () => {
                 <div
                   key={f.path}
                   className="relative"
-                  onMouseEnter={() => setHoverFile(f.path)}
-                  onMouseLeave={() => setHoverFile((cur) => (cur === f.path ? null : cur))}
+                  onMouseEnter={() => {
+                    hoverFileRef.current = f.path;
+                    setHoverEnabled(true);
+                  }}
+                  onMouseLeave={() => {
+                    if (hoverFileRef.current === f.path) hoverFileRef.current = null;
+                  }}
                 >
                   <div
                     className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
-                    title="hover 查看改动 diff"
+                    title="点击 diff 按钮或悬停查看改动"
                   >
                     <span className={`shrink-0 w-1 self-stretch rounded-full ${st.dot}`} aria-hidden />
                     <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${st.cls}`}>{st.label}</span>
@@ -409,8 +420,23 @@ export const GitWorkspaceCard: React.FC = () => {
                     <span className="min-w-0 truncate text-zinc-600 font-mono" title={f.path}>
                       {f.path}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // 点击固定/收起：hover 预览随点击收起（避免两种浮层叠出），再次点击关闭
+                        hoverFileRef.current = null;
+                        setOpenFile((cur) => (cur === f.path ? null : f.path));
+                      }}
+                      aria-expanded={openFile === f.path}
+                      aria-label={`${openFile === f.path ? '收起' : '查看'} ${f.path} 的改动 diff`}
+                      className="ml-auto shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+                      title="查看改动 diff"
+                    >
+                      <Icon name={I.fileCode} size={11} />
+                      {openFile === f.path ? '收起' : 'diff'}
+                    </button>
                   </div>
-                  <DirtyDiffPreview file={f} open={hoverFile === f.path} />
+                  <DirtyDiffPreview file={f} open={openFile === f.path || (hoverEnabled && hoverFileRef.current === f.path)} />
                 </div>
               );
             })}
