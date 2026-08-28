@@ -657,7 +657,10 @@ export const GitWorkspaceCard: React.FC = () => {
             记录回滚：阶段 <span className="font-mono">{traceStage}</span> · commit{' '}
             <span className="font-mono">{shortHash(confirmTarget.commit)}</span>
           </div>
+          {/* autoFocus：确认面板在卡片底部，滚动区折叠之外时自动滚入视区并直接可输入，
+              避免用户点「回滚」后找不到确认入口（面板挂载即聚焦，已可见时不跳转）。 */}
           <input
+            autoFocus
             className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
             value={rollbackReason}
             onChange={(e) => setRollbackReason(e.target.value)}
