@@ -17,6 +17,7 @@ import { CostDashboard } from './CostDashboard';
 import { PipelinePanel } from '../pipeline/PipelinePanel';
 import { BatchQueue } from './BatchQueue';
 import { ReviewCenter } from '../review/ReviewCenter';
+import { CostBadge } from './CostBadge';
 import { useProjectStore } from '../../store/projectStore';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
@@ -102,6 +103,9 @@ export const StageCockpit: React.FC<CockpitProps> = ({
           不随滚动滚出视野；-mb-3 抵消 space-y 间距，滚动时无漏缝） */}
       <div className="sticky top-0 z-20 bg-zinc-50 -mb-3 pt-1 pb-1 flex items-center gap-1.5 flex-wrap border-b border-zinc-200/70">
         <ViewTabs view={view} onView={handleView} />
+        {/* 本周成本角标：7 天合计 + 趋势（近 3 vs 前 3），点击展开完整成本面板。
+            无近 7 天数据（老网关/空账本）→ 内部静默不渲染，不占工具栏。 */}
+        <CostBadge onOpen={() => setShowCost(true)} />
         {/* 执行成本折叠开关 */}
         <button
           className={`text-xs px-2.5 py-1.5 rounded-md border transition-all focus-visible:outline-none active:scale-[0.98] inline-flex items-center gap-1.5 ${
