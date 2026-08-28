@@ -150,12 +150,14 @@ function gitSubUnsafe(sub, segment) {
     // 破坏性：-d/-D 删除、-m/-M 重命名、-c/-C 复制、-u 改 upstream、-f/--force
     // 强制覆盖、--delete/--move/--copy/--edit-description/--set-upstream。
     // 短 flag 用 `(?:^|-)` 前缀匹配防误伤（`-l/-a/-r/-v` 等只读列出/远程分支浏览
-    // 均以 `-` 开头后跟只读字母，不落破坏性集合）。长 flag 必须完整词 + 空白边界
-    // （`(?:\s|$)`），否则 `--m` 会误伤 `--move` 自身、`--f` 会误伤 `--force`。
+    // 均以 `-` 开头后跟只读字母，不落破坏性集合）。长 flag 必须完整词 + 边界
+    // `(?:=|\s|$)`——等号连写形态（`--set-upstream-to=origin/main`、
+    // `--move=foo`）与空格/结尾等价，此前只认 `(?:\s|$)`，`=` 连写漏网。
+    // 完整词边界仍由该后缀保证（`--move` 后接 `-`/字母不命中，不误伤）。
     // 只读的 --list/--remotes/--all/--no-color 不进白名单 → 默认拒绝（与 tag 的
     // 「pattern 以 - 开头按不匹配」同策略：宁可误伤不放过）。
     const after = gitArgsAfter('branch', segment);
-    return /(?:^|-)d(?:\s|$)|(?:^|-)D(?:\s|$)|(?:^|-)m(?:\s|$)|(?:^|-)M(?:\s|$)|(?:^|-)c(?:\s|$)|(?:^|-)C(?:\s|$)|(?:^|-)u(?:\s|$)|(?:^|-)f(?:\s|$)|--(?:delete|move|copy|force|edit-description|set-upstream|unset-upstream|set-upstream-to|unset-upstream-to)(?:\s|$)/.test(
+    return /(?:^|-)d(?:\s|$)|(?:^|-)D(?:\s|$)|(?:^|-)m(?:\s|$)|(?:^|-)M(?:\s|$)|(?:^|-)c(?:\s|$)|(?:^|-)C(?:\s|$)|(?:^|-)u(?:\s|$)|(?:^|-)f(?:\s|$)|--(?:delete|move|copy|force|edit-description|set-upstream|unset-upstream|set-upstream-to|unset-upstream-to)(?:=|\s|$)/.test(
       after,
     );
   }
