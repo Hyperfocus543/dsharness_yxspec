@@ -572,11 +572,13 @@ export const GitWorkspaceCard: React.FC = () => {
             ))}
           </select>
           <span className="text-[10px] text-zinc-400">
-            {commitsLoading ? '加载中…' : commitsError ? '加载失败' : `${commits?.length ?? 0} 条留痕`}
+            {commitsLoading || !commits ? '加载中…' : commitsError ? '加载失败' : `${commits.length} 条留痕`}
           </span>
         </div>
-        {commitsLoading ? (
-          <div className="space-y-1">
+        {/* commits 初始为 null（未加载）≠ 空数组（已确认无留痕）：null 归入骨架屏，
+            避免首帧误闪「该阶段暂无留痕记录 + 0 条留痕」，再切到加载态。 */}
+        {commitsLoading || !commits ? (
+          <div className="space-y-1" role="status" aria-busy="true" aria-label="正在加载该阶段留痕">
             {Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="h-8 bg-zinc-100 rounded animate-pulse" />
             ))}
