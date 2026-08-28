@@ -768,11 +768,24 @@ export interface CostTotals {
   toolCalls: number;
 }
 
+/** 近 7 天单日负载（成本角标迷你趋势条数据源；网关 /api/cost trend）。 */
+export interface CostTrendDay {
+  /** 本地日 `YYYY-MM-DD` */
+  date: string;
+  runs: number;
+  elapsedMs: number;
+  toolCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+}
+
 export interface CostData {
   perStage: CostStageStat[];
   totals: CostTotals;
   pricePerMillion: { input: number; output: number };
   hasTokenData: boolean;
+  /** 近 7 天（含今天）每日负载，时间倒序（新→旧）；网关老版本可能无此字段 */
+  trend?: CostTrendDay[];
   note: string;
 }
 

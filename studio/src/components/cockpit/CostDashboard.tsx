@@ -4,6 +4,8 @@
 // 展示：总 token / 总耗时 / 总请求次数 / 工具调用数；hasTokenData=false 时
 // 明确标注「token 未统计（数据源无 usage）」；单价已配置时显示估算金额。
 // 阶段级用横向 bar 展示耗时 / token 分布。
+// 近 7 天趋势条（成本角标）：日级迷你 bar（token 可用时画 token，否则画执行次数），
+// 顶部给 7 天合计小徽标（token / 次数，随 hasTokenData 自适应）。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
@@ -13,7 +15,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useToastStore } from '../../store/toastStore';
 import { Button, EmptyState, Icon } from '../ui';
 import { I } from '../ui/icons';
-import type { CostData } from '../../utils/ipc';
+import type { CostData, CostTrendDay } from '../../utils/ipc';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 
 /** 毫秒 → 人类可读耗时（省略高位零，与项目时间约定一致） */
@@ -40,6 +42,54 @@ function estCost(data: CostData, isInput: boolean): number | null {
   const tokens = isInput ? data.totals.promptTokens : data.totals.completionTokens;
   return (tokens / 1_000_000) * price;
 }
+
+/** 近 7 天趋势条（成本角标）：token 可用时画 token，否则画执行次数。
+ *  每日迷你 bar + 顶部 7 天合计小徽标；空日（runs:0）灰条占位，不喧宾夺主。 */
+const TrendStrip: React.FC<{ trend: CostTrendDay[]; hasTokenData: boolean }> = ({ trend, hasTokenData }) => {
+  if (trend.length === 0) return null;
+  // 展示口径随数据源自适应：token 可用 → token/日；否则 → 执行次数/日（老账本无 usage）
+  const metricOf = (d: CostTrendDay): number =>
+    hasTokenData ? d.promptTokens + d.completionTokens : d.runs;
+  const sum7 = trend.reduce((acc, d) => acc + metricOf(d), 0);
+  const maxV = Math.max(1, ...trend.map((d) => metricOf(d)));
+  const weekday = (key: string): string => {
+    const d = new Date(`${key}T00:00:00`);
+    if (!Number.isFinite(d.getTime())) return '—';
+    return new Intl.DateTimeFormat('zh-CN', { weekday: 'narrow' }).format(d);
+  };
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2.5 space-y-2">
+      <div className="flex items-center justify-between gap-2 text-[11px] text-zinc-400">
+        <span className="inline-flex items-center gap-1">
+          <Icon name={I.chartBar} size={12} />
+          近 7 天 {hasTokenData ? 'token' : '执行次数'}趋势
+        </span>
+        <span className="tabular-nums text-zinc-500" title="7 天合计（与顶部统计可能不同：仅取有记录的日）">
+          合计 <span className="font-semibold text-zinc-700">{fmtNum(sum7)}</span>
+        </span>
+      </div>
+      <div className="flex items-end gap-1.5 h-9" role="img" aria-label={`近 7 天${hasTokenData ? ' token' : ' 执行次数'}趋势柱状图`}>
+        {trend.map((d) => {
+          const v = metricOf(d);
+          const pct = Math.max(v > 0 ? 10 : 0, Math.round((v / maxV) * 100));
+          return (
+            <div key={d.date} className="flex-1 min-w-0 flex flex-col items-center gap-0.5 group" title={`${d.date}：${hasTokenData ? fmtNum(v) + ' token' : v + ' 次执行'}`}>
+              <div className="w-full flex items-end justify-center flex-1" style={{ height: 'calc(100% - 14px)' }}>
+                <div
+                  className={`w-full max-w-[14px] rounded-sm transition-all ${
+                    v > 0 ? 'bg-emerald-500 group-hover:bg-emerald-600' : 'bg-zinc-100'
+                  }`}
+                  style={{ height: v > 0 ? `${pct}%` : '3px' }}
+                />
+              </div>
+              <span className="text-[9px] text-zinc-400 tabular-nums leading-none">{weekday(d.date)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 export const CostDashboard: React.FC = () => {
   const costData = useStageStore((s) => s.costData);
@@ -89,7 +139,7 @@ export const CostDashboard: React.FC = () => {
     );
   }
 
-  const { totals, perStage, hasTokenData, pricePerMillion, note } = costData;
+  const { totals, perStage, hasTokenData, pricePerMillion, note, trend } = costData;
   const hasPrice = (pricePerMillion.input > 0) || (pricePerMillion.output > 0);
   const totalTokens = totals.promptTokens + totals.completionTokens;
   const costIn = estCost(costData, true);
@@ -164,6 +214,9 @@ export const CostDashboard: React.FC = () => {
           tone="neutral"
         />
       </div>
+
+      {/* 近 7 天趋势（成本角标）：日级迷你 bar；老网关无 trend 字段时静默隐藏 */}
+      {Array.isArray(trend) && <TrendStrip trend={trend} hasTokenData={hasTokenData} />}
 
       {/* 金额估算（仅当单价已配置）*/}
       {hasPrice && (

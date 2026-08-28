@@ -13,6 +13,9 @@
 //   · prompt/completionTokens = 从账本里 assistant/message 事件的 usage 累计
 //     （harness.mjs 审计层补记；老账本无 usage → 该轮记 0，不报错）。
 //   · hasTokenData = 账本里存在任意 usage 记录。
+//   · trend        = 近 7 天（含今天）每日负载聚合（按本地日切桶：runs/耗时/
+//     工具调用/token），供前端成本角标画迷你趋势条 —— 不额外扫文件，
+//     与 perStage 同源同 pass（日桶只记本轮，跨 session 轮次仍在 turn/start 归位）。
 //
 // 单价：每百万 token 美元价，可经环境变量覆盖（默认 0 = 不估金额）：
 //   YXSPEC_COST_INPUT_PRICE  每百万 input token 单价
@@ -43,6 +46,28 @@ function stageOfPrompt(prompt) {
   return null
 }
 
+/** 本地日桶 key：`YYYY-MM-DD`（本地时区；跨日运行同一天归同桶）。
+ *  本轮发生的 run/tool/token 全部归 startTs 所在日（turn/end 跨日不另切桶）。 */
+function localDayKey(tsMs) {
+  const d = new Date(Number.isFinite(tsMs) ? tsMs : Date.now())
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+/** 生成近 7 天（含今天）的连续日桶模板，键 = YYYY-MM-DD。 */
+function dayBucketTemplate() {
+  const days = []
+  const now = new Date()
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    days.push(`${d.getFullYear()}-${mm}-${dd}`)
+  }
+  return days
+}
+
 /** 解析一行 JSON；解析失败返回 null。 */
 function parseLine(line) {
   try {
@@ -59,11 +84,13 @@ function parseLine(line) {
  *   totals: {runs, elapsedMs, promptTokens, completionTokens, toolCalls},
  *   pricePerMillion: {input, output},
  *   hasTokenData: boolean,
+ *   trend: Array<{date, runs, elapsedMs, toolCalls, promptTokens, completionTokens}>,
  *   note: string
  * }}
  */
 export function buildCostStats() {
   const perStage = new Map() // token -> stats
+  const perDay = new Map() // YYYY-MM-DD -> { runs, elapsedMs, toolCalls, promptTokens, completionTokens }
   let toolCallsTotal = 0
   let runsTotal = 0
   let elapsedTotal = 0
@@ -109,7 +136,7 @@ export function buildCostStats() {
           case 'turn/start': {
             // 同一文件可能含多个 turn（轮次计数器未前进时后续事件并入旧文件），
             // 新 turn/start 出现即上一轮终结（或已被放弃）→ 先结清再开新轮。
-            if (cur) settleTurn(perStage, cur)
+            if (cur) settleTurn(perStage, perDay, cur)
             const stage = stageOfPrompt(r.prompt) ?? '_general'
             if (!perStage.has(stage)) {
               perStage.set(stage, {
@@ -124,7 +151,13 @@ export function buildCostStats() {
             }
             perStage.get(stage).runs += 1
             runsTotal += 1
-            cur = { stage, startMs: tsMs, endMs: null, tools: 0, lastEventTs: tsMs, promptTokens: 0, completionTokens: 0 }
+            // 本轮归入 startTs 所在日（本地日切桶；todayKey 用于空模板对齐）
+            const dayKey = localDayKey(tsMs)
+            if (!perDay.has(dayKey)) {
+              perDay.set(dayKey, { runs: 0, elapsedMs: 0, toolCalls: 0, promptTokens: 0, completionTokens: 0 })
+            }
+            perDay.get(dayKey).runs += 1
+            cur = { stage, startMs: tsMs, endMs: null, tools: 0, lastEventTs: tsMs, promptTokens: 0, completionTokens: 0, dayKey }
             break
           }
           case 'tool/call': {
@@ -166,7 +199,7 @@ export function buildCostStats() {
       }
     }
     // session 扫完：结清最后打开的轮次
-    if (cur) settleTurn(perStage, cur)
+    if (cur) settleTurn(perStage, perDay, cur)
   }
 
   // 排序 + 汇总
@@ -180,6 +213,18 @@ export function buildCostStats() {
     completionTokensTotal += s.completionTokens
     elapsedTotal += s.elapsedMs
   }
+
+  // 近 7 天趋势：按本地日连续模板补零（无记录日 runs:0），输出倒序（新→旧）
+  const trend = dayBucketTemplate()
+    .map((key) => ({
+      date: key,
+      runs: perDay.get(key)?.runs ?? 0,
+      elapsedMs: perDay.get(key)?.elapsedMs ?? 0,
+      toolCalls: perDay.get(key)?.toolCalls ?? 0,
+      promptTokens: perDay.get(key)?.promptTokens ?? 0,
+      completionTokens: perDay.get(key)?.completionTokens ?? 0,
+    }))
+    .reverse()
 
   return {
     perStage: perStageArr,
@@ -195,30 +240,40 @@ export function buildCostStats() {
       output: Number(process.env.YXSPEC_COST_OUTPUT_PRICE) || 0,
     },
     hasTokenData,
+    trend,
     note: '数据源为审计账本（.dsh/gateway-log）。token usage 由 harness 审计层从 SDK 事件流补记；' +
       '老账本（改前执行）无 usage 记录，token 计 0。耗时/次数为真实执行负载。' +
       '单价未配置时为 0（仅显示 token 数，不估金额）。',
   }
 }
 
-/** 结清一轮：elapsed 上限 TURN_TIMEOUT_MS，归入 perStage。 */
-function settleTurn(perStage, cur) {
+/** 结清一轮：elapsed 上限 TURN_TIMEOUT_MS，归入 perStage 与当日桶。 */
+function settleTurn(perStage, perDay, cur) {
   const s = perStage.get(cur.stage)
-  if (!s) return
+  const d = perDay.get(cur.dayKey)
   let elapsed = 0
   if (cur.endMs && Number.isFinite(cur.endMs) && cur.endMs >= cur.startMs) {
     elapsed = cur.endMs - cur.startMs
   } else if (Number.isFinite(cur.startMs) && cur.lastEventTs >= cur.startMs) {
     elapsed = cur.lastEventTs - cur.startMs
   }
-  s.elapsedMs += Math.max(0, Math.min(elapsed, TURN_TIMEOUT_MS))
-  s.toolCalls += cur.tools
-  s.promptTokens += cur.promptTokens
-  s.completionTokens += cur.completionTokens
-  const last = cur.endMs ?? cur.lastEventTs
-  if (Number.isFinite(last)) {
-    if (!s.lastRunAt || last > Date.parse(s.lastRunAt)) {
-      s.lastRunAt = new Date(last).toISOString()
+  const capped = Math.max(0, Math.min(elapsed, TURN_TIMEOUT_MS))
+  if (s) {
+    s.elapsedMs += capped
+    s.toolCalls += cur.tools
+    s.promptTokens += cur.promptTokens
+    s.completionTokens += cur.completionTokens
+    const last = cur.endMs ?? cur.lastEventTs
+    if (Number.isFinite(last)) {
+      if (!s.lastRunAt || last > Date.parse(s.lastRunAt)) {
+        s.lastRunAt = new Date(last).toISOString()
+      }
     }
+  }
+  if (d) {
+    d.elapsedMs += capped
+    d.toolCalls += cur.tools
+    d.promptTokens += cur.promptTokens
+    d.completionTokens += cur.completionTokens
   }
 }
