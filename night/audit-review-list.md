@@ -18,10 +18,14 @@
 ## 二、剩余异常（需人工/框架侧决策，勿自动修）
 
 ### A. 基础设施缺口（最高优先级，建议项目侧先处理）
-1. **NO-TRAJ × 25**：全部 27 阶段中 25 阶段无执行轨迹。根因 = 轨迹插件
-   （@yxspec/aspice-trajectory）只覆盖 swe_coding_do / swe_unit_verify，其余阶段
-   产物真实存在（HIT）但无执行记录。**非造假证据**，但无法证明产物来源。
-   建议：cordis.yml 全局启用轨迹插件（需重启网关）+ 后续执行自动补齐。
+1. **NO-TRAJ × 25**：全部 27 阶段中 25 阶段无执行轨迹。**根因已查明并修复（2026-08-28）**：
+   - 直接原因 = 8-27 起网关零派活（审计日志停在 8-25 18:04 / 8-27 20:05，8-27 19:05 重启后无新执行）；
+   - 深层原因 = runtime 装配 workflow 条目与 harness 侧 workflowEngine **重复注册**，
+     `failed to apply loader entry workflow-worker-thread` → 每次派活 runtime 启动失败 → 零执行 → 零轨迹；
+   - 修复 = plugins.mjs ralph 候选装配移除 workflow 两条（commit 3f8cd71），
+     **沙盒 8789 真实验证**：runtime 完整跑通 45 工具调用 turn，轨迹 JSONL 落盘
+     `init-001.jsonl`（status=passed，9 类事件，token 成本齐全）。
+   - 结论：**8-28 起新派活自动落轨迹**，无需补历史（历史产物真实存在但无执行证据，如实标记 unverified）。
 2. **CMD-MISSING × 3**：hwe_analysis / comp / traceability 命令文件在框架
    COMMANDS_ROOT 不存在。已确认非命令名映射问题——命令注册表
    （.dsh/gateway/runtime-js/vendor/yxspec-commands/index.js）含这三个命令，
