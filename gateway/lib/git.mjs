@@ -88,7 +88,7 @@ function porcelainStatus(xy) {
  * 解析 git 仓库根（候选优先级见文件头）。全部失败 → null。
  * @returns {Promise<{root: string, source: string} | null>}
  */
-async function resolveGitRoot() {
+export async function resolveGitRoot() {
   const candidates = []
   if (process.env.YXSPEC_GIT_ROOT) candidates.push({ root: process.env.YXSPEC_GIT_ROOT, source: 'YXSPEC_GIT_ROOT' })
   const projectRoot = process.env.YXSPEC_PROJECT_ROOT || PROJECT_ROOT
@@ -101,6 +101,40 @@ async function resolveGitRoot() {
   const r = await runGit(['rev-parse', '--show-toplevel'])
   if (r.ok && r.stdout.trim()) return { root: r.stdout.trim(), source: 'rev-parse-fallback' }
   return null
+}
+
+/**
+ * 批量拉取 git 提交索引 + tag→commit 映射（getStageRecords 与轨迹聚合 git 增强共用）。
+ * 一次 `git log --all`（hash+unix 时间戳+subject）+ 一次 for-each-ref（tag 映射），
+ * 与 getStatus 的最近提交同口径但覆盖全部分支。任何一次失败 → ok:false（不抛）。
+ * @param {string} cwd git 仓库根
+ * @returns {Promise<{commits: {hash:string,sec:number,subject:string}[], tagByCommit: Map<string,string>, ok: boolean}>}
+ */
+export async function loadGitIndex(cwd) {
+  const [logR, tagR] = await Promise.all([
+    runGit(['log', '--all', '--date=unix', '--format=%H%x09%ct%x09%s'], { cwd }),
+    runGit(['for-each-ref', 'refs/tags', '--format=%(objectname)%x09%(*objectname)%x09%(refname:short)'], { cwd }),
+  ])
+  const commits = [] // { hash, sec, subject }，时间降序
+  if (logR.ok) {
+    for (const line of logR.stdout.split('\n')) {
+      if (!line.trim()) continue
+      const [hash, secStr, ...subjectParts] = line.split('\t')
+      const sec = Number(secStr)
+      if (hash && Number.isFinite(sec)) commits.push({ hash, sec, subject: subjectParts.join('\t') })
+    }
+    commits.sort((a, b) => b.sec - a.sec)
+  }
+  const tagByCommit = new Map()
+  if (tagR.ok) {
+    for (const line of tagR.stdout.split('\n')) {
+      if (!line.trim()) continue
+      const [obj, peeled, name] = line.split('\t')
+      const commitHash = peeled || obj // 轻量 tag：obj=commit；注解 tag：peeled=commit
+      if (commitHash && name) tagByCommit.set(commitHash, name)
+    }
+  }
+  return { commits, tagByCommit, ok: logR.ok && tagR.ok }
 }
 
 /**
@@ -257,36 +291,13 @@ export async function getStageRecords(stage) {
   out.root = gr.root
   const cwd = gr.root
   // 批量拉取：所有提交（hash + 时间戳 + subject）+ tag→commit 映射（各一次 git 调用）
-  const [logR, tagR] = await Promise.all([
-    runGit(['log', '--all', '--date=unix', '--format=%H%x09%ct%x09%s'], { cwd }),
-    runGit(['for-each-ref', 'refs/tags', '--format=%(objectname)%x09%(*objectname)%x09%(refname:short)'], { cwd }),
-  ])
-  const commits = [] // { hash, sec, subject }，时间降序
-  if (logR.ok) {
-    for (const line of logR.stdout.split('\n')) {
-      if (!line.trim()) continue
-      const [hash, secStr, ...subjectParts] = line.split('\t')
-      const sec = Number(secStr)
-      if (hash && Number.isFinite(sec)) commits.push({ hash, sec, subject: subjectParts.join('\t') })
-    }
-    commits.sort((a, b) => b.sec - a.sec)
-  }
-  const tagByCommit = new Map()
-  if (tagR.ok) {
-    for (const line of tagR.stdout.split('\n')) {
-      if (!line.trim()) continue
-      const [obj, peeled, name] = line.split('\t')
-      const commitHash = peeled || obj // 轻量 tag：obj=commit；注解 tag：peeled=commit
-      if (commitHash && name) tagByCommit.set(commitHash, name)
-    }
-  }
-  const gitOk = logR.ok && tagR.ok
+  const { commits, tagByCommit, ok: gitOk } = await loadGitIndex(cwd)
   out.gitAvailable = gitOk
   if (!gitOk) out.error = 'git 不可用：无法读取提交历史'
   out.records = records.map((r) => {
     const row = toStageRow(r)
     const started = r.startedAt ? Math.floor(r.startedAt / 1000) : null
-    if (started != null && logR.ok) {
+    if (started != null && gitOk) {
       const at = commits.find((c) => c.sec <= started) // 数组已降序 → 第一个即最新 ≤ startedAt
       if (at) {
         row.commit = at.hash.slice(0, 7)

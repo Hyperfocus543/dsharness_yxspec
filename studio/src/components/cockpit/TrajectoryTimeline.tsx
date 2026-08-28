@@ -6,6 +6,11 @@
 //   · 阶段徽标点击 → 展开该阶段详情（TrajectoryPanel 复用）
 //   · 过滤：仅失败/打回/已回滚（排障聚焦）
 // 单模块轨迹在各自单元卡内联展示（TrajectoryPanel），本页 = 全局排障入口。
+//
+// 轨迹 × git 联动：每行在「时间」前展示该次执行 startedAt 时刻的最新 commit
+// （git log --all + for-each-ref，网关 trajectoryAll 已合并，零额外请求）。
+// commit 徽标 tooltip 给完整 hash + 提交说明；tag 徽标 emerald（指向同一 commit）。
+// git 不可用（非仓库/未装 git）→ 数据源 gitAvailable=false，整行不渲染 git 徽标。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
@@ -91,11 +96,39 @@ interface StageSubtotal {
   failed: number;
 }
 
+/** 轨迹 × git：该行对应的 commit + tag 徽标组（git 不可用/无 commit → null，不渲染）。 */
+const GitBadge: React.FC<{ rec: TrajectoryAllEntry; gitAvailable?: boolean }> = ({ rec, gitAvailable }) => {
+  // 数据源 gitAvailable=false（非仓库/未装 git）或该条无 commit → 整组不渲染
+  if (!gitAvailable || !rec.commit) return null;
+  return (
+    <>
+      <span
+        className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px] hover:bg-emerald-50 hover:text-emerald-700 transition-all"
+        title={[
+          rec.commitFull || rec.commit,
+          rec.subject ? `提交说明：${rec.subject}` : '（无提交说明）',
+        ].join('\n')}
+      >
+        {rec.commit}
+      </span>
+      {rec.tag && (
+        <span
+          className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+          title={`该次执行时刻的 commit 打上了 tag：${rec.tag}`}
+        >
+          {rec.tag}
+        </span>
+      )}
+    </>
+  );
+};
+
 /** 单行：一次阶段执行（阶段徽标 + 状态 + 耗时/token/工具 + 时间），点击展开该阶段详情 */
 const TimelineRow: React.FC<{
   rec: TrajectoryAllEntry;
   onOpen: (t: string) => void;
-}> = ({ rec, onOpen }) => {
+  gitAvailable?: boolean;
+}> = ({ rec, onOpen, gitAvailable }) => {
   const st = rowStyle(rec.rolled_back ? 'blocked' : rec.status);
   const toolCalls = (rec.tools ?? []).filter((t) => t.type === 'tool/call').length;
   const toolOks = (rec.tools ?? []).filter((t) => t.type === 'tool/result' && t.ok).length;
@@ -122,6 +155,8 @@ const TimelineRow: React.FC<{
       <span className="shrink-0 text-zinc-400 tabular-nums" title={`工具调用 ${toolCalls} 次，成功 ${toolOks} 次`}>
         ×{toolCalls}✓{toolOks}
       </span>
+      {/* 轨迹 × git：该次执行时刻的最新 commit + tag（网关已合并，零额外请求） */}
+      <GitBadge rec={rec} gitAvailable={gitAvailable} />
       {rec.reason && (
         <span className="text-[11px] text-zinc-400 font-mono truncate max-w-[160px]" title={rec.reason}>
           {rec.reason}
@@ -288,6 +323,7 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
             <TimelineRow
               key={`${r.stage}-${r.seq}-${r.startedAt}`}
               rec={r}
+              gitAvailable={data?.gitAvailable}
               onOpen={(t) => {
                 setOpenStage(openStage === t ? null : t);
                 onOpenStage?.(t);

@@ -899,6 +899,14 @@ export interface TrajectoryAllEntry extends TrajectoryRecord {
   aspice: string;
   command: string;
   group: string;
+  /** 轨迹 × git 增强：该次执行 startedAt 时刻的最新 commit（7 位短 hash；无 → null） */
+  commit?: string | null;
+  /** 完整 commit hash（tooltip 展示；无 → null） */
+  commitFull?: string | null;
+  /** 该 commit 的提交说明（tooltip 展示；无 → null） */
+  subject?: string | null;
+  /** 指向该 commit 的 tag（无 → null） */
+  tag?: string | null;
 }
 export interface TrajectoryAll {
   ok: boolean;
@@ -906,6 +914,10 @@ export interface TrajectoryAll {
   /** stage → 记录数（供"每阶段小计"） */
   stageCounts: Record<string, number>;
   rows: TrajectoryAllEntry[];
+  /** 轨迹 × git 增强：git 是否可用（false = 非仓库/未装 git，commit/tag 恒 null） */
+  gitAvailable?: boolean;
+  /** 解析出的 git 仓库根（git 不可用 → null） */
+  root?: string | null;
 }
 
 /** 拉取全阶段轨迹聚合（总轨迹时间轴）；失败返回 null。 */

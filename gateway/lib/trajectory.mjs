@@ -25,6 +25,7 @@ import { existsSync, readdirSync, readFileSync, appendFileSync, mkdirSync } from
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { STAGES, scanStageArtifacts, stageGlobHit } from './stages.mjs'
+import { resolveGitRoot, loadGitIndex } from './git.mjs'
 
 // 轨迹根：gateway/runtime-data/trajectory（与插件 DEFAULT_ROOT 一致；
 // 副本网关可用 YXSPEC_TRAJECTORY_ROOT 覆盖，与插件共用同一 env）。
@@ -89,10 +90,17 @@ export function latestTrajectory(stage) {
  * 每行附阶段元信息（label/aspice/command/group）+ 门控三态（gateStatus 聚合），
  * 另返回每阶段记录数（stageCounts）供前端"只显示有轨迹的阶段"小计。
  * 单条记录与 listTrajectories 原样透出（前端复用 TrajectoryRecord 渲染瀑布行）。
+ *
+ * 轨迹 × git 增强（与 Git 工作区管控卡同口径的"该时刻最新提交"）：
+ *   每条执行记录合并其 startedAt 时刻的最新 commit（git 提交时间戳 <= startedAt）
+ *   及其 tag —— git log --all + for-each-ref 批量拉取一次，零按阶段额外调用。
+ *   新增字段：commit（7 位短 hash）/ commitFull / subject / tag（指向该 commit 的 tag，
+ *   无 → null）；顶层 gitAvailable + root（git 不可用 → false + null，各字段 null，
+ *   不阻塞轨迹流）。
  * @param {number} [limit] 全局行数上限（默认 200，防爆）
- * @returns {object} { ok, total, stageCounts, rows }
+ * @returns {Promise<object>} { ok, total, stageCounts, rows, gitAvailable, root }
  */
-export function trajectoryAll(limit = 200) {
+export async function trajectoryAll(limit = 200) {
   const stageCounts = {}
   const rows = []
   for (const token of Object.keys(STAGES)) {
@@ -112,8 +120,37 @@ export function trajectoryAll(limit = 200) {
   }
   // 时间降序（新→旧）；同时间戳按阶段 key 稳定排序
   rows.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || a.stage.localeCompare(b.stage))
+
+  // 轨迹 × git 增强：一次 git log --all + for-each-ref，逐条合并"该时刻最新提交 + tag"。
+  // git 不可用（非仓库/未装 git）→ gitAvailable:false，各记录 commit/tag 为 null，不阻塞。
+  let gitAvailable = false
+  let root = null
+  try {
+    const gr = await resolveGitRoot()
+    if (gr) {
+      const { commits, tagByCommit, ok } = await loadGitIndex(gr.root)
+      gitAvailable = ok
+      root = gr.root
+      if (ok) {
+        for (const row of rows) {
+          const started = row.startedAt ? Math.floor(row.startedAt / 1000) : null
+          if (started == null) continue
+          const at = commits.find((c) => c.sec <= started) // 数组已降序 → 第一个即最新 ≤ startedAt
+          if (at) {
+            row.commit = at.hash.slice(0, 7)
+            row.commitFull = at.hash
+            row.subject = at.subject
+            row.tag = tagByCommit.get(at.hash) ?? null
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.debug('[trajectory] git 增强不可用（忽略，轨迹流不受影响）:', e?.message ?? e)
+  }
+
   const cap = Math.max(1, Math.min(1000, Number(limit) || 200))
-  return { ok: true, total: rows.length, stageCounts, rows: rows.slice(0, cap) }
+  return { ok: true, total: rows.length, stageCounts, rows: rows.slice(0, cap), gitAvailable, root }
 }
 
 /** rollbackId 形态校验：`<stage>-<seq>`（stage 为小写字母/数字/下划线，seq 为正整数）。 */

@@ -670,9 +670,10 @@ const server = createServer(async (req, res) => {
     }
 
     // 全阶段轨迹聚合（总轨迹时间轴数据源）：GET /api/trajectory-all?limit=N
+    // trajectoryAll 内合并"该时刻最新 commit/tag"（轨迹 × git 增强），故为 async
     if (req.method === 'GET' && path === '/api/trajectory-all') {
       const limit = Number(url.searchParams.get('limit') ?? 200)
-      return json(res, 200, trajectoryAll(limit))
+      return json(res, 200, await trajectoryAll(limit))
     }
 
     if (req.method === 'GET' && path === '/api/trajectory-gate') {
