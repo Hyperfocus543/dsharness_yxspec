@@ -41,6 +41,56 @@ function rowStyle(s: string): { bar: string; label: string; text: string } {
   return ROW_STATUS.unverified;
 }
 
+/** 阶段小计 chips 条：每阶段一枚（执行次数 + 失败计数），点击打开该阶段详情。
+ *  数据源 = 轨迹 tab 已拉取的 trajectory-all 全量（stageCounts + rows），零额外请求。
+ *  有失败/回滚的阶段用红点强调（排障聚焦），全部通过则中性色。 */
+const SubtotalChips: React.FC<{
+  items: StageSubtotal[];
+  openStage: string | null;
+  onOpen: (t: string) => void;
+}> = ({ items, openStage, onOpen }) => {
+  if (items.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {items.map((s) => {
+        const active = openStage === s.token;
+        const hasFail = s.failed > 0;
+        return (
+          <button
+            key={s.token}
+            type="button"
+            onClick={() => onOpen(s.token)}
+            aria-pressed={active}
+            title={`${s.token}：${s.runs} 次执行${hasFail ? `，${s.failed} 次失败/打回/已回滚` : '，全部通过'}`}
+            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono border transition-all active:scale-[0.98] ${
+              active
+                ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                : hasFail
+                  ? 'bg-white border-red-200 text-zinc-600 hover:border-red-300 hover:bg-red-50'
+                  : 'bg-white border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
+            }`}
+          >
+            {hasFail && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" aria-hidden />}
+            <span className="truncate max-w-[110px]">{s.token}</span>
+            <span className={`tabular-nums shrink-0 ${active ? 'text-emerald-600' : hasFail ? 'text-red-500' : 'text-zinc-400'}`}>
+              {s.runs}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+/** 阶段小计 chips 数据源：由 rows 聚合（rows = data.rows 全量未过滤）。 */
+interface StageSubtotal {
+  token: string;
+  /** 该阶段执行总次数（trajectory-all 的 stageCounts 优先，rows 聚合作兜底） */
+  runs: number;
+  /** 该阶段失败/打回/已回滚次数（rows 聚合） */
+  failed: number;
+}
+
 /** 单行：一次阶段执行（阶段徽标 + 状态 + 耗时/token/工具 + 时间），点击展开该阶段详情 */
 const TimelineRow: React.FC<{
   rec: TrajectoryAllEntry;
@@ -125,6 +175,27 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
     };
   }, []);
 
+  // 阶段小计：从全量 rows 聚合（失败/打回/已回滚计数做强调），runs 以网关 stageCounts 为准
+  // （rows 可能被 200 上限截断，stageCounts 是全量计数）。放在加载态 early-return 之前，
+  // 保证每次渲染的 hook 数量一致（rules-of-hooks）。
+  const subtotals = React.useMemo<StageSubtotal[]>(() => {
+    const counts: Record<string, StageSubtotal> = {};
+    for (const r of data?.rows ?? []) {
+      const s = (counts[r.stage] ??= { token: r.stage, runs: 0, failed: 0 });
+      s.runs++;
+      if (r.status === 'failed' || r.status === 'blocked' || r.rolled_back) s.failed++;
+    }
+    const stageCounts = data?.stageCounts ?? {}; // 网关全量计数（rows 可能被 200 上限截断）
+    for (const token of Object.keys(stageCounts)) {
+      const s = (counts[token] ??= { token, runs: 0, failed: 0 });
+      s.runs = stageCounts[token]; // 权威全量计数
+    }
+    // 失败多 → 执行多 → token 字母序（排障重点前置）
+    return Object.values(counts).sort(
+      (a, b) => b.failed - a.failed || b.runs - a.runs || a.token.localeCompare(b.token),
+    );
+  }, [data]);
+
   if (loading) {
     return (
       <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2" role="status" aria-busy="true" aria-label="正在加载全部轨迹">
@@ -184,6 +255,10 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
           </button>
         </div>
       </div>
+
+      {/* 阶段小计：每阶段一枚（执行次数 + 失败强调），点击打开该阶段详情。
+          数据源 = 本页已拉取的 trajectory-all，零额外请求。 */}
+      <SubtotalChips items={subtotals} openStage={openStage} onOpen={setOpenStage} />
 
       {/* 单阶段详情（点击行内阶段徽标展开，复用 TrajectoryPanel） */}
       {openStage && (
