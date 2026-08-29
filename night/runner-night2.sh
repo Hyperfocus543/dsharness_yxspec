@@ -137,16 +137,18 @@ commit_and_push() {
 # fix：找问题修复
 FIX_PROMPT='你是 yxspec-studio（React/Vite 前端 + Node 网关）的夜间自动修复代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：找出代码中的确定性问题并修复，一次一件。
 优先选：
-- gateway/lib/git.mjs、gateway/runtime-js/vendor/@yxspec/git-workspace/index.js、@yxspec/self-iteration/index.js 里的逻辑问题（路径解析、降级分支、边界条件）
+- gateway/lib/git-workspaces.mjs（工作区注册表读写、default 根动态合并、gitOperate 白名单边界、clone URL/目标目录校验、审计 JSONL 追加）与 gateway/lib/git.mjs（root 参数透传、resolveGitRoot 显式 root 回落）的逻辑问题
+- gateway/runtime-js/vendor/@yxspec/git-workspace/index.js、@yxspec/self-iteration/index.js 里的逻辑问题（路径解析、降级分支、边界条件）
 - tool-guard 的 git 命令级守卫漏网/误伤（正则健壮性）
 - tsc 未使用变量/import、类型错误、明显死代码、空 catch 吞错
 - 前端 UI 质量问题：缺 aria-label/focus-visible、硬编码色值/间距应收敛到 @theme token、明显重渲染
-约束：只改 gateway/ 与 studio/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓。一次一件最小改动单 commit。改完必须 cd studio && npx tsc --noEmit 和 cd studio && npm test 全过。报告改了什么文件什么问题怎么验证（200字内）。'
+约束：只改 gateway/ 与 studio/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓。一次一件最小改动单 commit。改完必须 cd studio && npx tsc --noEmit 和 cd studio && npm test 全过；涉及 gateway 的加 node --check。报告改了什么文件什么问题怎么验证（200字内）。'
 
 # pm：产品视角优化
 PM_PROMPT='你是 yxspec-studio（车载 ASPICE 驾驶舱）产品经理视角优化代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：找 1 处体验问题并优化，一次一件。
 优先检查（结合新功能）：
-- 新加的「Git 工作区管控」功能卡（GitWorkspaceCard）交互：空态/加载态/错误态/回滚确认流程
+- 新加的「Git 工作区管控」功能卡（GitWorkspaceCard）新「工作区管理」区块交互：多仓库列表（来源徽标/设为当前/移除）、添加本地/远程表单（tabs/校验/成功后刷新）、fetch/pull/push 操作按钮（operating 态/push 二次确认/切换分支下拉）——空态/加载态/错误态/确认流程
+- 自迭代功能卡（SelfIterationCard）新「启动新迭代」表单：选阶段/轮数/目标/断点、启动中取消、完成后卡内自动刷新
 - StageCockpit 空态/加载态/错误态
 - 状态条/进度展示可读性
 - 组件交互（按钮 disabled、loading、空列表提示）
@@ -156,19 +158,20 @@ PM_PROMPT='你是 yxspec-studio（车载 ASPICE 驾驶舱）产品经理视角�
 # feat：发散新功能
 FEAT_PROMPT='你是 yxspec-studio 的创意代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：发散想该加什么小功能，挑 1 个高价值低风险实现。
 候选方向（可发散但保持小而美，优先和 git 插件/轨迹/自迭代联动）：
-- 工作区管控卡增强：脏文件 diff 预览、tag 列表展示
+- git 写操作增强：pull 结果显示文件改动统计、fetch 后显示落后/领先变化、clone 进度反馈、分支列表按 remote 分组
+- 工作区管控卡增强：脏文件 diff 预览、tag 列表展示、多仓库 root 显示优化
+- 自迭代启动表单联动：默认阶段预填当前阶段、启动后自动聚焦轮次瀑布
 - 阶段留痕 timeline 增强（git tag 与轨迹融合展示）
 - 成本估算角标（本周 token/费用趋势）
 - 门控徽标 tooltip 详情（hover 显示门控证据）
-- 自迭代打分结果展示卡（读 self-iteration 轨迹）
 约束：前后端都可改，一次只做 1 个单 commit。改完 cd studio && npx tsc --noEmit + cd studio && npm test + cd studio && npm run build 全过；涉及 gateway 的 node --check。报告（200字内）。'
 
 # verify：新能力快速回归（不 commit，只验证 + 记录）——不做真实 LLM turn（那是慢活会卡死整轮）
 VERIFY_PROMPT='你是 yxspec-studio 的夜间回归验证代理，工作目录 D:/Work/04_Temp/yxspec-studio-release。任务：对新能力做快速静态回归，发现确定性 bug 直接修复（一次一件），没 bug 就记录验证结果。禁止启动网关副本、禁止跑真实 LLM turn——只做静态/轻量检查。
 要验证：
-1. gateway/lib/git.mjs 语法与关键逻辑：node --check 通过；getStatus() 的 recentCommits 含 message 字段（用 node -e 快速 import 断言，不启动 server）
-2. @yxspec/git-workspace 插件的审计 JSONL 写入逻辑：读 runtime-js/vendor/@yxspec/git-workspace/index.js 检查 tag 打点/审计路径拼接/降级分支（静态审阅）
-3. @yxspec/self-iteration 插件：读 index.js 检查 run-state 状态机推进、self_iter_score 注册、优雅降级三档（静态审阅）；检查 runtime-data/self-iteration/ 现有 run-state.json 的 schema 一致性
+1. gateway/lib/git-workspaces.mjs：node --check 通过；node --test lib/git-workspaces.test.mjs 全过；isSafeGitUrl/isSafeTargetDir 纯函数规则（https/git@/ssh 白名单 + 拒绝 file:///`-` 开头/`..` 逃逸）
+2. gateway/lib/git.mjs：node --check 通过；resolveGitRoot(root) 显式 root 参数回落逻辑（node -e 快速 import 断言，不启动 server）
+3. @yxspec/git-workspace 插件与 @yxspec/self-iteration 插件：读 index.js 静态审阅 tag 打点/审计路径/run-state 状态机/降级分支
 4. plugins.mjs 装配：getPluginMap() 应含 git-workspace/yxspec-self-iteration（node -e 快速 import 断言）
 约束：只改 gateway/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓。验证完清理临时文件。报告：每项验证结果（通过/失败+修复了什么）。'
 
