@@ -354,7 +354,7 @@ export async function getFileDiff({ path, staged = false, from = null, to = null
     if (toStr) args.push(`${fromStr}...${toStr}`)
     else args.push(fromStr)
   } else {
-    // 脏文件模式：先判定文件状态（untracked 无基线可 diff；deleted 用 --stat 兜底）
+    // 脏文件模式：先判定文件状态（untracked 无基线可 diff；deleted 走完整删除 diff）
     const st = await runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--', p], { cwd })
     const line = (st.ok ? st.stdout.split('\n').find((l) => l.slice(3) === p) : null) ?? ''
     const xy = line.slice(0, 2)
@@ -364,7 +364,9 @@ export async function getFileDiff({ path, staged = false, from = null, to = null
       return { ok: true, status: 'untracked', path: p, staged, diff: null, stats: null, note: 'untracked 文件无索引/HEAD 基线，无 diff 可预览' }
     }
     if (staged) args.push('--cached')
-    if (isDeleted) args.push('--stat') // 已删除文件 diff 为空，--stat 兜底给行数
+    // 已删除文件 git 会正常输出完整删除 diff（diff --git + `--- a/` + `+++ /dev/null`），
+    // 无需 --stat 兜底；加 --stat 反而只给 `1 file changed, N deletions(-)` 摘要行，
+    // 前端 hover 预览失去被删的具体行。
     args.push('--', p)
   }
   const res = await runGit(args, { cwd })
