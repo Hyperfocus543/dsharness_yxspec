@@ -79,6 +79,15 @@ for (const cmd of [
   'powershell -Command "git checkout -f main"',
   'sh -c "git reset --hard && git status"',
   "bash -c 'sh -c \"git push\"'",
+  // PowerShell 官方短别名 -c（等价 -Command）：此前只认长名，`-c "git reset --hard"`
+  // 整段漏过守卫（git 词在引号内被裸分支引号过滤当文本放过），须 DENY
+  'powershell -c "git reset --hard"',
+  'powershell -c "git push origin main"',
+  'pwsh -c "git clean -fd"',
+  'powershell -NoProfile -c "git branch -D feature"',
+  'powershell -NonInteractive -NoProfile -c "git checkout -f main"',
+  'powershell -c "git reset --hard && git status"',
+  "pwsh -c 'git rebase main'",
 ]) {
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -93,6 +102,10 @@ for (const cmd of [
   'cmd /c "git diff --stat"',
   'powershell -Command "git for-each-ref refs/tags"',
   'sh -c "git status && git log -1"',
+  // PowerShell -c 短别名只读命令：解引用后子命令为只读 → 放行（不误伤）
+  'powershell -c "git status"',
+  'powershell -c "git log --oneline -5"',
+  "pwsh -c 'git diff --stat'",
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }

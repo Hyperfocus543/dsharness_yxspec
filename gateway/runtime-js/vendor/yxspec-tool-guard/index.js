@@ -224,11 +224,12 @@ function gitArgsAfter(sub, segment) {
 
 /**
  * shell 执行包装器解引用：`sh -c "…"` / `bash -c '…'` / `cmd /c "…"` /
- * `powershell -Command "…"` —— 引号串是「要执行的命令」而非惰性文本。命中则
- * 返回引号串内容（此后守卫按普通命令继续切分/判定，破坏性子命令可被检出）；
- * 未命中返回 null。规则：
+ * `powershell -Command "…"` / `powershell -c "…"` —— 引号串是「要执行的命令」而非
+ * 惰性文本。命中则返回引号串内容（此后守卫按普通命令继续切分/判定，破坏性子命令
+ * 可被检出）；未命中返回 null。规则：
  *   - sh 族可执行名（sh/bash/dash/ksh/zsh）+ 单连字符 flag 簇内含 `c`（-c/-lc/-exc）
- *   - cmd（Windows）/c 或 /k；powershell/pwsh（-NoProfile 等任意单连字符 flag 后）-Command
+ *   - cmd（Windows）/c 或 /k；powershell/pwsh（-NoProfile 等任意单连字符 flag 后）
+ *     `-Command` 或官方短别名 `-c`（此前只认长名，`-c "git reset --hard"` 整段漏网）
  *   - 只剥首参引号串；引号串后不允许再带参数（无法判定变量是否影响命令内容 →
  *     保守不剥）；嵌套壳（`sh -c "sh -c 'git push'"`）由守卫侧的递归扫描逐层解包。
  */
@@ -236,8 +237,8 @@ function unwrapShellExec(segment) {
   const prefixes = [
     /^(?:\s*(?:sh|bash|dash|ksh|zsh)\s+-(?!-)[a-zA-Z]*c(?=\s|$)\s+)/i,
     /^(?:\s*cmd(?:\s+\/c|\s+\/k)?\s+)/i,
-    /^(?:\s*powershell(?:\s+-\w+)*\s+-Command\s+)/i,
-    /^(?:\s*pwsh(?:\s+-\w+)*\s+-Command\s+)/i,
+    /^(?:\s*powershell(?:\s+-\w+)*\s+(?:-Command|-c)\s+)/i,
+    /^(?:\s*pwsh(?:\s+-\w+)*\s+(?:-Command|-c)\s+)/i,
   ]
   const quotedArg = /^(?:"([^"\r\n]*)"|'([^'\r\n]*)')/i
   for (const prefix of prefixes) {
