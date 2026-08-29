@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { buildSelfIterateCommand } from './selfIterateCommand';
+import { buildSelfIterateCommand, clampMaxIterInput } from './selfIterateCommand';
 import type { SelfIterateOptions } from './selfIterateCommand';
 
 describe('buildSelfIterateCommand（/yxspec:self-iterate 派活命令拼装）', () => {
@@ -155,5 +155,39 @@ describe('buildSelfIterateCommand（/yxspec:self-iterate 派活命令拼装）',
     expect(
       buildSelfIterateCommand({ stage: 'sqt-script-gen', maxIter: 99, goal: 'Total>=80 "全绿"', resume: true }),
     ).toBe('/yxspec:self-iterate sqt-script-gen --max-iter=10 --goal="Total>=80 \\"全绿\\"" --resume');
+  });
+});
+
+describe('clampMaxIterInput（轮数输入归一，与派活钳制同口径）', () => {
+  it('合法值原样返回', () => {
+    expect(clampMaxIterInput('1')).toBe('1');
+    expect(clampMaxIterInput('3')).toBe('3');
+    expect(clampMaxIterInput('10')).toBe('10');
+  });
+
+  it('超上限 10 → 立即落回 10（避免输入 999 后需连删两次）', () => {
+    expect(clampMaxIterInput('11')).toBe('10');
+    expect(clampMaxIterInput('999')).toBe('10');
+  });
+
+  it('0 / 负数 → 1（轮数 0 无意义，派活时同样钳到 1）', () => {
+    expect(clampMaxIterInput('0')).toBe('1');
+    expect(clampMaxIterInput('-3')).toBe('1');
+  });
+
+  it('小数取整（与派活 Math.floor 同口径，3.5 不再被替换成 35）', () => {
+    expect(clampMaxIterInput('3.5')).toBe('3');
+    expect(clampMaxIterInput('2.9')).toBe('2');
+  });
+
+  it('空串 / 无数字 → 保持空（可清空重输，不强制回填）', () => {
+    expect(clampMaxIterInput('')).toBe('');
+    expect(clampMaxIterInput('abc')).toBe('');
+    expect(clampMaxIterInput('   ')).toBe('');
+  });
+
+  it('数字前缀截取（e / 中文等混入时仍取前导数字）', () => {
+    expect(clampMaxIterInput('5轮')).toBe('5');
+    expect(clampMaxIterInput('3e2')).toBe('3');
   });
 });

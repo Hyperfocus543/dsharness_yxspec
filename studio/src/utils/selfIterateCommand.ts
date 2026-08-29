@@ -32,6 +32,26 @@ const MAX_ITER_MIN = 1;
 const MAX_ITER_MAX = 10;
 
 /**
+ * 轮数输入归一（与 buildSelfIterateCommand 派活钳制同口径，表单 onChange 消费）：
+ * 原生 number 输入允许 0 / 999 / 3.5 这类越界或小数值，而派活时只做
+ * Math.floor + [1,10] 钳制——不在这里归一，UI 显示「999」实际跑 --max-iter=10，
+ * 所见 ≠ 所跑且无任何反馈。本函数把输入就地钳进 [1,10]：
+ *  · 空串 / 无数字 → ''（保持可清空重输，不强制回填）
+ *  · 小数取整（3.5 → 3，与派活 Math.floor 同口径；负号/指数前缀一并剥离）
+ *  · >10 → '10'（立即落回最大值，避免输入 999 后需连删两次）
+ *  · 0 / 负数 → '1'（轮数 0 无意义，派活时同样会被钳到 1）
+ */
+export function clampMaxIterInput(raw: string): string {
+  const s = String(raw ?? '').trim();
+  if (s === '') return '';
+  const m = s.match(/^[+-]?\d*\.?\d+/);
+  if (!m) return '';
+  const n = Math.floor(Number(m[0]));
+  if (!Number.isFinite(n) || n <= 0) return '1';
+  return String(Math.min(MAX_ITER_MAX, n));
+}
+
+/**
  * 拼装 /yxspec:self-iterate 派活命令（网关 @yxspec/self-iteration 插件解析）。
  * stage 为空/空白 → 返回 ''（调用方据此做校验提示，不派发）。
  * 拼装规则与 parseSelfIterate 对齐：

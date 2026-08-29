@@ -39,7 +39,7 @@ import {
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
 import { useGitStore } from '../../store/gitStore';
-import { buildSelfIterateCommand } from '../../utils/selfIterateCommand';
+import { buildSelfIterateCommand, clampMaxIterInput } from '../../utils/selfIterateCommand';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
@@ -639,7 +639,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
           <Icon name={I.play} size={13} />
           启动新迭代
           <span className="ml-auto text-[10px] text-zinc-300">
-            默认 3 轮 · 收敛目标可选 · 产物/框架
+            轮数 1–10
             {stageSel && <span className="ml-1 text-zinc-400">· 阶段已预填</span>}
           </span>
         </div>
@@ -703,7 +703,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               min={1}
               max={10}
               value={maxIterSel}
-              onChange={(e) => setMaxIterSel(e.target.value.replace(/[^0-9]/g, ''))}
+              onChange={(e) => setMaxIterSel(clampMaxIterInput(e.target.value))}
               className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
             />
           </label>
