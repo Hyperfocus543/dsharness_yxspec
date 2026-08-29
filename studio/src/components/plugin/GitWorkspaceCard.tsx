@@ -712,8 +712,11 @@ export const GitWorkspaceCard: React.FC = () => {
     setWsFormError(null);
     try {
       const res = await useGitStore.getState().gitOperate({
-        // root 语义同 clone：只是「目标父目录」锚点（网关 init 只取 args.dir，不要求已登记）
-        root: activeWorkspace?.root || '',
+        // root 语义同 clone：只是「目标父目录」锚点（网关 init 只取 args.dir，不要求已登记）。
+        // 必须传合法绝对路径（target 已过前端绝对路径校验）：传 activeWorkspace?.root || ''
+        // 在「全新安装/零工作区」时 root 为空串 → 网关锚点校验恒 bad-request，
+        // init 必失败；传 target 与 clone 的 root=wsDir 同口径。
+        root: target,
         action: 'init',
         args: { dir: target },
       });
