@@ -12,6 +12,21 @@ import * as ipc from '../utils/ipc';
 import type { GitStatus, GitStageTrace, GitWorkspace } from '../utils/ipc';
 import { useToastStore } from './toastStore';
 
+/** clone/init 完成后要激活的工作区：优先精确匹配新 root，其次服务端 activeId（若有），
+ *  兜底列表首项（至少切离旧 root，让克隆/新建的仓库立即可见）。 */
+export function pickWorkspaceToActivate(
+  list: ipc.GitWorkspaceList,
+  targetRoot: string | null,
+): ipc.GitWorkspace | null {
+  if (targetRoot) {
+    const byRoot = list.workspaces.find((w) => w.root === targetRoot);
+    if (byRoot) return byRoot;
+  }
+  const byActive =
+    list.activeId != null ? list.workspaces.find((w) => w.id === list.activeId) : undefined;
+  return byActive ?? list.workspaces[0] ?? null;
+}
+
 interface GitStore {
   /** GET /api/git/status 快照；未加载/失败为 null */
   status: GitStatus | null;
@@ -39,6 +54,8 @@ interface GitStore {
   removeWorkspace: (id: string) => Promise<void>;
   /** 执行 git 写操作（clone/fetch/pull/push/checkout/branch/init）；失败抛错由调用方处理 */
   gitOperate: (opts: ipc.GitOperateParams) => Promise<ipc.GitOperateResult | null>;
+  /** clone/init 完成后激活新仓库（切换 active + 按新 root 重拉 status） */
+  activateAfterAdd: (result: ipc.GitOperateResult | null) => Promise<void>;
   /** 当前已查询的阶段轨迹；未查询/失败为 null */
   commits: GitStageTrace[] | null;
   /** commits 是否在加载中 */
@@ -151,6 +168,21 @@ export const useGitStore = create<GitStore>((set, get) => ({
     } finally {
       set({ operating: false });
     }
+  },
+
+  /**
+   * clone/init 完成后激活新仓库：网关只登记不动 activeId，这里同步本地注册表并
+   * 切换 active → 按新 root 重拉 status（克隆完立刻能看到新仓库的脏文件/分支/HEAD）。
+   * @param result gitOperate 的 clone/init 结果
+   */
+  activateAfterAdd: async (result: ipc.GitOperateResult | null) => {
+    const dir = result?.cloneDir || result?.initDir || result?.root || null;
+    if (!dir || result?.ok !== true) return;
+    const list = await ipc.fetchGitWorkspaces();
+    if (!list) return; // 网关未响应：保持现状，下次手动刷新
+    const active = pickWorkspaceToActivate(list, dir);
+    set({ workspaces: list.workspaces, activeWorkspace: active });
+    await get().refreshStatus();
   },
 
   commits: null,

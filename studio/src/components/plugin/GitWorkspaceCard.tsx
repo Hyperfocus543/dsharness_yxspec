@@ -433,7 +433,8 @@ export const GitWorkspaceCard: React.FC = () => {
     }
   };
 
-  // 克隆远程仓库：gitOperate clone → 网关自动登记 → 成功后刷新注册表 + 状态
+  // 克隆远程仓库：gitOperate clone → 网关自动登记 → 成功后激活新仓库（切 active +
+  // 重拉 status；克隆完立刻能看到新仓库的脏文件/分支/HEAD，多仓库下不再停留在旧 root）
   const doCloneRemote = async () => {
     const err = !wsUrl || !wsUrl.trim() ? '请输入远程仓库地址' : null;
     if (err) {
@@ -442,24 +443,24 @@ export const GitWorkspaceCard: React.FC = () => {
     }
     setWsFormError(null);
     try {
-      await useGitStore.getState().gitOperate({
+      const res = await useGitStore.getState().gitOperate({
         root: wsDir.trim() || activeWorkspace?.root || '',
         action: 'clone',
         args: { url: wsUrl.trim(), dir: wsDir.trim() || activeWorkspace?.root || '' },
       });
-      pushToast('success', '克隆完成，已登记工作区');
+      await useGitStore.getState().activateAfterAdd(res);
+      pushToast('success', '克隆完成，已登记并切换工作区');
       setWsUrl('');
       setWsDir('');
       setWsFormOpen(false);
       await refreshWorkspaces().catch(() => {});
-      await refreshStatus().catch(() => {});
     } catch (e: any) {
       setWsFormError(e?.message || '克隆失败');
       pushToast('error', `克隆失败：${e?.message || e}`);
     }
   };
 
-  // 新建本地仓库：gitOperate init → 网关 mkdir + git init + 自动登记 → 成功后刷新注册表 + 状态
+  // 新建本地仓库：gitOperate init → 网关 mkdir + git init + 自动登记 → 成功后激活新仓库
   const doInitLocal = async () => {
     const target = wsInitDir.trim();
     const err = !target
@@ -473,17 +474,17 @@ export const GitWorkspaceCard: React.FC = () => {
     }
     setWsFormError(null);
     try {
-      await useGitStore.getState().gitOperate({
+      const res = await useGitStore.getState().gitOperate({
         // root 语义同 clone：只是「目标父目录」锚点（网关 init 只取 args.dir，不要求已登记）
         root: activeWorkspace?.root || '',
         action: 'init',
         args: { dir: target },
       });
+      await useGitStore.getState().activateAfterAdd(res);
       pushToast('success', '已创建并登记新仓库');
       setWsInitDir('');
       setWsFormOpen(false);
       await refreshWorkspaces().catch(() => {});
-      await refreshStatus().catch(() => {});
     } catch (e: any) {
       setWsFormError(e?.message || '新建仓库失败');
       pushToast('error', `新建仓库失败：${e?.message || e}`);

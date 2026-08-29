@@ -1486,6 +1486,8 @@ export interface GitOperateResult {
   ok: boolean;
   root?: string;
   cloneDir?: string;
+  /** init 的目标目录（网关 /api/git/operate action=init 返回；与 root 同值） */
+  initDir?: string;
   stdout?: string;
   branches?: string[];
   head?: string | null;
