@@ -979,6 +979,10 @@ export const GitWorkspaceCard: React.FC = () => {
                   onChange={async (e) => {
                     setBranchValue(e.target.value);
                     if (e.target.value === '__open__') {
+                      // 打开分支面板：状态切到已展开、异步拉分支；value 保持空
+                      // （`__open__` 不是真实选项，若塞进去 select 会永远停在这把
+                      // 死值上、无法再开面板——见下）。分支加载完成后再由末尾
+                      // 的「重新打开」兜底复位，保证下次点下拉还能再进面板。
                       setBranchPanelOpen(true);
                       await loadBranches().catch(() => {});
                       return;
@@ -1008,6 +1012,11 @@ export const GitWorkspaceCard: React.FC = () => {
                           ))}
                         </optgroup>
                       ))}
+                      {/* 面板打开但列表为空（0 分支 / 加载失败 / 重载被置空）→
+                          select 里只有 value="" 的占位项，永远选不中、也没有任何
+                          option 能把它拉回「__open__」：卡死成一把空下拉。
+                          兜底放一个「重新打开」选项，总能把面板重新拉起来。 */}
+                      {branchTotal === 0 && <option value="__open__">重新打开</option>}
                     </>
                   ) : (
                     <option value="__open__">切换分支</option>
