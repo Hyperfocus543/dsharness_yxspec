@@ -159,9 +159,16 @@ function parseSelfIterate(prompt) {
     const first = after.split(/\s+/)[0] || ''
     if (first) stageRaw = first
   }
+  // maxIter 钳制 [1,10]（与前端 buildSelfIterateCommand 派活钳制同口径）：轮数是
+  // 状态机收敛边界（roundNo >= maxIter 收束），越界值必须就地归一——`--max-iter=999`
+  // 会让自迭代最多跑 999 轮（无成本约束的失控循环），`--max-iter=0` 则首轮即
+  // converge_by_maxiter（roundNo 1 >= 0 恒真，run 形同虚设）。解析出数字后钳进
+  // 合法域再返回，LLM 手写/前端直传命令都落在同一安全边界内。
+  const maxIterNum = maxIterRaw != null && /^\d+$/.test(maxIterRaw) ? Number(maxIterRaw) : null
+  const maxIter = maxIterNum != null ? Math.min(10, Math.max(1, maxIterNum)) : null
   return {
     stageRaw: stageRaw || null,
-    maxIter: maxIterRaw != null && /^\d+$/.test(maxIterRaw) ? Number(maxIterRaw) : null,
+    maxIter,
     goal: goal || null,
     resume,
     mode,

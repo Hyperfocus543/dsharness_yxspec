@@ -57,3 +57,18 @@ test('product 显式 --mode=product → product', () => {
   assert.equal(p.mode, 'product')
   assert.equal(p.stageRaw, 'sqt_script_gen')
 })
+
+test('maxIter 钳制 [1,10]：越界值就地归一（与前端 buildSelfIterateCommand 派活钳制同口径）', () => {
+  // 轮数是状态机收敛边界（roundNo >= maxIter 收束），越界必须钳制——
+  // 999 → 10（失控轮数封顶）；0 → 1（首轮即 converge_by_maxiter 的形同虚设拦截）
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter=999').maxIter, 10)
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter=10').maxIter, 10)
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter=5').maxIter, 5)
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter=1').maxIter, 1)
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter=0').maxIter, 1)
+  // 空格分隔形态同样钳制
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter 999').maxIter, 10)
+  // 非数字/缺省 → null（不落钳制，回落插件默认 DEFAULT_MAX_ITER=3）
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen --max-iter=abc').maxIter, null)
+  assert.equal(parseSelfIterate('/yxspec:self-iterate sqt_script_gen').maxIter, null)
+})
