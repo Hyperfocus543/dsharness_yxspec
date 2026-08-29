@@ -10,14 +10,18 @@
 // 轨迹 × git 联动：每行在「时间」前展示该次执行 startedAt 时刻的最新 commit
 // （git log --all + for-each-ref，网关 trajectoryAll 已合并，零额外请求）。
 // commit 徽标 tooltip 给完整 hash + 提交说明；tag 徽标 emerald（指向同一 commit）。
+// hover commit 徽标 → 共享 GitDiffPreview：展示该 commit 相对相邻更早执行的改动
+// （基线上文 = 时间相邻的上一次执行 commit，纯前端 traceBaseAt 派生，与阶段留痕
+// "相邻执行 = 一个 diff 单元"同口径），补齐全局轨迹页最后的 git 触点盲区。
 // git 不可用（非仓库/未装 git）→ 数据源 gitAvailable=false，整行不渲染 git 徽标。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
 import React from 'react';
-import { EmptyState, Icon } from '../ui';
+import { EmptyState, GitDiffPreview, Icon } from '../ui';
 import { I } from '../ui/icons';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
+import { traceBaseAt } from '../../utils/gitTrace';
 import { TrajectoryPanel } from './TrajectoryPanel';
 
 /** 毫秒 → 人类可读耗时（与项目时间约定一致：h m / m s / s） */
@@ -96,18 +100,33 @@ interface StageSubtotal {
   failed: number;
 }
 
-/** 轨迹 × git：该行对应的 commit + tag 徽标组（git 不可用/无 commit → null，不渲染）。 */
-const GitBadge: React.FC<{ rec: TrajectoryAllEntry; gitAvailable?: boolean }> = ({ rec, gitAvailable }) => {
+/** 轨迹 × git：该行对应的 commit + tag 徽标组（git 不可用/无 commit → null，不渲染）。
+ *  hover commit 徽标 → 共享 GitDiffPreview：展示该 commit 相对相邻更早执行的改动，
+ *  与轨迹瀑布 / 留痕行同交互（至多一个浮层）。diff 基线纯前端派生（traceBaseAt），
+ *  零新接口；首条/无增量 → GitDiffPreview 自带降级提示，不阻塞行交互。 */
+const GitBadge: React.FC<{
+  rec: TrajectoryAllEntry;
+  gitAvailable?: boolean;
+  /** 全量轨迹流（时间降序，diff 基线派生数据源） */
+  rows: TrajectoryAllEntry[];
+  open: boolean;
+  onHover: (open: boolean) => void;
+}> = ({ rec, gitAvailable, rows, open, onHover }) => {
   // 数据源 gitAvailable=false（非仓库/未装 git）或该条无 commit → 整组不渲染
   if (!gitAvailable || !rec.commit) return null;
+  // diff 基线：相邻更早执行时刻的最新 commit（纯函数派生；无 → GitDiffPreview 首条降级提示）
+  const diffBase = traceBaseAt(rows, rec);
   return (
     <>
       <span
-        className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px] hover:bg-emerald-50 hover:text-emerald-700 transition-all"
+        className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px] hover:bg-emerald-50 hover:text-emerald-700 transition-all cursor-help"
         title={[
           rec.commitFull || rec.commit,
           rec.subject ? `提交说明：${rec.subject}` : '（无提交说明）',
+          diffBase ? '悬停查看相对相邻更早执行的改动' : '该次执行无更早 commit 可对比，无增量 diff',
         ].join('\n')}
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
       >
         {rec.commit}
       </span>
@@ -119,6 +138,7 @@ const GitBadge: React.FC<{ rec: TrajectoryAllEntry; gitAvailable?: boolean }> = 
           {rec.tag}
         </span>
       )}
+      <GitDiffPreview base={diffBase} target={rec.commit || null} open={open} />
     </>
   );
 };
@@ -128,7 +148,11 @@ const TimelineRow: React.FC<{
   rec: TrajectoryAllEntry;
   onOpen: (t: string) => void;
   gitAvailable?: boolean;
-}> = ({ rec, onOpen, gitAvailable }) => {
+  /** 全量轨迹流（时间降序，diff 基线派生数据源） */
+  rows: TrajectoryAllEntry[];
+}> = ({ rec, onOpen, gitAvailable, rows }) => {
+  // 轨迹 × git diff 预览：hover commit 徽标展开（至多一个浮层，与轨迹瀑布同交互）
+  const [gitOpen, setGitOpen] = React.useState(false);
   const st = rowStyle(rec.rolled_back ? 'blocked' : rec.status);
   const toolCalls = (rec.tools ?? []).filter((t) => t.type === 'tool/call').length;
   const toolOks = (rec.tools ?? []).filter((t) => t.type === 'tool/result' && t.ok).length;
@@ -155,8 +179,8 @@ const TimelineRow: React.FC<{
       <span className="shrink-0 text-zinc-400 tabular-nums" title={`工具调用 ${toolCalls} 次，成功 ${toolOks} 次`}>
         ×{toolCalls}✓{toolOks}
       </span>
-      {/* 轨迹 × git：该次执行时刻的最新 commit + tag（网关已合并，零额外请求） */}
-      <GitBadge rec={rec} gitAvailable={gitAvailable} />
+      {/* 轨迹 × git：该次执行时刻的最新 commit + tag（hover 查看相对相邻更早执行的改动） */}
+      <GitBadge rec={rec} gitAvailable={gitAvailable} rows={rows} open={gitOpen} onHover={setGitOpen} />
       {rec.reason && (
         <span className="text-[11px] text-zinc-400 font-mono truncate max-w-[160px]" title={rec.reason}>
           {rec.reason}
@@ -337,6 +361,7 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
             <TimelineRow
               key={`${r.stage}-${r.seq}-${r.startedAt}`}
               rec={r}
+              rows={data.rows}
               gitAvailable={data?.gitAvailable}
               onOpen={(t) => {
                 setOpenStage(openStage === t ? null : t);

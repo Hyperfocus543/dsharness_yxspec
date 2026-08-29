@@ -4,7 +4,7 @@
 //   与轨迹瀑布共用）。本模块只做无 DOM 的派生计算，可单测。
 // =============================================================================
 
-import type { GitRecentCommit, GitStageTrace } from './ipc';
+import type { GitRecentCommit, GitStageTrace, TrajectoryAllEntry } from './ipc';
 
 /**
  * 某条留痕的 diff 对比基线 commit：取「比目标 seq 更早的最近一条留痕」的 commit
@@ -80,4 +80,33 @@ export function recentCommitDiffs(
       message: cur.message,
     };
   });
+}
+
+/**
+ * 全局轨迹流 diff 基线：取「时间上比 target 更早的最近一次执行」的 commit。
+ * 数据源 = GET /api/trajectory-all 的 rows（网关按 startedAt 时间降序 新→旧）。
+ * 语义与阶段留痕 gitTraceBase 一致：相邻两次执行 = 一个 diff 单元，base 为前一次
+ * 执行时刻的最新 commit。仅当 base 与 target 指向同一 commit 时跳过该执行
+ * （期间无新提交 → 无增量 diff 可看，继续往前找真正产生改动的相邻执行）。
+ * @param rows 轨迹流（时间降序；跨阶段混排，不依赖 stage/seq）
+ * @param target 目标执行记录（其 commit 作为 diff target）
+ */
+export function traceBaseAt(
+  rows: TrajectoryAllEntry[] | null | undefined,
+  target: TrajectoryAllEntry | null | undefined,
+): string | null {
+  if (!rows || rows.length === 0 || !target || !target.startedAt || !target.commit) return null;
+  const t = Math.floor(target.startedAt / 1000); // startedAt 毫秒 → 秒，对齐 commit 时间戳口径
+  const seen = new Set<string>([target.commit]); // 与 target 同 commit → 无增量 diff，跳过
+  // 取时间上最接近 t 的更早执行（不依赖数组顺序；rows 乱序也能找对）
+  let best: { sec: number; commit: string } | null = null;
+  for (const r of rows) {
+    if (r === target) continue;
+    if (!r.startedAt || !r.commit) continue;
+    const rs = Math.floor(r.startedAt / 1000);
+    if (rs >= t) continue; // 严格更早
+    if (seen.has(r.commit)) continue; // 与 target 同 commit → 无增量，继续往前找
+    if (!best || rs > best.sec) best = { sec: rs, commit: r.commit };
+  }
+  return best?.commit ?? null;
 }

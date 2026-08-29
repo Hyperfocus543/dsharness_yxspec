@@ -5,8 +5,8 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { gitTraceBase, gitTraceBySeq, recentCommitDiffs, traceAtTime } from './gitTrace';
-import type { GitRecentCommit, GitStageTrace } from './ipc';
+import { gitTraceBase, gitTraceBySeq, recentCommitDiffs, traceAtTime, traceBaseAt } from './gitTrace';
+import type { GitRecentCommit, GitStageTrace, TrajectoryAllEntry } from './ipc';
 
 function trace(partial: Partial<GitStageTrace>): GitStageTrace {
   return {
@@ -22,6 +22,24 @@ function trace(partial: Partial<GitStageTrace>): GitStageTrace {
 
 function recent(partial: Partial<GitRecentCommit>): GitRecentCommit {
   return { hash: 'abc1234', message: '提交说明', at: '2026-08-29T00:00:00.000Z', ...partial };
+}
+
+/** 轨迹流行构造（TrajectoryAllEntry 精简；trajectory-all 已合并 git 字段）。 */
+function entry(partial: Partial<TrajectoryAllEntry>): TrajectoryAllEntry {
+  return {
+    stage: 'swe_req',
+    seq: 1,
+    sessionId: 's1',
+    status: 'passed',
+    stageLabel: '需求分析',
+    aspice: 'SWE.1',
+    command: '',
+    group: 'SWE',
+    startedAt: 1756000000000,
+    finishedAt: null,
+    commit: 'abc1234',
+    ...partial,
+  };
 }
 
 describe('gitTraceBase（相邻留痕 diff 基线）', () => {
@@ -152,5 +170,59 @@ describe('recentCommitDiffs（最近提交 diff 对派生）', () => {
     expect(diffs).toHaveLength(2);
     expect(diffs[0]).toMatchObject({ base: 'bbb2222', target: 'ccc3333', hash: 'ccc3333' });
     expect(diffs[1]).toMatchObject({ base: 'aaa1111', target: 'bbb2222', hash: 'bbb2222' });
+  });
+});
+
+describe('traceBaseAt（全局轨迹流相邻执行 diff 基线）', () => {
+  const t1 = entry({ seq: 1, startedAt: 1756000000000, commit: 'aaa1111' });
+  const t2 = entry({ seq: 2, startedAt: 1756003600000, commit: 'bbb2222' });
+  const t3 = entry({ seq: 3, startedAt: 1756007200000, commit: 'ccc3333' });
+  // 网关按 startedAt 时间降序返回（新→旧）
+  const rows = [t3, t2, t1];
+
+  it('空 / null / target 缺 commit / startedAt → null', () => {
+    expect(traceBaseAt(null, t2)).toBeNull();
+    expect(traceBaseAt([], t2)).toBeNull();
+    expect(traceBaseAt(rows, null)).toBeNull();
+    expect(traceBaseAt(rows, entry({ seq: 9, commit: null }))).toBeNull();
+    expect(traceBaseAt(rows, entry({ seq: 9, startedAt: undefined, commit: 'ddd4444' }))).toBeNull();
+  });
+
+  it('取时间上相邻的上一次执行 commit（跨阶段，不依赖 seq/stage）', () => {
+    expect(traceBaseAt(rows, t3)).toBe('bbb2222'); // t2 是 t3 之前最近一次执行
+    expect(traceBaseAt(rows, t2)).toBe('aaa1111');
+  });
+
+  it('最旧一条（无更早执行）→ null（首条降级提示）', () => {
+    expect(traceBaseAt(rows, t1)).toBeNull();
+  });
+
+  it('目标不在 rows（自迭代等只读场景）→ 按时间找相邻更早执行', () => {
+    const ghost = entry({ seq: 9, startedAt: 1756005000000, commit: 'fff9999' }); // 在 t2/t3 之间
+    expect(traceBaseAt(rows, ghost)).toBe('bbb2222'); // 更早的最近一次执行 = t2
+  });
+
+  it('乱序输入也按时间判定（不依赖数组顺序）', () => {
+    const shuffled = [t1, t3, t2];
+    expect(traceBaseAt(shuffled, t3)).toBe('bbb2222');
+    expect(traceBaseAt(shuffled, t2)).toBe('aaa1111');
+  });
+
+  it('更早执行与 target 同一 commit → 跳过（无增量），继续往前找', () => {
+    const same = entry({ seq: 2, startedAt: 1756003600000, commit: 'ccc3333' }); // 与 t3 同 commit
+    const mixed = [t3, same, t1];
+    expect(traceBaseAt(mixed, t3)).toBe('aaa1111'); // same 被跳过，取 t1
+  });
+
+  it('无 commit 的中间行跳过（不阻塞基线查找）', () => {
+    const noCommit = entry({ seq: 2, startedAt: 1756003600000, commit: null });
+    const mixed = [t3, noCommit, t1];
+    expect(traceBaseAt(mixed, t3)).toBe('aaa1111');
+  });
+
+  it('base 与 target 同 commit（期间无新提交）→ null（无增量 diff 可看）', () => {
+    const t2same = entry({ seq: 2, startedAt: 1756003600000, commit: 'ccc3333' });
+    const rows2 = [t3, t2same];
+    expect(traceBaseAt(rows2, t3)).toBeNull();
   });
 });
