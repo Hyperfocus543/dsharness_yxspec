@@ -223,52 +223,88 @@ function gitArgsAfter(sub, segment) {
 }
 
 /**
+ * 引号感知 token 化：`"…"` / `'…'` / `` `…` `` 作为整体一个 token（text 为去引号
+ * 内容，quoted=true），其余按空白切分。供 shell 执行包装器解引用做确定性状态机。
+ */
+function tokenizeShell(segment) {
+  const toks = []
+  const re = /"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|\S+/g
+  let m
+  while ((m = re.exec(segment))) {
+    const raw = m[0]
+    const q = raw[0]
+    const quoted = (q === '"' || q === "'" || q === '`') && raw.length >= 2 && raw[raw.length - 1] === q
+    toks.push({ text: quoted ? raw.slice(1, -1) : raw, quoted })
+  }
+  return toks
+}
+
+/**
  * shell 执行包装器解引用：`sh -c "…"` / `bash -c '…'` / `cmd /c "…"` /
  * `powershell -Command "…"` / `powershell -c "…"` —— 引号串是「要执行的命令」而非
  * 惰性文本。命中则返回引号串内容（此后守卫按普通命令继续切分/判定，破坏性子命令
- * 可被检出）；未命中返回 null。规则：
- *   - sh 族可执行名（sh/bash/dash/ksh/zsh，含 .exe）+ 命令 flag：单连字符 flag 簇
- *     内含 `c`（-c/-lc/-eu -c）或长名 `--command`。带值 flag（-e -u 之后的非 flag
- *     token、--login 等）须跳过——此前 `sh -c` 只认「`-c` 紧跟可执行名」，`bash -e
- *     -c "git reset --hard"` / `bash --login -c …` / `bash -euxo pipefail -c …`
- *     整段漏网（git 词在引号内被裸分支引号过滤当文本放过）；现 flag 逐个解析，值
- *     token 跳过，最终仍落到 `-c/--command` 才解引用。只读 `bash -e -c "git status"`
- *     解引用后子命令只读 → 不误伤。
- *   - cmd（Windows，含 cmd.exe）：任意 `/开关` 参数（/q、/v:on、/d…）后可跟 /c 或 /k
- *     执行字符串（`cmd /q /c "git clean -fd"` 此前只认 `cmd /c` 裸形态，/q 等开关
- *     在前时整段漏网）；`cmd "…"`（无 /c，cmd 对首参引号串按隐式 /c 处理）也解引用。
- *   - powershell/pwsh（含 .exe）：任意单/双连字符 flag（含带值 flag，如
- *     `-ExecutionPolicy Bypass`）后跟 `-Command` / 官方短别名 `-c`，或直接裸引号串
- *     （ps 无 -Command 也执行剩余字符串）。此前 `powershell -NoProfile -c "…"` /
- *     `powershell -ExecutionPolicy Bypass -Command "…"` 因 -c/-Command 前有额外 flag
- *     而漏网；现 flag 逐个跳过、值 token 跳过，-Command/-c/裸串三形态都解引用。
- *   - 只剥首参引号串；引号串后不允许再带参数（无法判定变量是否影响命令内容 →
- *     保守不剥）；嵌套壳（`sh -c "sh -c 'git push'"`）由守卫侧的递归扫描逐层解包。
+ * 可被检出）；未命中返回 null。
+ *
+ * 实现（token 状态机，替代此前的前缀正则——正则无法区分「带值 flag 的引号值」与
+ * 「隐式命令串」，单正则会把末位命令串吞成 flag 值，见 2026-08-29 回归）：
+ *   1. tokenizeShell 引号感知切 token（`--rcfile "my rc"` 的引号值是整体一个 token）；
+ *   2. 命令 flag：sh 族 = 含 `c` 的短 flag 簇 / `--command`；cmd = `/c` `/k`；
+ *      ps = `-Command` / `-c`。命令 flag 后的下一个 token（须为引号串且是末位）即
+ *      被执行的命令串；
+ *   3. 普通 flag 跳过：flag 后的「非 flag 值 token 且不是末位」视为该 flag 的值跳过
+ *      ——`bash --rcfile "my rc" -c "…"` / `-euxo pipefail` / `-ExecutionPolicy
+ *      "Bypass All"` 的引号值都能跨过；而 `powershell -NoProfile "git reset --hard"`
+ *      的引号串是末位（隐式命令）不被吞掉（此前 regex 改引号值后此形态误放行）；
+ *   4. 隐式执行：sh 无隐式（-c 缺省时首非 flag 参是脚本文件，非命令串，不剥）；
+ *      cmd / ps 的末位引号串按隐式命令剥（`cmd "git status"`、`powershell -NoProfile
+ *      "git reset --hard"`）。
+ *   5. 引号命令串后不允许再带参数（无法判定变量是否影响命令内容 → 保守不剥）；
+ *      嵌套壳（`sh -c "sh -c 'git push'"`）由守卫侧的递归扫描逐层解包。
  */
 function unwrapShellExec(segment) {
-  // sh 族：`(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*)` 逐个吞 flag（负前瞻排除 -c/-lc/--command
-  // 本身）；`(?:\s+(?!-|["'`])[^\s]+)?` 跳过带值 flag 的值 token（`-e -u`、`--login`
-  // 后跟的非 flag 词）；最终必须落到含 `c` 的短 flag 簇或 `--command` 才解引用。
-  const shRe =
-    /^(?:\s*(?:sh|bash|dash|ksh|zsh)(?:\.exe)?\s+(?:(?!--command|-[a-zA-Z]*c[a-zA-Z]*)(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*)(?:\s+(?!-|["'`])[^\s]+)?\s+)*(?:-[a-zA-Z]*c[a-zA-Z]*|--command)(?=\s|$)\s+)/i
-  // cmd：可执行名后任意 `/开关` 参数（/q、/v:on、/d…，含 /c /k 本身），随后落在
-  // 引号串上（cmd 对首参引号串按隐式 /c 处理，无 /c 也解引用，宁可误伤不放过）。
-  const cmdRe = /^(?:\s*cmd(?:\.exe)?(?:\s+\/[a-zA-Z][\w:.@-]*)*\s*)/i
-  // powershell/pwsh：任意单/双连字符 flag（负前瞻排除 -Command/-c 本身；带值 flag
-  // 的值 token 一并跳过），随后可选 `-Command|-c`，再落到引号串。`-Command|-c` 整体
-  // 可省（`powershell "git status"` 无命令 flag 也直接执行剩余字符串）。
-  const psRe =
-    /^(?:\s*(?:powershell|pwsh)(?:\.exe)?(?:\s+(?!-Command|-c(?=\s|$))(?:--?[a-zA-Z][\w-]*)(?:\s+(?!-|["'`])[^\s]+)?)*\s*(?:(?:-Command|-c)(?=\s|$)\s+)?)/i
-  const quotedArg = /^(?:"([^"\r\n]*)"|'([^'\r\n]*)')/i
-  for (const prefix of [shRe, cmdRe, psRe]) {
-    const pm = prefix.exec(segment)
-    if (!pm) continue
-    const rest = segment.slice(pm[0].length)
-    const qm = quotedArg.exec(rest)
-    if (!qm) continue
-    if (rest.slice(qm[0].length).trim() !== '') continue // 引号后还有参数 → 保守不剥
-    const inner = (qm[1] ?? qm[2]).trim()
-    return inner === '' ? null : inner
+  const toks = tokenizeShell(segment)
+  if (toks.length < 2) return null
+  const exe = toks[0].text.toLowerCase()
+  const rest = toks.slice(1)
+  const isFlag = (t) => !t.quoted && /^-{1,2}[a-zA-Z][\w-]*$/.test(t.text)
+  const isShCmd = (t) => !t.quoted && (t.text === '--command' || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t.text))
+  const isCmdSwitch = (t) => !t.quoted && /^\/[a-zA-Z][\w:.@-]*$/.test(t.text)
+  const isCmdCmd = (t) => !t.quoted && /^\/[ck]$/.test(t.text)
+  const isPsCmd = (t) => !t.quoted && (t.text === '-Command' || t.text === '-c')
+  const shFamily = /^(?:sh|bash|dash|ksh|zsh)(?:\.exe)?$/.test(exe)
+  const cmdFamily = /^cmd(?:\.exe)?$/.test(exe)
+  const psFamily = /^(?:powershell|pwsh)(?:\.exe)?$/.test(exe)
+  if (!shFamily && !cmdFamily && !psFamily) return null
+
+  // 命令 flag 后的引号串须为末位（后带参数 → 变量影响命令内容，保守不剥）
+  const commandAfter = (i) => {
+    const cmd = rest[i + 1]
+    if (!cmd || !cmd.quoted || i + 2 !== rest.length) return null
+    const text = cmd.text.trim()
+    return text === '' ? null : text
+  }
+
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]
+    // 命令 flag → 其后引号串即被执行的命令
+    if ((shFamily && isShCmd(t)) || (cmdFamily && isCmdCmd(t)) || (psFamily && isPsCmd(t))) {
+      return commandAfter(i)
+    }
+    // 普通 flag / cmd 开关：sh/ps 跳过其「非 flag 值 token（且非末位）」；
+    // cmd 的 /开关 都是单 token 连写值（/v:on），无后续值 token，不跳。
+    if (isFlag(t) || (cmdFamily && isCmdSwitch(t))) {
+      if ((shFamily || psFamily) && i + 1 < rest.length) {
+        const next = rest[i + 1]
+        if (!next.text.startsWith('-') && i + 1 !== rest.length - 1) i++
+      }
+      continue
+    }
+    // 非 flag token：cmd/ps 的末位引号串按隐式命令剥；sh 无隐式，不剥
+    if ((cmdFamily || psFamily) && t.quoted && i === rest.length - 1) {
+      const text = t.text.trim()
+      return text === '' ? null : text
+    }
+    return null
   }
   return null
 }

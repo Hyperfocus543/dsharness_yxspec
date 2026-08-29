@@ -109,6 +109,21 @@ for (const cmd of [
   'powershell "git reset --hard"',
   'pwsh "git clean -fd"',
   'powershell -NoProfile "git reset --hard"',
+  // 2026-08-29 追加：wrapper 带值 flag 的值是引号包裹串（带空格）时仍须解引用——
+  // 此前值跳过子模式 `(?!-|["'`])` 拒绝引号值，flag 循环卡死在值上、-c/-Command 永不达，
+  // 引号内破坏性 git 整段漏网（git 词在引号内被裸分支引号过滤当文本放过），须 DENY
+  'bash --rcfile "my rc file" -c "git reset --hard"',
+  "bash --init-file 'init bash' -c 'git push origin main'",
+  'bash --rcfile rc -c "git clean -fd"',
+  'bash --rcfile "my rc file" --login -c "git reset --hard"',
+  'bash -e --rcfile "a b" -c "git checkout -f main"',
+  'zsh -d -f -c "git branch -D feature"',
+  'bash --rcfile "my rc" -c "git rebase main"',
+  'powershell -ExecutionPolicy "Bypass All" -Command "git reset --hard"',
+  "powershell -ExecutionPolicy 'Bypass All' -Command 'git push origin main'",
+  'powershell -WindowStyle "Hidden X" -c "git clean -fd"',
+  'pwsh -ExecutionPolicy "Bypass All" -Command "git branch -D feature"',
+  'powershell -NoProfile -ExecutionPolicy "Bypass All" -c "git checkout -f main"',
 ]) {
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -138,6 +153,12 @@ for (const cmd of [
   'powershell "git status"',
   'powershell -NoProfile "git status"',
   'cmd /v:on /q /c "git diff --stat"',
+  // 2026-08-29 追加：带值 flag 的值是引号包裹串（带空格）的只读 wrapper——
+  // 解引用后子命令只读 → 放行（不误伤）
+  'bash --rcfile "my rc file" -c "git status"',
+  'bash --rcfile "my rc file" -c "git log --oneline -5"',
+  'powershell -ExecutionPolicy "Bypass All" -Command "git status"',
+  'powershell -WindowStyle "Hidden X" -c "git diff --stat"',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
