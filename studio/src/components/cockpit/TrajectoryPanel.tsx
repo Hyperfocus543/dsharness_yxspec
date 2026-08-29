@@ -15,6 +15,7 @@ import React from 'react';
 import { EmptyState, GitDiffPreview, Icon } from '../ui';
 import { I } from '../ui/icons';
 import { useGitStore } from '../../store/gitStore';
+import { modelDisplayName, shortModelName } from '../../utils/modelBadge';
 import {
   fetchTrajectory,
   markTrajectoryRollback,
@@ -53,23 +54,6 @@ function recDuration(r: TrajectoryRecord): string {
 function shortHash(h: string | null | undefined): string {
   if (!h) return '—';
   return h.length > 12 ? `${h.slice(0, 8)}…${h.slice(-4)}` : h;
-}
-
-/** 模型信息（TrajectoryRecord.model / TrajectoryGateStatus.model 同形态）。 */
-type ModelInfo = { provider: string; name: string; maxTokens?: number } | null | undefined;
-
-/** 模型名短显：取 `/` 后最后一段（deepseek/deepseek-chat → deepseek-chat；无 → —） */
-function shortModelName(name: string | null | undefined): string {
-  if (!name) return '—';
-  const seg = name.split('/').filter((s) => s.length > 0);
-  return seg.length > 0 ? seg[seg.length - 1] : name;
-}
-
-/** 模型展示名：name + 可选 provider 前缀（如 deepseek/xxx）；无 → — */
-function modelDisplayName(m: ModelInfo): string {
-  if (!m?.name) return '—';
-  if (m.provider && !m.name.includes(m.provider)) return `${m.provider}/${m.name}`;
-  return m.name;
 }
 
 /** 目标变更 operation → 展示字形（create=+, update=~, clear=x；其他=·） */

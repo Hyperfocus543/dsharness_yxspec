@@ -24,6 +24,7 @@ import { useGitStore } from '../../store/gitStore';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
 import { traceBaseAt } from '../../utils/gitTrace';
 import { filterTraceRows } from '../../utils/traceFilters';
+import { modelDisplayName, shortModelName } from '../../utils/modelBadge';
 import { TrajectoryPanel } from './TrajectoryPanel';
 
 /** 毫秒 → 人类可读耗时（与项目时间约定一致：h m / m s / s） */
@@ -176,6 +177,18 @@ const TimelineRow: React.FC<{
         {rec.stage}
       </button>
       <span className="shrink-0 text-[10px] text-zinc-400 font-mono">{rec.aspice}</span>
+      {/* 模型徽标：该次执行使用的模型名（与单阶段轨迹面板同款短显 + tooltip 全名）。
+          数据源 = trajectory-all 每行透传的 model（网关 listTrajectories 记录自带），零额外请求；
+          git 徽标同处一行，多模型/多阶段一眼可比。无 model → 不渲染（老网关/记录缺失静默降级）。 */}
+      {rec.model?.name && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px]"
+          title={`模型：${modelDisplayName(rec.model)}${rec.model.maxTokens ? ` · maxTokens ${rec.model.maxTokens}` : ''}`}
+        >
+          <Icon name={I.gear} size={10} className="text-zinc-400 shrink-0" />
+          {shortModelName(rec.model.name)}
+        </span>
+      )}
       <span className={`shrink-0 font-medium ${st.text}`}>{st.label}</span>
       {rec.rolled_back && (
         <span className="shrink-0 px-1 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 text-[10px] font-mono">已回滚</span>
