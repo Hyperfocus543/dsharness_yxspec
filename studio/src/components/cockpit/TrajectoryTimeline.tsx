@@ -25,6 +25,9 @@ import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from 
 import { traceBaseAt } from '../../utils/gitTrace';
 import { filterTraceRows } from '../../utils/traceFilters';
 import { modelDisplayName, shortModelName } from '../../utils/modelBadge';
+import { STAGE_TABLE } from '../../data/stage-mapping';
+import { useStageDispatch } from '../../hooks/useStageDispatch';
+import { canRerun, rerunCommandOf, rerunLabel } from '../../utils/rerunTrajectory';
 import { TrajectoryPanel } from './TrajectoryPanel';
 
 /** 毫秒 → 人类可读耗时（与项目时间约定一致：h m / m s / s） */
@@ -148,7 +151,9 @@ const GitBadge: React.FC<{
   );
 };
 
-/** 单行：一次阶段执行（阶段徽标 + 状态 + 耗时/token/工具 + 时间），点击展开该阶段详情 */
+/** 单行：一次阶段执行（阶段徽标 + 状态 + 耗时/token/工具 + 时间），点击展开该阶段详情。
+ *  失败/打回/已回滚行 → 行尾「重跑」按钮：复用 useStageDispatch 派活该阶段命令
+ *  （同驾驶舱一键派活通道），不需要切回驾驶舱就能重跑排障。 */
 const TimelineRow: React.FC<{
   rec: TrajectoryAllEntry;
   onOpen: (t: string) => void;
@@ -157,7 +162,10 @@ const TimelineRow: React.FC<{
   rows: TrajectoryAllEntry[];
   /** 目标工作区根（多工作区下 diff 按活动 root 拉） */
   root?: string | null;
-}> = ({ rec, onOpen, gitAvailable, rows, root = null }) => {
+  /** 重跑回调：失败/打回/已回滚行才传（否则不渲染按钮）；进行中禁用 */
+  onRerun?: (rec: TrajectoryAllEntry) => void;
+  rerunning?: boolean;
+}> = ({ rec, onOpen, gitAvailable, rows, root = null, onRerun, rerunning = false }) => {
   // 轨迹 × git diff 预览：hover commit 徽标展开（至多一个浮层，与轨迹瀑布同交互）
   const [gitOpen, setGitOpen] = React.useState(false);
   const st = rowStyle(rec.rolled_back ? 'blocked' : rec.status);
@@ -165,6 +173,9 @@ const TimelineRow: React.FC<{
   const toolOks = (rec.tools ?? []).filter((t) => t.type === 'tool/result' && t.ok).length;
   const durMs = (rec.finishedAt ?? 0) - (rec.startedAt ?? 0);
   const start = rec.startedAt ? new Date(rec.startedAt).toLocaleString('zh-CN', { hour12: false }) : '';
+  // 失败/打回/已回滚 + STAGE_TABLE 有该阶段 → 行尾渲染「重跑」（命令权威取 STAGE_TABLE）
+  const showRerun = canRerun(rec, STAGE_TABLE);
+  const rerunCmd = rerunCommandOf(rec, STAGE_TABLE) ?? '';
   return (
     <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
       <span className={`shrink-0 w-1 self-stretch rounded-full ${st.bar}`} aria-hidden />
@@ -205,6 +216,20 @@ const TimelineRow: React.FC<{
           {rec.reason}
         </span>
       )}
+      {/* 失败/打回/已回滚行「重跑」：复用 useStageDispatch 派活该阶段命令（同驾驶舱
+          一键派活通道）。进行中整行禁用 + 秒表，防连点重复派活。 */}
+      {showRerun && (
+        <button
+          type="button"
+          onClick={() => onRerun?.(rec)}
+          disabled={rerunning}
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+          title={`重跑该阶段：${rerunCmd}（复用驾驶舱派活通道，生成产物需 3-5 分钟）`}
+        >
+          <Icon name={rerunning ? I.clock : I.play} size={10} className={rerunning ? 'animate-spin' : undefined} />
+          {rerunning ? '重跑中…' : rerunLabel(rec)}
+        </button>
+      )}
       <span className="ml-auto text-[10px] text-zinc-300 shrink-0 tabular-nums" title={rec.sessionId ?? ''}>
         {start}
       </span>
@@ -225,6 +250,18 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   const [openStage, setOpenStage] = React.useState<string | null>(null);
   // 活动工作区 root：commit diff 按活动 root 拉（多工作区不串根）
   const activeRoot = useGitStore((s) => s.activeWorkspace?.root ?? null);
+  // 全局派活（重跑/驾驶舱一键派活同通道）：重跑中的行显示秒表并禁用其余重跑按钮，
+  // 防连点重复派活同一阶段。
+  const { dispatch, sending, dispatchingCmd, elapsedSec } = useStageDispatch();
+  // 行内重跑：失败/打回/已回滚行点「重跑」→ 派活该阶段命令（STAGE_TABLE 权威）。
+  // 成功后该阶段已有新轨迹留痕 → 重拉 timeline；失败/门控打回由 dispatch 内 toast 承接。
+  const handleRerun = async (rec: TrajectoryAllEntry) => {
+    if (sending) return;
+    const cmd = rerunCommandOf(rec, STAGE_TABLE);
+    if (!cmd) return;
+    await dispatch(cmd);
+    load();
+  };
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -452,6 +489,8 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
                 setOpenStage(openStage === t ? null : t);
                 onOpenStage?.(t);
               }}
+              onRerun={handleRerun}
+              rerunning={sending && dispatchingCmd === rerunCommandOf(r, STAGE_TABLE)}
             />
           ))}
         </div>
