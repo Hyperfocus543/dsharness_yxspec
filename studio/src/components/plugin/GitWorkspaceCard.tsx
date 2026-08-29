@@ -532,16 +532,13 @@ export const GitWorkspaceCard: React.FC = () => {
   }, [traceStage, loadCommits, activeRoot]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
-  // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）。
-  // 放 ref 而非 state：hover 只是"临时预览"（映射成 open 的中间层），
-  // 不参与渲染；点按/键盘的"固定 diff"（open）才是受控源。
-  // 固定 diff 展开时抑制全部 hover 预览（openFile !== null 即禁），
-  // 保证任意时刻至多一个浮层——否则钉住 A 再悬停 B 会叠出第二块 diff。
-  const hoverFileRef = React.useRef<string | null>(null);
-  // 固定展开 diff 的文件路径（点击 diff 按钮或空格/回车切换；最多一个浮层）
+  // 悬停预览 diff 的文件路径（仅一个；state 驱动渲染，与 CommitRow/TraceRow 的
+  // hover 预览同交互——ref 不触发重渲染，悬停永远不出现预览，是已修的死角）。
+  // 固定展开 diff 的文件路径（点击 diff 按钮或空格/回车切换；最多一个浮层）。
+  // 任一非空时另一路径的 hover 预览即被抑制（open 表达式里 `openFile === null` 保证
+  // 任意时刻至多一个浮层）——否则钉住 A 再悬停 B 会叠出第二块 diff。
+  const [hoverFile, setHoverFile] = React.useState<string | null>(null);
   const [openFile, setOpenFile] = React.useState<string | null>(null);
-  // 鼠标悬停是否仍生效（触屏/纯键盘场景自动关闭 hover 预览，避免无法移出的固定浮层）
-  const [hoverEnabled, setHoverEnabled] = React.useState(true);
   // 最近 5 条 commit（取带 message 的，倒序排列）；后端字段 recentCommits，旧字段 recent 兜底
   const recent = [...(status?.recentCommits ?? status?.recent ?? [])].slice(0, 5);
   // 相邻提交 diff 基线（hash → 相对上一提交的 commit）：留痕/轨迹行同口径（相邻 = 一个 diff 单元），
@@ -1417,13 +1414,8 @@ export const GitWorkspaceCard: React.FC = () => {
                 <div
                   key={f.path}
                   className="relative"
-                  onMouseEnter={() => {
-                    hoverFileRef.current = f.path;
-                    setHoverEnabled(true);
-                  }}
-                  onMouseLeave={() => {
-                    if (hoverFileRef.current === f.path) hoverFileRef.current = null;
-                  }}
+                  onMouseEnter={() => setHoverFile(f.path)}
+                  onMouseLeave={() => setHoverFile((cur) => (cur === f.path ? null : cur))}
                 >
                   <div
                     className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
@@ -1441,7 +1433,7 @@ export const GitWorkspaceCard: React.FC = () => {
                       type="button"
                       onClick={() => {
                         // 点击固定/收起：hover 预览随点击收起（避免两种浮层叠出），再次点击关闭
-                        hoverFileRef.current = null;
+                        setHoverFile(null);
                         setOpenFile((cur) => (cur === f.path ? null : f.path));
                       }}
                       aria-expanded={openFile === f.path}
@@ -1455,7 +1447,7 @@ export const GitWorkspaceCard: React.FC = () => {
                   </div>
                   <DirtyDiffPreview
                     file={f}
-                    open={openFile === f.path || (hoverEnabled && openFile === null && hoverFileRef.current === f.path)}
+                    open={openFile === f.path || (openFile === null && hoverFile === f.path)}
                     root={activeRoot}
                   />
                 </div>
