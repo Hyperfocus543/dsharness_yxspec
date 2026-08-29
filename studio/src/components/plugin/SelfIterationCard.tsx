@@ -327,8 +327,10 @@ const StageRunBadge: React.FC<{ s: StageRunSummary }> = ({ s }) => {
 /** 单阶段评分线：阶段名 + 最近状态 + 轮次瀑布（新→旧 或 全部）。
  *  评分 × git 检查点：mount 时并行拉取该阶段 git 留痕（/api/git/commits，与
  *  Git 工作区管控卡 / 轨迹瀑布同数据源），每轮评分行对齐其评分时刻的 commit + tag；
- *  失败静默降级（不渲染 git 徽标，不阻塞评分瀑布）。 */
-const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
+ *  失败静默降级（不渲染 git 徽标，不阻塞评分瀑布）。
+ *  启动联动：running=true（本次启动的 dispatch 进行中）→ 头部加「运行中」徽标，
+ *  轮次留痕由启动联动轮询实时刷新，无需手动点「刷新」。 */
+const StageBlock: React.FC<{ s: SelfIterationStage; running?: boolean }> = ({ s, running = false }) => {
   // 该阶段 git 留痕（阶段↔commit↔tag；git 不可用/无留痕 → null，行内不渲染）
   const [gitTraces, setGitTraces] = React.useState<GitStageTrace[] | null>(null);
   // 活动工作区 root：留痕 + commit diff 按活动 root 拉（多工作区不串根）
@@ -371,6 +373,12 @@ const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
           <span className="shrink-0 px-1.5 py-0.5 rounded bg-sage-100 text-sage-700 border border-sage-200 text-[10px] font-medium inline-flex items-center gap-1" title="已收敛（goal 达成或轮次用满）">
             <Icon name={I.check} size={10} weight="fill" />
             已收敛
+          </span>
+        )}
+        {running && (
+          <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-300 text-[10px] font-medium" title="本次启动的迭代进行中：轮次留痕实时刷新，无需手动点刷新">
+            <Icon name={I.clock} size={10} weight="fill" className="animate-pulse" />
+            运行中
           </span>
         )}
         <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{s.rounds.length} 轮留痕</span>
@@ -416,6 +424,14 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   );
   // 启动表单「阶段」是否已被用户改过：手动选择优先，预填只在仍为空时生效
   const stageTouchedRef = React.useRef(false);
+  // 启动联动：本次启动目标阶段（sending 期间瀑布高亮该块 + 运行中徽标；取消/结束不残留）
+  const [targetStage, setTargetStage] = React.useState('');
+  // 阶段评分瀑布区 DOM 引用（启动后滚进视区，聚焦轮次瀑布）
+  const waterfallRef = React.useRef<HTMLDivElement | null>(null);
+  // 运行中阶段块的 DOM 引用（目标阶段存在时指向它，滚动定位更精准；新阶段无块 → 回落瀑布区头）
+  const runningBlockRef = React.useRef<HTMLDivElement | null>(null);
+  // sending 边沿检测：只认 false→true（本次启动）滚一次，取消/结束不重复滚
+  const prevSendingRef = React.useRef(false);
 
   const load = React.useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoading(true);
@@ -488,9 +504,48 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     // 表单仍为空：预填未生效（无 run 阶段也无驾驶舱当前阶段，或候选被排除）→
     // 明确提示用户选择，不自动跳过「启动前选阶段」这一步
     if (!cmd) { pushToast('warn', '请先选择阶段（未检测到可预填的当前阶段）'); return; }
+    // 启动联动：记录本次启动目标阶段（sending 期间瀑布高亮该块 + 运行中徽标），
+    // 结束/失败后清空（不残留上一次的高亮，也避免误标「运行中」）
+    setTargetStage(stageSel.trim());
     const result = await dispatch(cmd);
     if (result) await load({ quiet: true });
+    setTargetStage('');
   };
+
+  // 启动联动 · 聚焦轮次瀑布：仅在「本次启动」边沿（sending false→true）滚动一次——
+  // 取消/结束（true→false）不重复滚；dispatch 里 handleTaskResult 先 push 了 toast，
+  // 这次 scroll 发生在同一次状态提交后，视觉顺序 toast→滚动→瀑布实时刷新，无冲突。
+  // 滚动目标 = 本次启动阶段块（存在时），新阶段无块 → 回落瀑布区头部（滚动引用前滚，
+  // 此时该阶段块尚未出现，滚到瀑布区头即可见首帧 + 后续实时刷新自动长出新轮次）。
+  React.useEffect(() => {
+    if (sending && !prevSendingRef.current) {
+      const el = runningBlockRef.current ?? waterfallRef.current;
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    prevSendingRef.current = sending;
+  }, [sending]);
+
+  // 启动联动 · 运行中实时刷新：dispatch 期间每 8s 静默轮询 /api/self-iteration，
+  // 每轮结束新打分/判定留痕实时长进瀑布，不用等整轮跑完再点「刷新」。
+  // 用内联 fetch（而非 load）——load 在网关瞬时失败时会置 data=null 把整个卡闪成
+  // 错误态；运行中轮询要「拿到新数据才更新」，网络抖动保持已有视图连续。
+  // targetStage 为依赖：换目标阶段重启轮询周期（同一发送期的阶段选择不会变，实际上只触发一次）。
+  React.useEffect(() => {
+    if (!sending) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      fetchSelfIteration()
+        .then((d) => {
+          if (!cancelled && d) setData(d);
+        })
+        .catch(() => {});
+    }, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sending, targetStage]);
 
   // 跨阶段 run 汇总（纯前端聚合）：收敛/退化/进行中计数 + 每阶段最佳分/最差轮。
   // 数据源 = 本卡已拉取的 SelfIterationOverview，零新接口；空数据 → 空数组，不渲染。
@@ -776,7 +831,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
       )}
 
       {/* 阶段评分瀑布 */}
-      <div className="space-y-3">
+      <div ref={waterfallRef} className="space-y-3">
         <SectionLabel>阶段评分</SectionLabel>
         {empty ? (
           <div className="text-xs text-zinc-400 py-6 text-center border border-dashed border-zinc-200 rounded-lg space-y-1">
@@ -787,9 +842,18 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
           </div>
         ) : (
           <div className="space-y-3">
-            {stages.map((s) => (
-              <StageBlock key={s.token} s={s} />
-            ))}
+            {stages.map((s) => {
+              const isTarget = sending && s.token === targetStage;
+              return (
+                <div
+                  key={s.token}
+                  ref={isTarget ? runningBlockRef : undefined}
+                  className={`rounded-xl transition-shadow ${isTarget ? 'ring-2 ring-emerald-300/80 shadow-sm' : ''}`}
+                >
+                  <StageBlock s={s} running={isTarget} />
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
