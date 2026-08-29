@@ -19,6 +19,9 @@ export interface SelfIterateOptions {
   goal?: string;
   /** 断点恢复，true 拼 --resume */
   resume?: boolean;
+  /** 评估模式：'framework' 拼 --mode=framework（评框架效率，复用 --eval-framework 对比）；
+   *  'product'（默认）/ undefined 不拼（网关默认评阶段产物） */
+  mode?: 'product' | 'framework';
 }
 
 /** 网关默认最大轮数（与 @yxspec/self-iteration DEFAULT_MAX_ITER 对齐）。 */
@@ -36,6 +39,8 @@ const MAX_ITER_MAX = 10;
  *     再钳制到 [1,10]；仅当有效数字才拼 ` --max-iter=N`（NaN/undefined 不拼，
  *     等于默认 3 也不拼——网关 DEFAULT_MAX_ITER=3）
  *   · goal trim 后非空才拼 ` --goal="<goal>"`，内部 `"` 转义为 `\"`，保留空格
+ *   · mode === 'framework' 拼 ` --mode=framework`（评框架效率）；product/undefined 不拼
+ *     （网关默认评阶段产物，与 maxIter 缺省不拼同口径）
  *   · resume === true 拼尾随 ` --resume`
  */
 export function buildSelfIterateCommand(opts: SelfIterateOptions): string {
@@ -51,6 +56,8 @@ export function buildSelfIterateCommand(opts: SelfIterateOptions): string {
 
   const goal = String(opts.goal ?? '').trim();
   if (goal) cmd += ` --goal="${goal.replace(/"/g, '\\"')}"`;
+
+  if (opts.mode === 'framework') cmd += ' --mode=framework';
 
   if (opts.resume === true) cmd += ' --resume';
 

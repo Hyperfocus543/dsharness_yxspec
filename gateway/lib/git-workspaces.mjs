@@ -352,11 +352,23 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (!v.root) return { ok: false, error: v.error, message: v.message }
     realRoot = v.root
   } else {
+    // clone 的 root 只是「目标父目录」锚点（git clone 的 cwd），本身无需已登记
+    // （头注释红线声明）；但仍是用户输入 → 同样过绝对路径/`..` 校验，防弱化。
     const rootNorm = typeof root === 'string' ? root.trim().replace(/\\/g, '/') : ''
+    if (!isWindowsAbsolute(rootNorm)) {
+      return { ok: false, error: 'bad-request', message: 'root 必须为绝对路径（Windows 盘符开头）' }
+    }
+    if (rootNorm.split('/').includes('..')) {
+      return { ok: false, error: 'bad-request', message: 'root 不能含 .. 路径段' }
+    }
     realRoot = rootNorm
   }
+  // 非 clone 才要求已登记工作区；clone 目标目录由 isSafeTargetDir 单独立界
+  // （url 过 isSafeGitUrl + dir 过 isSafeTargetDir，双保险），锚点仅需绝对路径。
   const isRegistered =
-    reg.workspaces.some((w) => w.root === realRoot) || (reg.defaultRoot && reg.defaultRoot === realRoot)
+    action === 'clone' ||
+    reg.workspaces.some((w) => w.root === realRoot) ||
+    (reg.defaultRoot && reg.defaultRoot === realRoot)
   if (!isRegistered) {
     return { ok: false, error: 'unknown-workspace', message: 'root 不是已登记的工作区' }
   }

@@ -396,6 +396,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   const pushToast = useToastStore((s) => s.push);
   const [stageSel, setStageSel] = React.useState('');
   const [maxIterSel, setMaxIterSel] = React.useState('3');
+  const [modeSel, setModeSel] = React.useState<'product' | 'framework'>('product');
   const [goalSel, setGoalSel] = React.useState('');
   const [resumeSel, setResumeSel] = React.useState(false);
   // 阶段候选：排除废弃 swe_detail 与 PC 变体 swe_coding_verify_pc（与 SlashCommandMenu 同口径）
@@ -454,6 +455,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
       stage: stageSel.trim(),
       maxIter: maxIterSel === '' ? undefined : Number(maxIterSel),
       goal: goalSel.trim(),
+      mode: modeSel,
       resume: resumeSel,
     });
     if (!cmd) { pushToast('warn', '请先选择阶段'); return; }
@@ -545,13 +547,49 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
         </button>
       </div>
 
-      {/* 启动新迭代：选阶段/轮数/收敛目标/断点 → 一键派活 /yxspec:self-iterate（网关插件） */}
+      {/* 启动新迭代：选阶段/轮数/评估模式/收敛目标/断点 → 一键派活 /yxspec:self-iterate（网关插件） */}
       <div className="rounded-lg border border-zinc-200 bg-white p-3 space-y-2">
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
           <Icon name={I.play} size={13} />
           启动新迭代
-          <span className="ml-auto text-[10px] text-zinc-300">默认 3 轮 · 收敛目标可选</span>
+          <span className="ml-auto text-[10px] text-zinc-300">默认 3 轮 · 收敛目标可选 · 产物/框架</span>
         </div>
+        {/* 评估模式：产物（默认，评阶段产物）/ 框架（评框架效率，复用 --eval-framework 对比）。
+            选中态 emerald，照 StageCockpit ViewTabs 分段样式（bg-zinc-100 底 + 选中 bg-white shadow） */}
+        <div className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+          <span className="shrink-0">模式</span>
+          <div className="flex items-center gap-1 bg-zinc-100 border border-zinc-200 rounded p-0.5 w-fit" role="group" aria-label="评估模式">
+            <button
+              type="button"
+              onClick={() => setModeSel('product')}
+              aria-pressed={modeSel === 'product'}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] ${
+                modeSel === 'product' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+              }`}
+              title="默认：评分本阶段产物"
+            >
+              <Icon name={I.cube} size={11} />
+              产物
+            </button>
+            <button
+              type="button"
+              onClick={() => setModeSel('framework')}
+              aria-pressed={modeSel === 'framework'}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] ${
+                modeSel === 'framework' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
+              }`}
+              title="评分框架代码本身效率，复用 --eval-framework 效率对比"
+            >
+              <Icon name={I.fileCode} size={11} />
+              框架
+            </button>
+          </div>
+        </div>
+        {modeSel === 'framework' && (
+          <div className="text-[10px] text-zinc-400 pl-1">
+            框架模式：优化框架代码本身，复用同事 --eval-framework 效率对比
+          </div>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <label className="flex flex-col gap-1 text-[10px] text-zinc-400">
             阶段

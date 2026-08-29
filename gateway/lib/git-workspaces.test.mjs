@@ -102,6 +102,30 @@ test('gitOperate：未知 action → ok:false', async () => {
   assert.equal(r.error, 'unknown-action')
 })
 
+test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外），url/dir 校验先于 git', async () => {
+  // clone 的 root 只是「目标父目录」锚点，本身无需已登记（头注释红线声明）。
+  // 修复前：未登记 root → 先撞 isRegistered → unknown-workspace，url/dir 校验死代码；
+  // 修复后：clone 跳过 isRegistered，url 非法 → bad-request（校验发生在 git 调用之前）。
+  const badUrl = await gitOperate({ root: 'D:/Work/x', action: 'clone', args: { url: 'file:///etc/passwd', dir: 'D:/Work/y' } })
+  assert.equal(badUrl.ok, false)
+  assert.equal(badUrl.error, 'bad-request', 'clone url 非法应报 bad-request 而非 unknown-workspace')
+
+  // 相对 root（clone 锚点也必须是绝对路径）→ bad-request，不触碰 git
+  const relRoot = await gitOperate({ root: 'work/x', action: 'clone', args: { url: 'https://github.com/a/b.git', dir: 'D:/Work/y' } })
+  assert.equal(relRoot.ok, false)
+  assert.equal(relRoot.error, 'bad-request', 'clone root 相对路径应报 bad-request')
+
+  // root 含 .. 段 → bad-request
+  const dotdot = await gitOperate({ root: 'D:/Work/../x', action: 'clone', args: { url: 'https://github.com/a/b.git', dir: 'D:/Work/y' } })
+  assert.equal(dotdot.ok, false)
+  assert.equal(dotdot.error, 'bad-request', 'clone root 含 .. 应报 bad-request')
+
+  // clone 锚点合法 + dir 非法（相对/盘符根）→ bad-request（dir 校验在 git 之前）
+  const badDir = await gitOperate({ root: 'D:/Work', action: 'clone', args: { url: 'https://github.com/a/b.git', dir: 'work/y' } })
+  assert.equal(badDir.ok, false)
+  assert.equal(badDir.error, 'bad-request', 'clone dir 相对路径应报 bad-request')
+})
+
 test('canRemoveWorkspace：default/auto 拒绝、不存在 not-found、手动放行', () => {
   assert.equal(canRemoveWorkspace('default', null).error, 'cannot-remove-default')
   assert.equal(canRemoveWorkspace('default', { id: 'default', source: 'auto' }).error, 'cannot-remove-default')

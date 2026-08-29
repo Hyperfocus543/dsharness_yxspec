@@ -20,6 +20,11 @@
 //      内部 child_process.execFile('python', ['score_aggregate.py', ...],
 //      { cwd: 同事的 self-iteration 目录 })（无 shell 拼接），stdout 结构化
 //      返回。这是「禁 LLM 自评」的落实——评分走确定性脚本，不是 LLM 手写。
+//      tool 双模式：product（缺省）= 评阶段产物（上述路径）；framework = 评框架
+//      效率——落盘本轮打分记录（runtime-data/self-iteration/framework-scores/round-{n}.json）
+//      并与上一轮对比（score_core.py --eval-framework，同事 score-standard-v3 §9 效率判定），
+//      返回 framework 子对象（decision/quadrant/效率增量）。框架判定同样走确定性
+//      脚本，禁 LLM 手写；脚本不可用照降级范式返回 degraded，不抛错。
 //   4. 留痕写轨迹：每轮打分/基线/轮次状态写进
 //      gateway/runtime-data/trajectory/self_iteration/<stage>-<seq>.jsonl
 //      （与 aspice-trajectory 同一根目录族；runtime-data gitignore 排除），
@@ -101,7 +106,7 @@ function promptFromInbox(data) {
 
 /**
  * 边界感知匹配（与 stages.mjs resolveStage 同规则：命令后必须跟 空白/标点/结尾）。
- * 返回 { stageRaw, maxIter, goal, resume } 或 null（非自迭代命令）。
+ * 返回 { stageRaw, maxIter, goal, resume, mode } 或 null（非自迭代命令）。
  * 只做参数抽取（纯函数）：stage 的权威 token 解析由 resolveStageToken 在
  * apply() 内完成（需要 stateRoot 做 --resume 回落 + CMD_TOKENS 归一）。
  */
@@ -131,6 +136,10 @@ function parseSelfIterate(prompt) {
   const goal = flagVal('goal')
   const stageRaw0 = flagVal('stage')
   const resume = /(?:^|\s)--resume(?:\s|$)/.test(rest)
+  // mode：显式 --mode=product|framework 命中取之，否则缺省 product（评阶段产物）。
+  // 非法值（--mode=bogus）回退 product 而非报错：mode 是选择性开关，不影响命令可解析。
+  const modeRaw = flagVal('mode')
+  const mode = /^(product|framework)$/.test(String(modeRaw ?? '')) ? modeRaw : 'product'
 
   // stage：优先显式 --stage=，否则取命令后第一个非 flag 裸词（阶段命令名/token）。
   // 剥离带值 flag 时须与 flagVal 支持的形态对称（`--key=val` / `--key "带空格值"` /
@@ -142,7 +151,7 @@ function parseSelfIterate(prompt) {
   if (!stageRaw) {
     const after = rest
       .replace(
-        /--(?:max-iter|goal|stage|round|repo-root|run-dir|session)(?:\s*=\s*(?:"[^"]*"|'[^']*'|\S+)|(?:\s+(?:"[^"]*"|'[^']*'|\S+)))?/g,
+        /--(?:max-iter|goal|stage|round|repo-root|run-dir|session|mode|time-min)(?:\s*=\s*(?:"[^"]*"|'[^']*'|\S+)|(?:\s+(?:"[^"]*"|'[^']*'|\S+)))?/g,
         ' ',
       )
       .replace(/--resume(?:\s|$)/g, ' ')
@@ -155,6 +164,7 @@ function parseSelfIterate(prompt) {
     maxIter: maxIterRaw != null && /^\d+$/.test(maxIterRaw) ? Number(maxIterRaw) : null,
     goal: goal || null,
     resume,
+    mode,
   }
 }
 
@@ -395,14 +405,21 @@ function inferGateOk(out) {
 
 /**
  * self_iter_score tool 执行体：调同事的 score_aggregate.py，结构化返回。
- * 任何不可用（脚本缺 / python 挂 / 脚本崩溃）→ 返回 degraded:true，不抛错。
- * @param {{ stage, round, repoRoot, runDir, session }} args 已校验的参数
- * @param {{ scriptsDir: string, defaultRepoRoot: string }} state 插件上下文
+ * 双模式（args.mode）：
+ *   - product（缺省）= 评阶段产物（现有路径）：返回 Master/Stage/Total/等级/弱项。
+ *   - framework = 评框架效率：落盘本轮打分记录（framework-scores/round-{n}.json），
+ *     与上一轮记录对比（score_core.py --eval-framework，同事 score-standard-v3 §9 效率判定），
+ *     返回 framework 子对象；首轮（无上一轮）→ decision:'baseline'。
+ * 任何不可用（脚本缺 / python 挂 / 脚本崩溃 / JSON 解析失败）→ 返回 degraded:true，不抛错。
+ * @param {{ stage, round, repoRoot, runDir, session, mode, timeMin }} args 已校验的参数
+ * @param {{ scriptsDir: string, defaultRepoRoot: string, stateRoot: string }} state 插件上下文
  */
 async function execSelfIterScore(args, state) {
   const { stage, runDir, round } = args || {}
   const stageName = String(stage ?? '').trim() || null
   const roundNo = round == null ? null : Number(round)
+  // mode：product（缺省，评阶段产物）/ framework（评框架效率）。非法值 → product（parseSelfIterate 同口径）。
+  const mode = String(args?.mode ?? 'product') === 'framework' ? 'framework' : 'product'
   if (!stageName) {
     return { ok: false, degraded: false, error: 'missing-stage', message: '必须提供 stage（节点名，如 sqt-script-gen）' }
   }
@@ -460,6 +477,13 @@ async function execSelfIterScore(args, state) {
       stdout: res.stdout, stderr: res.stderr,
     }
   }
+
+  // ---- framework 模式：评框架效率（同事 score_core.py --eval-framework，§9）----
+  // 分数（total）复用上面 score_aggregate 的结果；time_min 取 agent 显式观测或
+  // run-state 会话时长折算。打分记录落 yxspec 侧 framework-scores/（不写同事目录）。
+  // 与上一轮记录对比 → decision/quadrant/效率增量；首轮无上一轮 → baseline。
+  // 任何不可用（score_core 缺失 / python 挂 / JSON 解析失败）→ degraded:true，不抛，
+  // 不落 lastScore（框架判定非本轮产物分，不进轮次状态机）。
   return {
     ok: true,
     degraded: false,

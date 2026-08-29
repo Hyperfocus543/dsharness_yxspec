@@ -91,6 +91,36 @@ describe('buildSelfIterateCommand（/yxspec:self-iterate 派活命令拼装）',
     });
   });
 
+  describe('mode', () => {
+    it('framework → 拼 ` --mode=framework`', () => {
+      expect(buildSelfIterateCommand({ stage: 'sqt_script_gen', mode: 'framework' })).toBe(
+        '/yxspec:self-iterate sqt_script_gen --mode=framework',
+      );
+    });
+
+    it('product → 不拼（网关默认评阶段产物）', () => {
+      expect(buildSelfIterateCommand({ stage: 'sqt_script_gen', mode: 'product' })).toBe(
+        '/yxspec:self-iterate sqt_script_gen',
+      );
+    });
+
+    it('undefined → 不拼', () => {
+      expect(buildSelfIterateCommand({ stage: 'sqt_script_gen' })).toBe('/yxspec:self-iterate sqt_script_gen');
+    });
+
+    it('与 maxIter/goal/resume 组合 → 顺序为 max-iter → goal → mode → resume', () => {
+      expect(
+        buildSelfIterateCommand({
+          stage: 'sqt_script_gen',
+          maxIter: 5,
+          goal: 'Total>=80 且门禁全绿',
+          mode: 'framework',
+          resume: true,
+        }),
+      ).toBe('/yxspec:self-iterate sqt_script_gen --max-iter=5 --goal="Total>=80 且门禁全绿" --mode=framework --resume');
+    });
+  });
+
   describe('resume', () => {
     it('true → 拼尾随 ` --resume`', () => {
       expect(buildSelfIterateCommand({ stage: 'sqt_script_gen', resume: true })).toBe(
