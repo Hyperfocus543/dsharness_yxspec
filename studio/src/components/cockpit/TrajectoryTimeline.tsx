@@ -243,8 +243,22 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   }
   if (loadError || !data) {
     return (
-      <div className="border border-zinc-200 rounded-lg bg-white">
-        <EmptyState icon={I.warn} title="轨迹加载失败" hint={loadError ?? '无数据'} />
+      <div className="space-y-3">
+        <div className="border border-zinc-200 rounded-lg bg-white">
+          <EmptyState icon={I.warn} title="轨迹加载失败" hint={loadError ?? '无数据'} />
+        </div>
+        {/* 错误态给重试入口（与 Git 工作区卡同款）：网关未起/抖动时可原地重拉，
+            不必切走视图再回来触发重新挂载 */}
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={load}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+          >
+            <Icon name={I.refresh} size={11} />
+            重试
+          </button>
+        </div>
       </div>
     );
   }
