@@ -306,12 +306,13 @@ export const GitWorkspaceCard: React.FC = () => {
     if (changed) confirmRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [confirmTarget]);
 
-  // 挂载即拉一次工作区注册表 + 工作区状态；初始 stage 对应轨迹也一起拉。
-  // 注意：工作区列表可能先于 status 就绪（网关同时提供两路由），即便 status 未就绪
-  // 也先渲染工作区区块，让用户能添加/切换工作区——故这里不等 status。
+  // 挂载：先取工作区注册表确立 activeWorkspace，再按该 root 拉 status ——
+  // 不能并行拉：status 在 activeWorkspace 还是 null 时会按默认根拉取，
+  // 与高亮的活动工作区错位（多仓库下展示的是别的仓库的分支/HEAD/脏文件，
+  // 而 fetch/pull/push 却作用在活动工作区上）。
+  // 工作区区块仍先就绪先渲染（不阻塞添加/切换），status 紧随其后。
   React.useEffect(() => {
-    refreshWorkspaces().catch(() => {});
-    refreshStatus().catch(() => {});
+    refreshWorkspaces().finally(() => refreshStatus().catch(() => {}));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshWorkspaces, refreshStatus]);
 
@@ -319,12 +320,6 @@ export const GitWorkspaceCard: React.FC = () => {
     loadCommits(traceStage).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceStage, loadCommits]);
-
-  // 挂载时拉一次工作区注册表（多工作区视图）
-  React.useEffect(() => {
-    refreshWorkspaces().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshWorkspaces]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
   // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）。
