@@ -733,7 +733,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={sending}
+            disabled={sending || !stageSel.trim()}
             onClick={onStart}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60"
             title={stageSel ? `派活 /yxspec:self-iterate ${stageSel}` : '请先选择阶段'}
