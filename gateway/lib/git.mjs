@@ -192,6 +192,28 @@ export async function loadGitIndex(cwd) {
 }
 
 /**
+ * 解析 porcelain v1 首行（`## <branch>...<upstream> [ahead N, behind M]`）→ 分支/游离态。
+ * 纯函数（可单测）：branchInfo 已剥掉尾部方括号区间。
+ * 游离 HEAD 的领先/落后在**括号**里（`## HEAD (no branch, ahead 1, behind 2)`），
+ * 不匹配 `[...]` —— 若把括号当分支名会得到 branch="HEAD (no branch, ahead 1…)"
+ * 且 detached=false，前端把游离态显示成正常分支名。故单独识别游离头部后
+ * 再剥离括号区间。
+ * @param {string} branchInfo
+ * @returns {{ branch: string|null, detached: boolean }}
+ */
+export function parsePorcelainHead(branchInfo) {
+  if (branchInfo.startsWith('No commits yet on ')) {
+    return { branch: branchInfo.slice('No commits yet on '.length) || null, detached: false }
+  }
+  if (branchInfo.startsWith('HEAD (no branch') || branchInfo.startsWith('HEAD (detached')) {
+    return { branch: null, detached: true }
+  }
+  const paren = branchInfo.match(/ \(.*\)$/)
+  const plain = paren ? branchInfo.slice(0, paren.index).trim() : branchInfo.trim()
+  return { branch: plain.split('...')[0] || null, detached: false }
+}
+
+/**
  * GET /api/git/status 数据源。
  * 返回工作区 git 全貌：分支 / HEAD / 脏文件 / 领先落后 / 最近 5 条提交。
  * git 不可用（不是仓库/未安装）→ gitAvailable:false + error，不抛。
@@ -243,15 +265,12 @@ export async function getStatus(root) {
   if (first.startsWith('## ')) {
     const headPart = first.slice(3)
     const bracket = headPart.match(/\[([^\]]*)\]$/)
+    // 游离 HEAD 的领先/落后在括号里（`## HEAD (no branch, ahead 1)`），不在方括号，
+    // 故 branchInfo 先把方括号剥掉，游离头部/括号区间由 parsePorcelainHead 处理。
     const branchInfo = bracket ? headPart.slice(0, bracket.index).trim() : headPart.trim()
-    if (branchInfo.startsWith('No commits yet on ')) {
-      base.branch = branchInfo.slice('No commits yet on '.length) || null
-    } else if (branchInfo.startsWith('HEAD (no branch)') || branchInfo.startsWith('HEAD (detached')) {
-      base.detached = true
-      base.branch = null
-    } else {
-      base.branch = branchInfo.split('...')[0] || null
-    }
+    const parsed = parsePorcelainHead(branchInfo)
+    base.branch = parsed.branch
+    base.detached = parsed.detached
     if (bracket) {
       const inner = bracket[1]
       const ahead = inner.match(/ahead (\d+)/)
