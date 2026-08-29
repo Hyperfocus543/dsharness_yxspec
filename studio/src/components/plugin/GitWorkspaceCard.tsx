@@ -266,7 +266,7 @@ export const GitWorkspaceCard: React.FC = () => {
   // 若在别的留痕行点了「回滚」，面板内容原地变但不在视区内、autoFocus 也不重触发，
   // 用户看不到"现在确认的是哪条"——因此切目标时把面板滚进视区（面板头注明
   // 留痕 #seq，配合目标行自身的「待确认」徽标，确认对象无歧义）。
-  const confirmRef = React.useRef<HTMLDivElement | null>(null);
+  const confirmRef = React.useRef<HTMLFormElement | null>(null);
   const confirmingRef = React.useRef<GitStageTrace | null>(null);
   React.useEffect(() => {
     // 关闭确认态 → 重置上一次目标（下次打开由 autoFocus 负责首次滚入视区）
@@ -340,6 +340,15 @@ export const GitWorkspaceCard: React.FC = () => {
     } finally {
       setRolling(false);
     }
+  };
+
+  // 回滚确认提交：确认面板包在 <form> 里，回车（Enter）即可直接提交留档，
+  // 不必离开键盘去点「确认回滚留档」按钮。disabled 与确认按钮同步
+  // （原因为空 / 提交中不响应），避免空原因误提交。
+  const handleRollbackSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rollbackReason.trim() || rolling) return;
+    void doRollback();
   };
 
   // ---- status 未就绪：加载骨架 / 失败 EmptyState ----
@@ -620,10 +629,13 @@ export const GitWorkspaceCard: React.FC = () => {
         )}
       </div>
 
-      {/* 回滚确认态：原因输入 + 说明（常驻挂载；切目标时滚动进视区） */}
+      {/* 回滚确认态：原因输入 + 说明（常驻挂载；切目标时滚动进视区）。
+          包在 <form> 里让回车即可提交（防误触发：仅 Enter 无默认副作用，
+          不拦截 Tab/方向键等其余键），取消按钮 type="button" 避开隐式提交。 */}
       {confirmTarget && (
-        <div
+        <form
           ref={confirmRef}
+          onSubmit={handleRollbackSubmit}
           className="rounded-lg border border-red-200 bg-red-50/40 p-2.5 space-y-2 animate-fade-in-up"
         >
           <div className="text-xs text-zinc-700">
@@ -645,8 +657,7 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
           <div className="flex gap-1.5">
             <button
-              type="button"
-              onClick={doRollback}
+              type="submit"
               disabled={!rollbackReason.trim() || rolling}
               className="px-2.5 py-1 rounded text-xs bg-red-600 text-white hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -664,7 +675,7 @@ export const GitWorkspaceCard: React.FC = () => {
               取消
             </button>
           </div>
-        </div>
+        </form>
       )}
     </div>
   );
