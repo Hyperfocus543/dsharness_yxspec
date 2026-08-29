@@ -173,6 +173,20 @@ test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外�
   const badDir = await gitOperate({ root: 'D:/Work', action: 'clone', args: { url: 'https://github.com/a/b.git', dir: 'work/y' } })
   assert.equal(badDir.ok, false)
   assert.equal(badDir.error, 'bad-request', 'clone dir 相对路径应报 bad-request')
+
+  // 目标路径被同名文件占用 → bad-request（mkdirSync 抛 EEXIST 必须兜住，不逃出 ok:false 契约）。
+  // 回归：修复前 clone 把 dir 当 execFile cwd，目标不存在时 spawn ENOENT → 整段 clone 恒失败
+  //（首次克隆目标目录未创建是常态）；修复后先 mkdirSync 预创建，被文件占用则转 bad-request。
+  const occupied = mkdtempSync(join(tmpdir(), 'gw-clone-occupied-'))
+  const blockedFile = join(occupied, 'blocked')
+  writeFileSync(blockedFile, 'not a dir')
+  try {
+    const r = await gitOperate({ root: 'D:/Work', action: 'clone', args: { url: 'https://github.com/a/b.git', dir: blockedFile.replace(/\\/g, '/') } })
+    assert.equal(r.ok, false)
+    assert.equal(r.error, 'bad-request', 'clone 目标被文件占用应报 bad-request 而非抛异常')
+  } finally {
+    rmSync(occupied, { recursive: true, force: true })
+  }
 })
 
 test('gitOperate checkout：branch 必须是可解析的 git 引用（. / 目录名 / glob → bad-request）', async () => {

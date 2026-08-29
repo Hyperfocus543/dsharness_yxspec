@@ -450,8 +450,19 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (!isSafeTargetDir(dir)) {
       return { ok: false, error: 'bad-request', message: 'clone 目标目录非法（需绝对路径、非盘符根、不含 ..）' }
     }
-    const g = await runGit(['clone', url, dir], { cwd: realRoot })
-    recordGitOp({ root: realRoot, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
+    // 先确保目标目录存在：git clone 的目标目录（dir）是即将创建/已存在的目录，
+    // 而 execFile 的 cwd 必须是已存在目录——若目标目录尚不存在（首次克隆的常态），
+    // spawn 会直接 ENOENT（实测 `git clone <url> <newdir>` cwd=不存在目录 → ENOENT，
+    // 整段 clone 恒失败，前端「克隆完成」永远走不到）。先 mkdirSync 兜底（git 对
+    // 已存在的空目录克隆同样成功，实测 .git 正常落盘）；目标路径被同名文件占用 /
+    // 目录不可写时 mkdirSync 抛 EEXIST/EACCES —— 兜住转 bad-request，不逃出契约。
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch (e) {
+      return { ok: false, error: 'bad-request', message: `clone 目标目录不可用：${String(e?.message ?? e)}` }
+    }
+    const g = await runGit(['clone', url, dir], { cwd: dir })
+    recordGitOp({ root: dir, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git clone 执行失败' }
     // clone 成功后自动登记新仓库进工作区列表
     const added = await addWorkspace({ root: dir })
