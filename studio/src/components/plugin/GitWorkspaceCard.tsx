@@ -626,7 +626,13 @@ export const GitWorkspaceCard: React.FC = () => {
             ))}
           </select>
           <span className="text-[10px] text-zinc-400">
-            {commitsLoading || !commits ? '加载中…' : commitsError ? '加载失败' : `${commits.length} 条留痕`}
+            {commitsLoading || !commits
+              ? '加载中…'
+              : commitsError
+                ? '加载失败'
+                : traceTagOnly
+                  ? `${commits.filter((c) => c.tag).length} / ${commits.length} 条留痕（仅 tag）`
+                  : `${commits.length} 条留痕`}
           </span>
           {/* 仅 tag 检查点：只看打上 tag 的留痕（里程碑节点）。
               计数随开关实时变化；无 tag 留痕时开关灰置并给原因。 */}
