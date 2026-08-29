@@ -101,28 +101,47 @@ export const useGitStore = create<GitStore>((set, get) => ({
   },
 
   setActive: async (id) => {
-    const list = await ipc.setActiveGitWorkspace(id);
-    const active = list.workspaces.find((w) => w.id === id) ?? list.workspaces[0] ?? null;
-    set({ workspaces: list.workspaces, activeWorkspace: active });
-    // 切到新 root 后立即按该 root 重拉 status（其他只读采集后续按需刷新）
-    await get().refreshStatus();
+    // 复用 operating 锁：切换活动工作区也是写操作（PUT active），期间行内按钮
+    // 「设为当前」/「移除」/添加表单提交键一并禁用 + 显示「执行中…」，防连点重复切换。
+    set({ operating: true });
+    try {
+      const list = await ipc.setActiveGitWorkspace(id);
+      const active = list.workspaces.find((w) => w.id === id) ?? list.workspaces[0] ?? null;
+      set({ workspaces: list.workspaces, activeWorkspace: active });
+      // 切到新 root 后立即按该 root 重拉 status（其他只读采集后续按需刷新）
+      await get().refreshStatus();
+    } finally {
+      set({ operating: false });
+    }
   },
 
   addWorkspace: async (root) => {
-    const list = await ipc.addGitWorkspace(root);
+    // 本地路径登记同样占 operating 锁：提交键借此显示「执行中…」并禁用（与 clone/init 对齐），
     // 失败由 addGitWorkspace 抛错，调用方 UI 推 error toast；这里只做成功后同步列表。
-    set({ workspaces: list.workspaces });
+    set({ operating: true });
+    try {
+      const list = await ipc.addGitWorkspace(root);
+      set({ workspaces: list.workspaces });
+    } finally {
+      set({ operating: false });
+    }
   },
 
   removeWorkspace: async (id) => {
-    const list = await ipc.removeGitWorkspace(id);
-    const active =
-      list.workspaces.find((w) => w.id === list.activeId) ??
-      list.workspaces[0] ??
-      null;
-    set({ workspaces: list.workspaces, activeWorkspace: active });
-    // 若删的是活动工作区，active 已回落 → 让 status 跟着新 root 走
-    await get().refreshStatus();
+    // 移除登记同样占 operating 锁：行内「移除」按钮在请求期间禁用，防连点重复移除。
+    set({ operating: true });
+    try {
+      const list = await ipc.removeGitWorkspace(id);
+      const active =
+        list.workspaces.find((w) => w.id === list.activeId) ??
+        list.workspaces[0] ??
+        null;
+      set({ workspaces: list.workspaces, activeWorkspace: active });
+      // 若删的是活动工作区，active 已回落 → 让 status 跟着新 root 走
+      await get().refreshStatus();
+    } finally {
+      set({ operating: false });
+    }
   },
 
   gitOperate: async (opts) => {
