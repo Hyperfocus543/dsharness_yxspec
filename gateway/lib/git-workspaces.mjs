@@ -522,6 +522,15 @@ export function cloneWithProgress(args, { cwd, key }) {
   return new Promise((resolve_) => {
     let stdout = ''
     let stderr = ''
+    // 终态只落一次：spawn 失败时 Node 会**双 fire**（实测 ENOENT 先 error 后 close），
+    // 后到者必须被忽略——否则 close 会用通用「git clone 退出码 -4058」覆盖 error 的
+    // 具体原因（git-not-installed），前端克隆失败进度条展示误导性文案，promise 也重复 settle。
+    let settled = false
+    const settle = (result) => {
+      if (settled) return
+      settled = true
+      resolve_(result)
+    }
     const prog = {
       dir: key,
       status: 'running',
@@ -561,17 +570,20 @@ export function cloneWithProgress(args, { cwd, key }) {
       const msg = err?.code === 'ENOENT' ? 'git-not-installed' : String(err?.message ?? err)
       touch({ status: 'failed', error: msg })
       cloneSpawns.delete(key)
-      resolve_({ ok: false, stdout: '', stderr: '', error: msg, code: err?.code ?? null })
+      settle({ ok: false, stdout: '', stderr: '', error: msg, code: err?.code ?? null })
     })
     child.on('close', (code) => {
       cloneSpawns.delete(key)
+      // 双 fire 场景（error 已 settle）：close 只是收尾信号，不再 touch 进度——
+      // 否则会把 error 分支写下的具体原因（git-not-installed）覆盖成通用退出码文案。
+      if (settled) return
       if (code === 0) {
         touch({ status: 'done', stage: 'done', pct: 100 })
-        resolve_({ ok: true, stdout: stdout ?? '', stderr: stderr ?? '' })
+        settle({ ok: true, stdout: stdout ?? '', stderr: stderr ?? '' })
       } else {
         const msg = (stderr ?? '').trim() || `git clone 退出码 ${code}`
         touch({ status: 'failed', error: msg })
-        resolve_({ ok: false, stdout: stdout ?? '', stderr: stderr ?? '', error: msg })
+        settle({ ok: false, stdout: stdout ?? '', stderr: stderr ?? '', error: msg })
       }
     })
   })
