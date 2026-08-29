@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # =============================================================================
-# night/runner-night2.sh — 夜间自主任务（无限轮，跑到 END_AT 为止）
+# night/runner-night2.sh — 夜间自主任务（无限轮，stop-flag 为唯一停止通道）
 # 复用 runner.sh 的 gates/guard/commit/patch 保护逻辑，改为：
-#   1. 无限轮直到到点（END_AT=13:00 明天中午），每轮任务类型轮换
+#   1. 无限轮直到 stop-flag（停止通道：bash night/launch-night2.sh stop），每轮任务类型轮换
 #   2. 穿插「新能力验证」轮：git 插件 / self-iteration / subagent 真实验证
 #   3. 每轮固定：子代理改代码 → gates 全绿 → commit+push → 记录
+#   4. 默认一直跑（END_AT 留空）；也可显式传 END_AT=HH:MM 限时跑（保留灵活性）
 # 防回滚：night-baseline-20260828-2049 tag + 每轮起始 commit + 失败 reset --hard
 # =============================================================================
 set -u
@@ -15,11 +16,13 @@ CLAUDE_BIN="/c/Users/Administrator/AppData/Roaming/npm/claude"
 TIMEOUT_BIN="/usr/bin/timeout"
 [ -x "$TIMEOUT_BIN" ] || TIMEOUT_BIN=""
 MAX_CONSECUTIVE_FAIL=3          # 连续失败停轮（不是停整晚，换下一任务类型）
-END_AT="${END_AT:-13:00}"        # 到点自动停（24h HH:MM）
+END_AT="${END_AT:-}"            # 默认空 = 一直跑（END_EPOCH=0 → check_stop 只剩 stop-flag）；显式传 HH:MM 才限时跑
 START=$(date +%s)
 STOP_FLAG="$NIGHT/stop-flag"
 # END_AT=HH:MM（24h）→ 绝对 epoch。若目标时刻已过（如 20:53 启动、END_AT=13:00），
 # 视为明天该时刻。只在启动时算一次，避免跨午夜后重新解析成"今天"而提前/推迟停。
+# END_AT 为空时 `date -d ""` 解析失败 → END_EPOCH 保持 0 → check_stop 的到点判断
+# （`[ "$END_EPOCH" -gt 0 ]`）短路，只剩 stop-flag 一个停止通道——这正是"无限轮"的设计旁路。
 END_EPOCH=0
 if [ -n "$END_AT" ] && date -d "$END_AT" +%s >/dev/null 2>&1; then
   END_EPOCH=$(date -d "$END_AT" +%s)
@@ -28,14 +31,18 @@ if [ -n "$END_AT" ] && date -d "$END_AT" +%s >/dev/null 2>&1; then
   fi
   echo "END_EPOCH=$END_EPOCH ($(date -d @$END_EPOCH '+%F %H:%M:%S'))"
 fi
-SUMMARY="$NIGHT/SUMMARY-night2.md"
 LOG_DIR="$NIGHT/log-night2"
 mkdir -p "$LOG_DIR"
-: > "$SUMMARY"
-echo "# 夜间自主任务总结（night2）" > "$SUMMARY"
-echo "" >> "$SUMMARY"
-echo "启动: $(date '+%Y-%m-%d %H:%M:%S')  到点: $END_AT" >> "$SUMMARY"
-echo "基线: $(cd "$ROOT" && git rev-parse --short HEAD)（night-baseline-20260828-2049）" >> "$SUMMARY"
+# 按日归档：SUMMARY 每天一个文件（文件名带日期），跨午夜自动切日，与 .out/.patch 同步
+daily_summary() { echo "$NIGHT/SUMMARY-night2-$(date +%Y%m%d).md"; }
+SUMMARY="$(daily_summary)"
+# 当日首次启动：初始化头；看门狗同日重启只追加正文、不重写头（追加语义）
+if [ ! -s "$SUMMARY" ]; then
+  echo "# 夜间自主任务总结（night2）" > "$SUMMARY"
+  echo "" >> "$SUMMARY"
+  echo "启动: $(date '+%Y-%m-%d %H:%M:%S')  到点: ${END_AT:-无（无限轮，靠 stop-flag 停止）}" >> "$SUMMARY"
+  echo "基线: $(cd "$ROOT" && git rev-parse --short HEAD)（night-baseline-20260828-2049）" >> "$SUMMARY"
+fi
 
 now() { date +%s; }
 elapsed() { echo $(( $(now) - START )); }
@@ -52,13 +59,16 @@ check_stop() {
 log() {
   local msg="[$(date '+%H:%M:%S')] $*"
   echo "$msg"
-  echo "$msg" >> "$SUMMARY"
+  echo "$msg" >> "$(daily_summary)"
 }
 
 # 子代理执行（无人值守全自动，带超时保护防卡死）
 run_agent() {
-  local TASK="$1" ROUND="$2" PROMPT="$3" OUT="$LOG_DIR/$TASK-r$ROUND.out"
+  # .out 按日归档：log-night2/YYYYMMDD/ 子目录，跨午夜自动切日（与 SUMMARY/.patch 同步）
+  local TASK="$1" ROUND="$2" PROMPT="$3" \
+        DAY_DIR="$LOG_DIR/$(date +%Y%m%d)" OUT="$DAY_DIR/$TASK-r$ROUND.out"
   local TIMEOUT_S="${4:-1800}"   # 默认 30 分钟；verify 传短超时
+  mkdir -p "$DAY_DIR"
   log "  → 子代理 $TASK 第${ROUND}轮 (${OUT##*/}) 超时=${TIMEOUT_S}s"
   if [ -n "$TIMEOUT_BIN" ]; then
     (cd "$ROOT" && "$TIMEOUT_BIN" "$TIMEOUT_S" "$CLAUDE_BIN" -p "$PROMPT" \
@@ -82,7 +92,8 @@ run_agent() {
 # 提交本轮改动（gates 全绿后）
 commit_and_push() {
   local TASK="$1" ROUND="$2"
-  local REPORT="$LOG_DIR/$TASK-r$ROUND.out"
+  # 与 run_agent 的按日路径保持一致（跨午夜由相同 date 解析兜底，误差仅限同轮内，可忽略）
+  local REPORT="$LOG_DIR/$(date +%Y%m%d)/$TASK-r$ROUND.out"
   local FIRST=$(grep -oE "改(了|动).{0,40}" "$REPORT" 2>/dev/null | head -1)
   local DESC="night2-${TASK}第${ROUND}轮: ${FIRST:-自动修复}"
   DESC=$(echo "$DESC" | head -c 60)
@@ -99,8 +110,8 @@ commit_and_push() {
     (cd "$ROOT" && git push origin main >/dev/null 2>&1)
     if [ $? -eq 0 ]; then
       log "    ✅ push 成功: $(cd "$ROOT" && git log -1 --format='%s' | head -c 50)"
-      echo "- [$TASK 第${ROUND}轮] $(cd "$ROOT" && git log -1 --format='%s' | head -c 50)" >> "$SUMMARY"
-      echo "  - commit: $(cd "$ROOT" && git rev-parse --short HEAD) @ $(date '+%H:%M')" >> "$SUMMARY"
+      echo "- [$TASK 第${ROUND}轮] $(cd "$ROOT" && git log -1 --format='%s' | head -c 50)" >> "$(daily_summary)"
+      echo "  - commit: $(cd "$ROOT" && git rev-parse --short HEAD) @ $(date '+%H:%M')" >> "$(daily_summary)"
       return 0
     else
       log "    ❌ push 失败，改动在本地 HEAD 未丢，reset 回块起始"
@@ -114,15 +125,17 @@ commit_and_push() {
   if [ $CR -eq 0 ]; then
     (cd "$ROOT" && git push origin main >/dev/null 2>&1)
     log "    ✅ commit+push: $DESC"
-    echo "- [$TASK 第${ROUND}轮] $DESC" >> "$SUMMARY"
-    echo "  - commit: $(cd "$ROOT" && git rev-parse --short HEAD) @ $(date '+%H:%M')" >> "$SUMMARY"
+    echo "- [$TASK 第${ROUND}轮] $DESC" >> "$(daily_summary)"
+    echo "  - commit: $(cd "$ROOT" && git rev-parse --short HEAD) @ $(date '+%H:%M')" >> "$(daily_summary)"
     return 0
   else
-    local PATCH="$LOG_DIR/$TASK-r$ROUND-$(date +%H%M%S).patch"
+    # patch 按日归档：log-night2/YYYYMMDD/ 子目录
+    local PATCH="$LOG_DIR/$(date +%Y%m%d)/$TASK-r$ROUND-$(date +%H%M%S).patch"
+    mkdir -p "$(dirname "$PATCH")"
     (cd "$ROOT" && git diff HEAD > "$PATCH" 2>/dev/null)
     if [ -s "$PATCH" ]; then
       log "    ❌ commit 失败，改动已存 ${PATCH##*/}，reset 回块起始"
-      echo "  - 改动存: ${PATCH##*/}（次日 git apply 接回）" >> "$SUMMARY"
+      echo "  - 改动存: ${PATCH##*/}（次日 git apply 接回）" >> "$(daily_summary)"
     else
       log "    ❌ commit 失败（无改动可存），reset 回块起始"
       rm -f "$PATCH"
@@ -175,16 +188,16 @@ VERIFY_PROMPT='你是 yxspec-studio 的夜间回归验证代理，工作目录 D
 4. plugins.mjs 装配：getPluginMap() 应含 git-workspace/yxspec-self-iteration（node -e 快速 import 断言）
 约束：只改 gateway/ 下文件，绝不碰 .dsh/vendor、baselines、harness 主仓。验证完清理临时文件。报告：每项验证结果（通过/失败+修复了什么）。'
 
-# ---------- 主循环：无限轮直到到点 ----------
+# ---------- 主循环：无限轮（stop-flag 为唯一停止通道，END_AT 显式传时才多一个到点通道） ----------
 # 任务类型轮换：fix → verify → pm → feat → fix → ...
 TASKS="fix verify pm feat"
 ROUND_NUM=0
 while true; do
-  check_stop && { log "到点/stop-flag，终止全循环"; break; }
+  check_stop && { log "stop-flag/到点，终止全循环"; break; }
   for TASK in $TASKS; do
     ROUND_NUM=$((ROUND_NUM + 1))
     ROUND=$ROUND_NUM
-    check_stop && { log "到点/stop-flag，终止全循环"; break 2; }
+    check_stop && { log "stop-flag/到点，终止全循环"; break 2; }
     case $TASK in
       fix)   PROMPT="$FIX_PROMPT" ;;
       verify) PROMPT="$VERIFY_PROMPT" ;;
@@ -197,7 +210,7 @@ while true; do
     ATTEMPTS=0
     while [ $ATTEMPTS -lt 3 ]; do
       ATTEMPTS=$((ATTEMPTS + 1))
-      check_stop && { log "到点，终止"; break 2; }
+      check_stop && { log "stop-flag/到点，终止"; break 2; }
       log "--- $TASK 第${ROUND}轮 (attempt $ATTEMPTS) ---"
       # verify 轮 10 分钟短超时（静态回归快），其余 30 分钟
       if [ "$TASK" = "verify" ]; then
@@ -228,12 +241,12 @@ while true; do
         log "  ✅ $TASK 轮无改动（验证通过或无需修复），跳过 commit"
       fi
       CONSECUTIVE_FAIL=0
-      echo "  (checkpoint @ $(date '+%H:%M') elapsed=$(elapsed)s)" >> "$SUMMARY"
+      echo "  (checkpoint @ $(date '+%H:%M') elapsed=$(elapsed)s)" >> "$(daily_summary)"
       break
     done
   done
 done
 
-echo "---" >> "$SUMMARY"
-echo "结束: $(date '+%Y-%m-%d %H:%M:%S') 总耗时 $(elapsed)s" >> "$SUMMARY"
-log "全部完成，总结见 night/SUMMARY-night2.md"
+echo "---" >> "$(daily_summary)"
+echo "结束: $(date '+%Y-%m-%d %H:%M:%S') 总耗时 $(elapsed)s" >> "$(daily_summary)"
+log "全部完成，总结见 night/SUMMARY-night2-$(date +%Y%m%d).md"
