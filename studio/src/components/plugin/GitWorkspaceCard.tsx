@@ -562,6 +562,9 @@ export const GitWorkspaceCard: React.FC = () => {
   // git 不可用（amber 警告：网关在线但工作区非 git 仓库 / 未装 git）。
   // 旧实现把 !gitOk 渲染成「未连接」灰标，与下方红色 error 条语义冲突（网关明明连着）。
   const gitOk = status?.gitAvailable === true;
+  // 游离 HEAD（git checkout <commit>/<tag> 后 detached；网关 status.detached 已解析）：
+  // 分支框收起态给「游离 HEAD」占位（不再是裸「—」），分支区块警示徽标 amber 强调。
+  const detached = status?.detached === true;
 
   // ---- 工作区管理 UI 状态 ----
   // 添加表单（区块 B）：默认收起，点「+ 添加」展开；form 内 tab 决定本地/远程
@@ -1255,9 +1258,11 @@ export const GitWorkspaceCard: React.FC = () => {
                     <>
                       {/* 收起态常显当前分支：select value=branchValue 恒命中该 option 文本
                           （含 checkout 后 branchValue=真实分支名、初始 '' 两态），
-                          避免 value 无匹配 option 时下拉显示空白；点「切换分支」打开面板。 */}
+                          避免 value 无匹配 option 时下拉显示空白；点「切换分支」打开面板。
+                          游离 HEAD：status.branch 为 null → 占位文案给「游离 HEAD」（不再是裸
+                          「—」），配合分支区块警示徽标一眼认出游离态；下拉仍可打开选分支脱离。 */}
                       <option value={branchValue} disabled hidden>
-                        {status.branch || '切换分支'}
+                        {status.branch || (detached ? '游离 HEAD' : '切换分支')}
                       </option>
                       <option value="__open__">切换分支</option>
                     </>
@@ -1312,18 +1317,34 @@ export const GitWorkspaceCard: React.FC = () => {
             <Icon name={I.branch} size={13} />
             分支
           </div>
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
-              gitOk ? 'bg-sage-100 text-sage-700' : 'bg-amber-100 text-amber-800'
-            }`}
-            title={gitOk ? 'git 可用（网关已连）' : '网关在线但 git 不可用：工作区非 git 仓库或未安装 git（详见下方错误条）'}
-          >
-            <span className={`inline-block w-1.5 h-1.5 rounded-full ${gitOk ? 'bg-sage-500' : 'bg-amber-500'}`} aria-hidden />
-            {gitOk ? '已连接' : 'git 不可用'}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {/* 游离 HEAD 警示徽标：git checkout <commit>/<tag> 后 detached（status.branch=null）。
+                amber 强调 + tooltip 解释 —— 游离态提交会「悬空」（不被任何分支引用），
+                下一步建议从分支下拉选择目标分支 checkout 脱离游离态。 */}
+            {detached && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-800 border border-amber-300"
+                title="HEAD 处于游离（detached）状态：当前检出的 commit/tag 不属于任何分支，新提交会悬空（不被分支引用）。请从分支下拉选择目标分支 checkout 以回到分支上。"
+              >
+                <Icon name={I.warn} size={11} weight="fill" />
+                游离 HEAD
+              </span>
+            )}
+            <span
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                gitOk ? 'bg-sage-100 text-sage-700' : 'bg-amber-100 text-amber-800'
+              }`}
+              title={gitOk ? 'git 可用（网关已连）' : '网关在线但 git 不可用：工作区非 git 仓库或未安装 git（详见下方错误条）'}
+            >
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${gitOk ? 'bg-sage-500' : 'bg-amber-500'}`} aria-hidden />
+              {gitOk ? '已连接' : 'git 不可用'}
+            </span>
+          </div>
         </div>
-        <div className="font-mono text-zinc-800 text-sm truncate" title={status.branch ?? ''}>
-          {status.branch || '—'}
+        {/* 分支名：游离 HEAD 时 status.branch=null → 显示「游离 HEAD」（mono 琥珀），
+            而非误导性的裸「—」（裸「—」会被误读成无分支/未知，游离态是明确已知的状态）。 */}
+        <div className={`font-mono text-sm truncate ${detached ? 'text-amber-700' : 'text-zinc-800'}`} title={detached ? 'HEAD 游离（detached）：不在任何分支上' : (status.branch ?? '')}>
+          {detached ? '游离 HEAD' : (status.branch || '—')}
         </div>
         {status.error && (
           <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">

@@ -1271,6 +1271,9 @@ export interface GitRecentCommit {
 export interface GitStatus {
   gitAvailable: boolean;
   branch: string | null;
+  /** 游离 HEAD（git checkout <commit>/<tag> 后 detached）：网关已解析（branch=null + detached=true），
+   *  前端据此展示「游离 HEAD」警示徽标，避免把游离态显示成正常分支名「—」 */
+  detached?: boolean;
   head: string | null;
   dirtyFiles: GitDirtyFile[];
   ahead: number;
