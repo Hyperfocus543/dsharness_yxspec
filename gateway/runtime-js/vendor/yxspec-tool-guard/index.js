@@ -153,7 +153,10 @@ const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
  *    · 子命令定位与 gitArgsAfter 同源：不再用 `\bsub\b` 全文搜索定位子命令——
  *      `git -C D:\Work\tag-scripts tag` 这类「-C 路径里含 tag/remote/branch 字样」
  *      的命令，旧写法会先匹配到路径里的子串，把路径当参数串 → 只读列出被误伤。
- *  前 8 个 token 内找不到子命令（纯 flag/全局选项）→ null。 */
+ *  子命令名扫描不做 token 数上限（旧 8-token 封顶）：git 支持任意多个全局选项
+ *  （`-c key=val` 高频重复，如 `-c core.quotepath=false -c color.ui=false ...`），
+ *  4 组 `-c` 就能把子命令挤出第 8 个 token——破坏性 push/reset/clean 整段漏过守卫
+ *  （实测漏网）。解析在命中首个非 flag token 即返回，多 token 只多线性遍历，无性能风险。 */
 function gitSubAndArgs(segment) {
   const m =
     // 引号包裹完整路径（`"C:\Program Files\Git\bin\git.exe" reset`）——引号内必须含
@@ -204,7 +207,7 @@ function gitSubAndArgs(segment) {
   const re = /"[^"\r\n]*"|'[^'\r\n]*'|\S+=(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s][^\s]*)|\S+/g
   const tokens = []
   let tok
-  while ((tok = re.exec(after)) && tokens.length < 8) {
+  while ((tok = re.exec(after)) !== null) {
     tokens.push({ text: tok[0], index: tok.index })
   }
   for (let i = 0; i < tokens.length; i += 1) {

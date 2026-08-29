@@ -51,6 +51,10 @@ for (const cmd of [
   'git --work-tree="D:/my work" log -1',
   'git --git-dir="D:/my repo/.git" status',
   'git -C="D:/my work dir" status',
+  // 2026-08-29 追加：多个 git 全局选项（-c/-C）下只读子命令仍须放行（扫描无上限不误伤）
+  'git -c a=1 -c b=2 -c c=3 -c d=4 status',
+  'git -c a=1 -c b=2 -c c=3 -c d=4 -c e=5 -c f=6 log -1',
+  'git -C D:/Work/a -C D:/Work/b -C D:/Work/c -C D:/Work/d branch -a',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -76,6 +80,13 @@ for (const cmd of [
   // 2026-08-29 追加：`=` 连写带值 flag 的引号值（含空格）整体当 token 后，
   // 破坏性子命令须仍被检出（`--work-tree="D:/my work" push` → push 拒绝）
   'git --work-tree="D:/my work" push origin main',
+  // 2026-08-29 追加：多个 git 全局选项（-c/-C）把子命令挤出 token 上限（旧 8-token
+  // 封顶：4 组 -c 就能让 push 落在第 9 个 token，扫描提前终止返回 null → 整段漏过守卫）
+  // —— 子命令名扫描不做 token 上限，破坏性 push/reset 必须仍被检出
+  'git -c core.quotepath=false -c color.ui=false -c safe.directory=x -c http.sslVerify=false push origin main',
+  'git -c a=1 -c b=2 -c c=3 -c d=4 push',
+  'git -c a=1 -c b=2 -c c=3 -c d=4 -c e=5 -c f=6 reset --hard',
+  'git -C D:/Work/repo -C D:/Work/other -C D:/Work/three -C D:/Work/four clean -fd',
 ]) {
   assert(`拒绝: ${cmd}`, gitGuardDeny(cmd) !== null)
 }
