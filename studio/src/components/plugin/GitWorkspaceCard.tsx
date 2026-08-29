@@ -681,12 +681,17 @@ export const GitWorkspaceCard: React.FC = () => {
   // 否则在 A 展开过的分支列表会在切到 B 后原样展示，选中 checkout 会串根执行到 B。
   // push 二次确认面板同理：在 A 打开过会原地重渲染成 B 的 root，回车确认会静默
   // 推送到 B——切 root 即一并收起，新仓库重新走确认流程。
+  // 回滚确认面板同理：留痕列表随 activeRoot 重拉后 commit 已是新 root 的对应值，
+  // 若面板仍锚着旧 root 的 #seq/commit，切走后回车会把一条「当前列表无锚点」的
+  // 回滚写进审计（无行标「待确认」、commit 与现留痕不匹配）——切 root 一并收起。
   React.useEffect(() => {
     setBranches([]);
     setBranchPanelOpen(false);
     setBranchValue('');
     setBranchError(null);
     setPushConfirmOpen(false);
+    setConfirmTarget(null);
+    setRollbackReason('');
   }, [activeWorkspace?.id]);
 
   // 工作区校验（前端只做空串拦截，路径存在性由网关校验）
