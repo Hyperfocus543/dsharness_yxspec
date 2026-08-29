@@ -356,6 +356,29 @@ export function parseNumstat(out) {
 }
 
 /**
+ * fetch 落后提交摘要（纯函数，供 fetch 结果展示）。
+ * 入参 = fetch 前后各一次 `git rev-list --count HEAD..@{u}` 的 stdout（trim 后为整数串）。
+ * 返回 { before, after, delta }：before/after 为该时刻落后上游的提交数，
+ * delta = after - before（正 = 这次 fetch 拉到了 N 个新提交；0 = 无更新）。
+ * 任一边缺上游（如首次 push 前无 @{u}，rev-list 输出空）→ null（前端不展示）。
+ * @param {string|null|undefined} beforeOut fetch 前 rev-list stdout
+ * @param {string|null|undefined} afterOut fetch 后 rev-list stdout
+ * @returns {{before:number, after:number, delta:number} | null}
+ */
+export function fetchBehindSummary(beforeOut, afterOut) {
+  const parse = (s) => {
+    if (typeof s !== 'string') return null
+    const t = s.trim()
+    if (!/^\d+$/.test(t)) return null
+    return Number(t)
+  }
+  const before = parse(beforeOut)
+  const after = parse(afterOut)
+  if (before == null || after == null) return null
+  return { before, after, delta: after - before }
+}
+
+/**
  * git 写操作白名单（受 URL 白名单 + 已登记工作区约束）。
  * @param {{root: string, action: string, args?: object}} param0
  */
@@ -468,10 +491,16 @@ export async function gitOperate({ root, action, args = {} } = {}) {
   }
   // 5) 其余写操作（fetch / pull / push）
   if (action === 'fetch') {
+    // fetch 结果摘要：操作前后各记 HEAD..@{u} 的落后提交数 —— fetch 拉回了多少
+    // 上游提交，前端 toast 直接可见（「落后 3 → 0，拉到 3 个新提交」）。
+    // 缺上游（首次 push 前无 @{u}，rev-list 输出空）→ behind:null，前端不展示。
+    // rev-list 失败不阻断 fetch 本身，仅摘要降级为 null。
+    const before = await runGit(['rev-list', '--count', 'HEAD..@{u}'], { cwd: realRoot })
     const g = await runGit(['fetch', '--all', '--prune'], { cwd: realRoot })
     recordGitOp({ root: realRoot, action: 'fetch', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git fetch 执行失败' }
-    return { ok: true, stdout: g.stdout }
+    const after = await runGit(['rev-list', '--count', 'HEAD..@{u}'], { cwd: realRoot })
+    return { ok: true, stdout: g.stdout, behind: fetchBehindSummary(before.stdout, after.stdout) }
   }
   if (action === 'pull') {
     // pull 结果统计：操作前记 HEAD 短哈希，成功后 diff 旧/新 HEAD 得文件改动统计

@@ -1471,6 +1471,16 @@ export interface GitOpStats {
   removed: number;
 }
 
+/** fetch 落后提交摘要（操作前后各记 HEAD..@{u} 的落后数；无上游/失败 → null） */
+export interface GitFetchBehind {
+  /** fetch 前落后上游的提交数 */
+  before: number;
+  /** fetch 后落后上游的提交数 */
+  after: number;
+  /** after - before：正 = 这次 fetch 拉到了 N 个新提交；0 = 无更新 */
+  delta: number;
+}
+
 /** POST /api/git/operate 响应 */
 export interface GitOperateResult {
   ok: boolean;
@@ -1481,6 +1491,8 @@ export interface GitOperateResult {
   head?: string | null;
   /** pull 的提交文件改动统计（无新提交 / git 不可用 / 失败 → null） */
   stats?: GitOpStats | null;
+  /** fetch 的落后提交摘要（无上游 / git 不可用 / 失败 → null） */
+  behind?: GitFetchBehind | null;
   error?: string;
   message?: string;
 }

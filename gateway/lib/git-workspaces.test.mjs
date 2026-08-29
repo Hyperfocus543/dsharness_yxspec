@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, setActiveWorkspace } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -197,6 +197,29 @@ test('parseNumstat：含空格路径（TAB 分隔不受影响）', () => {
 test('parseNumstat：非字符串 → null', () => {
   assert.equal(parseNumstat(null), null)
   assert.equal(parseNumstat(undefined), null)
+})
+
+test('fetchBehindSummary：fetch 前后落后数 + 增量', () => {
+  // 拉到 3 个新提交：落后 3 → 0
+  assert.deepEqual(fetchBehindSummary('3\n', '0\n'), { before: 3, after: 0, delta: -3 })
+  // 落后 2 → 1（拉到 1 个）
+  assert.deepEqual(fetchBehindSummary('2', '1'), { before: 2, after: 1, delta: -1 })
+  // 无更新：落后数不变（delta 0）
+  assert.deepEqual(fetchBehindSummary('0', '0'), { before: 0, after: 0, delta: 0 })
+  // 远端新增了提交但本地还没 merge：落后反而变多（fetch 拉回上游提交）
+  assert.deepEqual(fetchBehindSummary('1', '4'), { before: 1, after: 4, delta: 3 })
+})
+
+test('fetchBehindSummary：任一边缺上游 / 非数字 → null（前端不展示）', () => {
+  // 首次 push 前无 @{u} → rev-list 输出空 → null
+  assert.equal(fetchBehindSummary('', '0'), null)
+  assert.equal(fetchBehindSummary(null, '0'), null)
+  assert.equal(fetchBehindSummary('0', undefined), null)
+  assert.equal(fetchBehindSummary('0', ''), null)
+  // rev-list 失败（非数字输出 / 空）→ null
+  assert.equal(fetchBehindSummary('error', '0'), null)
+  assert.equal(fetchBehindSummary(null, null), null)
+  assert.equal(fetchBehindSummary(undefined, undefined), null)
 })
 
 test('canRemoveWorkspace：default/auto 拒绝、不存在 not-found、手动放行', () => {

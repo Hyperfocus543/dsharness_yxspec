@@ -541,13 +541,20 @@ export const GitWorkspaceCard: React.FC = () => {
     setBusyAction(action);
     try {
       const res = await useGitStore.getState().gitOperate({ root: activeWorkspace.root, action });
-      // pull 成功后若网关返回了提交文件统计（旧→新 HEAD diff），拼进成功 toast：
-      // 「已同步远端更新（3 文件 +10/-2）」——无新提交（stats 缺省 null）时维持原文案。
+      // fetch 成功后若网关返回了落后提交摘要（before/after/delta），拼进成功 toast：
+      // 「已拉取远端更新（落后 3 → 0，拉到 3 个新提交）」——无上游/无更新时维持原文案。
+      const behind = res?.behind;
       const stats = res?.stats;
       pushToast(
         'success',
         action === 'fetch'
-          ? '已拉取远端更新'
+          ? behind
+            ? behind.delta > 0
+              ? `已拉取远端更新（落后 ${behind.before} → ${behind.after}，拉到 ${behind.delta} 个新提交）`
+              : behind.before > 0
+                ? `已拉取远端更新（落后 ${behind.before} → ${behind.after}，无新提交）`
+                : '已拉取远端更新（已是最新）'
+            : '已拉取远端更新'
           : action === 'pull'
             ? stats
               ? `已同步远端更新（${stats.files} 文件 +${stats.added}/-${stats.removed}）`
