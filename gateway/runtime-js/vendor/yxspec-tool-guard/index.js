@@ -194,7 +194,14 @@ function gitSubAndArgs(segment) {
     .replace(/[)\]}]$/, '')
     .replace(/`$/, '')
     .trim()
-  const re = /"[^"\r\n]*"|'[^'\r\n]*'|\S+/g
+  // 引号感知 token 化：裸引号串（`"a b"`）与 `=` 连写的带值 flag 的引号值
+  // （`--work-tree="D:/my work"` / `-C='my repo'`）都整体当一个 token。
+  // 此前只认裸引号串：`--work-tree="D:/my work" status` 会在内部空格处拆成
+  // `--work-tree="D:/my` + `work"`，`work"` 被当子命令名（∉ 只读集）→ 只读
+  // status 被默认拒绝误伤。`\S+=(?:…)` 分支须放在裸 `\S+` 之前（值含空格时
+  // 靠它吞掉整段），且组内「引号值」分支须先于「裸值」分支——否则 `[^\s]` 会
+  // 抢先吃掉引号值的非空格前缀（`--work-tree="D:/my work"` 退化成 `--work-tree="D:/my`）。
+  const re = /"[^"\r\n]*"|'[^'\r\n]*'|\S+=(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s][^\s]*)|\S+/g
   const tokens = []
   let tok
   while ((tok = re.exec(after)) && tokens.length < 8) {

@@ -45,6 +45,12 @@ for (const cmd of [
   'git remote -v',
   'git remote show origin',
   'git status && git log -1',
+  // 2026-08-29 追加：`=` 连写带值 flag 的引号值（含空格）整体当 token——此前
+  // `--work-tree="D:/my work" status` 在内部空格拆成 `work"` 当子命令名 → 只读误伤
+  'git --work-tree="D:/my work" status',
+  'git --work-tree="D:/my work" log -1',
+  'git --git-dir="D:/my repo/.git" status',
+  'git -C="D:/my work dir" status',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -67,6 +73,9 @@ for (const cmd of [
   'git rebase main',
   'git stash drop',
   'git init',
+  // 2026-08-29 追加：`=` 连写带值 flag 的引号值（含空格）整体当 token 后，
+  // 破坏性子命令须仍被检出（`--work-tree="D:/my work" push` → push 拒绝）
+  'git --work-tree="D:/my work" push origin main',
 ]) {
   assert(`拒绝: ${cmd}`, gitGuardDeny(cmd) !== null)
 }
