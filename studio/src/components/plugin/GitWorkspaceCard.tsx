@@ -394,6 +394,10 @@ export const GitWorkspaceCard: React.FC = () => {
   // 单靠它区分不了三个按钮哪个在跑；busyAction 记下本次动作，
   // 只有它自己显示「执行中…」，其余按钮保持原 label 但同样禁用。
   const [busyAction, setBusyAction] = React.useState<'fetch' | 'pull' | 'push' | null>(null);
+  // 移除工作区的行内二次确认：移除是登记表变更（若删的是活动工作区会翻转 active、
+  // 触发 status 按新 root 重拉），点「移除」只进入确认态，点「确认」才真正移除
+  // —— 与 push / 回滚留档的确认范式一致，防误点。
+  const [confirmRemoveId, setConfirmRemoveId] = React.useState<string | null>(null);
 
   // 活动工作区切换 → 分支缓存属于旧 root：清空并收起分支面板，
   // 否则在 A 展开过的分支列表会在切到 B 后原样展示，选中 checkout 会串根执行到 B。
@@ -505,6 +509,7 @@ export const GitWorkspaceCard: React.FC = () => {
     try {
       await useGitStore.getState().removeWorkspace(id);
       pushToast('success', '已移除工作区');
+      setConfirmRemoveId(null);
     } catch (e: any) {
       pushToast('error', `移除工作区失败：${e?.message || e}`);
     }
@@ -769,16 +774,44 @@ export const GitWorkspaceCard: React.FC = () => {
                     </button>
                   )}
                   {!isAuto && (
-                    <button
-                      type="button"
-                      onClick={() => doRemove(w.id)}
-                      disabled={operating}
-                      className="hidden sm:inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed group-hover:inline-flex"
-                      title="移除该工作区（不做删除，仅取消登记）"
-                    >
-                      <Icon name={I.trash} size={11} />
-                      移除
-                    </button>
+                    confirmRemoveId === w.id ? (
+                      <span
+                        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-50 border border-red-200 text-red-700 text-[11px]"
+                        title="再次点击「确认移除」才真正移除该工作区"
+                      >
+                        <Icon name={I.warn} size={11} />
+                        确认移除？
+                        <button
+                          type="button"
+                          onClick={() => doRemove(w.id)}
+                          disabled={operating}
+                          className="px-1.5 py-0.5 rounded bg-red-600 text-white hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="确认移除该工作区（不做删除，仅取消登记）"
+                        >
+                          确认
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmRemoveId(null)}
+                          disabled={operating}
+                          className="px-1.5 py-0.5 rounded bg-white border border-red-200 text-red-700 hover:bg-red-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="取消移除"
+                        >
+                          取消
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmRemoveId(w.id)}
+                        disabled={operating}
+                        className="hidden sm:inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed group-hover:inline-flex"
+                        title="移除该工作区（不做删除，仅取消登记）"
+                      >
+                        <Icon name={I.trash} size={11} />
+                        移除
+                      </button>
+                    )
                   )}
                   {isActive && isAuto && (
                     <span
