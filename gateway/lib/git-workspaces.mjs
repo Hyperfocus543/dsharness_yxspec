@@ -164,13 +164,17 @@ function appendAuditLine(entry) {
   }
 }
 
-/** 追加 git 写操作审计（照规范固定字段）。args 对象序列化前先截断 stdout。 */
-function recordGitOp({ root, action, args, ok, stdout, error }) {
+/** 追加 git 写操作审计（照规范固定字段）。args 对象序列化前先截断 stdout。
+ *  附带结果摘要（pull 的 stats / fetch 的 behind）：与操作返回体同源，写入审计
+ *  行后可回看「那次 pull 到底改了几个文件、fetch 拉到几个提交」，不再只有瞬时 toast。 */
+function recordGitOp({ root, action, args, ok, stdout, error, stats, behind }) {
   const rec = { at: Date.now(), root, action, args }
   if (ok === true) rec.ok = true
   else rec.ok = false
   if (stdout != null) rec.stdout = String(stdout).slice(0, AUDIT_STDOUT_MAX)
   if (error != null) rec.error = String(error)
+  if (stats != null) rec.stats = stats
+  if (behind != null) rec.behind = behind
   appendAuditLine(rec)
 }
 
@@ -427,7 +431,7 @@ function auditFilePath() {
 /**
  * 归一化单条 git 写操作审计留痕为前端展示行（纯函数，可单测）。
  * @param {object} e 审计 JSONL 原始行（recordGitOp 写入形态；类型不完整时宽容降级）
- * @returns {object} { at, action, actionLabel, ok, okLabel, root, args, stdout, error } 展示字段恒存在
+ * @returns {object} { at, action, actionLabel, ok, okLabel, root, args, stdout, error, stats, behind } 展示字段恒存在
  */
 export function normalizeAuditEntry(e) {
   const rawAt = e && (e.at ?? e.ts)
@@ -442,6 +446,15 @@ export function normalizeAuditEntry(e) {
       : {}
   const stdout = typeof e?.stdout === 'string' && e.stdout.trim() ? e.stdout.trim() : null
   const error = typeof e?.error === 'string' && e.error.trim() ? e.error.trim() : null
+  // 结果摘要透传：pull 的文件改动统计 / fetch 的落后提交摘要（老审计行无此字段 → 缺省 null）
+  const stats =
+    e?.stats && typeof e.stats === 'object' && !Array.isArray(e.stats)
+      ? { files: Number(e.stats.files) || 0, added: Number(e.stats.added) || 0, removed: Number(e.stats.removed) || 0 }
+      : null
+  const behind =
+    e?.behind && typeof e.behind === 'object' && !Array.isArray(e.behind)
+      ? { before: Number(e.behind.before) || 0, after: Number(e.behind.after) || 0, delta: Number(e.behind.delta) || 0 }
+      : null
   return {
     at: Number.isFinite(t) ? t : null,
     action,
@@ -452,6 +465,8 @@ export function normalizeAuditEntry(e) {
     args,
     stdout,
     error,
+    stats,
+    behind,
   }
 }
 
@@ -641,10 +656,15 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     // rev-list 失败不阻断 fetch 本身，仅摘要降级为 null。
     const before = await runGit(['rev-list', '--count', 'HEAD..@{u}'], { cwd: realRoot })
     const g = await runGit(['fetch', '--all', '--prune'], { cwd: realRoot })
-    recordGitOp({ root: realRoot, action: 'fetch', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
-    if (!g.ok) return { ok: false, error: g.error, message: 'git fetch 执行失败' }
+    if (!g.ok) {
+      recordGitOp({ root: realRoot, action: 'fetch', args: {}, ok: false, stdout: g.stdout, error: g.error })
+      return { ok: false, error: g.error, message: 'git fetch 执行失败' }
+    }
     const after = await runGit(['rev-list', '--count', 'HEAD..@{u}'], { cwd: realRoot })
-    return { ok: true, stdout: g.stdout, behind: fetchBehindSummary(before.stdout, after.stdout) }
+    const behind = fetchBehindSummary(before.stdout, after.stdout)
+    // 审计行附带最终落后摘要（缺上游/失败 → null，前端不展示）
+    recordGitOp({ root: realRoot, action: 'fetch', args: {}, ok: true, stdout: g.stdout, behind })
+    return { ok: true, stdout: g.stdout, behind }
   }
   if (action === 'pull') {
     // pull 结果统计：操作前记 HEAD 短哈希，成功后 diff 旧/新 HEAD 得文件改动统计
@@ -652,19 +672,26 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     // rev-parse 失败（如无 HEAD）不阻断 pull 本身，仅 stats 降级为 null。
     const before = await runGit(['rev-parse', '--short', 'HEAD'], { cwd: realRoot })
     const g = await runGit(['pull', '--ff-only'], { cwd: realRoot })
-    recordGitOp({ root: realRoot, action: 'pull', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
-    if (!g.ok) return { ok: false, error: g.error, message: 'git pull 执行失败' }
     let stats = null
-    if (before.ok && before.stdout.trim()) {
-      const after = await runGit(['rev-parse', '--short', 'HEAD'], { cwd: realRoot })
-      const from = before.stdout.trim()
-      const to = after.ok && after.stdout.trim() ? after.stdout.trim() : null
-      // from === to → 无新提交（已是最新）：返回 null，前端不展示「0 文件」的误导统计
-      if (to && to !== from) {
-        const numstat = await runGit(['diff', '--numstat', from, to], { cwd: realRoot })
-        if (numstat.ok) stats = parseNumstat(numstat.stdout)
+    if (g.ok) {
+      // 成功才计算统计（失败行只留 error；避免拉取失败时 stats 挂 null 误导）
+      if (before.ok && before.stdout.trim()) {
+        const after = await runGit(['rev-parse', '--short', 'HEAD'], { cwd: realRoot })
+        const from = before.stdout.trim()
+        const to = after.ok && after.stdout.trim() ? after.stdout.trim() : null
+        // from === to → 无新提交（已是最新）：返回 null，前端不展示「0 文件」的误导统计
+        if (to && to !== from) {
+          const numstat = await runGit(['diff', '--numstat', from, to], { cwd: realRoot })
+          if (numstat.ok) stats = parseNumstat(numstat.stdout)
+        }
       }
+      // 成功路径：recordGitOp 附带最终 stats（老实现只把统计放进瞬时返回体，
+      // 审计行看不到 —— pull 改了几个文件，留痕里现在也能回看）
+      recordGitOp({ root: realRoot, action: 'pull', args: {}, ok: true, stdout: g.stdout, stats })
+    } else {
+      recordGitOp({ root: realRoot, action: 'pull', args: {}, ok: false, stdout: g.stdout, error: g.error })
     }
+    if (!g.ok) return { ok: false, error: g.error, message: 'git pull 执行失败' }
     return { ok: true, stdout: g.stdout, head: null, stats }
   }
   if (action === 'push') {

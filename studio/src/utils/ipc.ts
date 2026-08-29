@@ -1615,6 +1615,10 @@ export interface GitAuditEntry {
   stdout: string | null;
   /** 失败原因（ok=false 时网关记录；无 → null） */
   error: string | null;
+  /** pull 的文件改动统计（新网关审计行附带；老行/无净改动 → null，行内不展示） */
+  stats?: GitOpStats | null;
+  /** fetch 的落后提交摘要（新网关审计行附带；老行/无上游 → null，行内不展示） */
+  behind?: GitFetchBehind | null;
 }
 
 /** GET /api/git/audit 响应。 */

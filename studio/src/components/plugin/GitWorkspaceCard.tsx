@@ -281,12 +281,27 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean; root?: str
 
 /** 单条 git 写操作留痕行：结果徽标 + 动作徽标 + 入参/错误 + 相对时间。
  *  成败色标与状态徽标同语义：成功 sage / 失败 red / 未确认 zinc。
- *  root 是操作时记录的仓库根（多工作区下仍展示当时操作的仓库，不随活动切换漂移）。 */
+ *  root 是操作时记录的仓库根（多工作区下仍展示当时操作的仓库，不随活动切换漂移）。
+ *  结果摘要 chip（新网关审计行附带）：pull 的文件改动统计 +N/-M、fetch 的落后
+ *  提交摘要（拉到 N 个新提交）—— 让「那次操作到底拉回了什么」在留痕里可回看，
+ *  不再只有瞬时 toast；老审计行无此字段 → 不渲染（静默降级，不占行宽）。 */
 const AuditRow: React.FC<{ e: GitAuditEntry }> = ({ e }) => {
   const argsText = auditArgsText(e.args);
+  // pull 文件改动统计（老行/无净改动 → null，不渲染 chip）
+  const stats = e.stats ?? null;
+  // fetch 落后提交摘要（老行/无上游 → null，不渲染 chip）
+  const behind = e.behind ?? null;
   const title = [
     e.root ? `仓库：${e.root}` : null,
     argsText ? `入参：${argsText}` : null,
+    stats ? `改动统计：${stats.files} 文件 +${stats.added}/-${stats.removed}` : null,
+    behind
+      ? behind.delta > 0
+        ? `落后提交：${behind.before} → ${behind.after}（拉到 ${behind.delta} 个新提交）`
+        : behind.before > 0
+          ? `落后提交：${behind.before} → ${behind.after}（无新提交）`
+          : '落后提交：已是最新（远端无新提交）'
+      : null,
     e.stdout ? `输出：${e.stdout}` : null,
     e.error ? `错误：${e.error}` : null,
   ]
@@ -306,6 +321,40 @@ const AuditRow: React.FC<{ e: GitAuditEntry }> = ({ e }) => {
       <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono" title={e.action}>
         {e.actionLabel}
       </span>
+      {/* pull 文件改动统计（+N/-M，与 toast 同口径；老审计行无字段 → 不渲染） */}
+      {stats && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-[10px] font-mono tabular-nums"
+          title={`${stats.files} 个文件改动：+${stats.added} / -${stats.removed}`}
+        >
+          <span className="text-zinc-400">{stats.files} 文件</span>
+          <span className="text-emerald-700">+{stats.added}</span>
+          <span className="text-red-600">-{stats.removed}</span>
+        </span>
+      )}
+      {/* fetch 落后提交摘要（拉到 N 个新提交 / 无新提交 / 已是最新；老审计行无字段 → 不渲染）。
+          文案与 doGitOperate 成功 toast 同口径：delta>0 = 拉到新提交；delta=0 且 before>0 =
+          仍落后但本次无更新；before=0 = 已是最新。 */}
+      {behind && (
+        <span
+          className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono tabular-nums ${
+            behind.delta > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200/70' : 'bg-zinc-50 text-zinc-500 border-zinc-200'
+          }`}
+          title={
+            behind.delta > 0
+              ? `落后提交 ${behind.before} → ${behind.after}（拉到 ${behind.delta} 个新提交）`
+              : behind.before > 0
+                ? `落后提交 ${behind.before} → ${behind.after}（无新提交）`
+                : '远端无新提交（已是最新）'
+          }
+        >
+          {behind.delta > 0
+            ? `拉到 ${behind.delta} 个新提交`
+            : behind.before > 0
+              ? `落后 ${behind.before} → ${behind.after}`
+              : '已是最新'}
+        </span>
+      )}
       {argsText && (
         <span className="min-w-0 truncate text-[10px] text-zinc-400 font-mono" title={argsText}>
           {argsText}

@@ -324,13 +324,15 @@ test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文�
       args: {},
       stdout: 'To github.com:org/repo.git\n   abc1234..def5678  main -> main',
       error: null,
+      stats: null,
+      behind: null,
     },
   )
 
   // 失败行：ok=false → 「失败」，error 透传，stdout 为空保留 null
   assert.deepEqual(
     normalizeAuditEntry({ at: 1725000001000, root: 'D:/Work/x', action: 'fetch', args: {}, ok: false, error: 'boom' }),
-    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom' },
+    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom', stats: null, behind: null },
   )
 
   // clone / checkout / init / pull → 中文标签映射
@@ -353,7 +355,7 @@ test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文�
 
 test('normalizeAuditEntry：宽容降级（缺字段 / 类型异常不抛）', () => {
   // null / undefined / 非对象 → 全默认展示字段
-  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null })
+  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null, stats: null, behind: null })
   assert.deepEqual(normalizeAuditEntry(undefined), normalizeAuditEntry(null))
 
   // 非数字 at → null；action 非字符串 → unknown
@@ -363,6 +365,50 @@ test('normalizeAuditEntry：宽容降级（缺字段 / 类型异常不抛）', (
   // stdout / error 全空白 → null（前端不展示空行）
   assert.equal(normalizeAuditEntry({ stdout: '   \n' }).stdout, null)
   assert.equal(normalizeAuditEntry({ error: '   ' }).error, null)
+})
+
+test('normalizeAuditEntry：pull/fetch 结果摘要透传（stats / behind）', () => {
+  // pull 成功行带 stats（recordGitOp 写入形态）
+  assert.deepEqual(
+    normalizeAuditEntry({
+      at: 1725000000000,
+      root: 'D:/Work/x',
+      action: 'pull',
+      args: {},
+      ok: true,
+      stats: { files: 3, added: 12, removed: 4 },
+    }),
+    {
+      at: 1725000000000,
+      action: 'pull',
+      actionLabel: '同步远端',
+      ok: true,
+      okLabel: '成功',
+      root: 'D:/Work/x',
+      args: {},
+      stdout: null,
+      error: null,
+      stats: { files: 3, added: 12, removed: 4 },
+      behind: null,
+    },
+  )
+
+  // fetch 成功行带 behind（落后提交摘要）
+  assert.deepEqual(
+    normalizeAuditEntry({ at: 1725000000000, action: 'fetch', args: {}, ok: true, behind: { before: 0, after: 3, delta: 3 } }).behind,
+    { before: 0, after: 3, delta: 3 },
+  )
+
+  // 老审计行（无 stats/behind）→ 缺省 null，不回退成 {0,0,0} 误导
+  assert.equal(normalizeAuditEntry({ action: 'push', ok: true }).stats, null)
+  assert.equal(normalizeAuditEntry({ action: 'push', ok: true }).behind, null)
+
+  // 类型异常（字符串/数组/null）→ 宽容降级 null，不抛
+  assert.equal(normalizeAuditEntry({ action: 'pull', stats: '3' }).stats, null)
+  assert.equal(normalizeAuditEntry({ action: 'fetch', behind: [1, 2] }).behind, null)
+  assert.equal(normalizeAuditEntry({ action: 'pull', stats: null }).stats, null)
+  // 字段值非法（非数字）→ 兜底 0（不影响展示行形态稳定）
+  assert.deepEqual(normalizeAuditEntry({ action: 'pull', stats: { files: 'x', added: 'y', removed: 'z' } }).stats, { files: 0, added: 0, removed: 0 })
 })
 
 test('listAuditLog：读审计文件返回时间倒序（新→旧），limit 截断，缺文件空数组', () => {
