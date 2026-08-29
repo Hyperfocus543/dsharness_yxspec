@@ -21,9 +21,10 @@ import React from 'react';
 import { STAGE_GROUPS, STAGE_ORDER, STAGE_TABLE } from '../../data/stage-mapping';
 import type { DshGate, StageToken } from '../../data/types';
 import { useStageStore } from '../../store/stageStore';
+import { useProjectStore } from '../../store/projectStore';
 import { useToastStore } from '../../store/toastStore';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
-import { EmptyState, Icon } from '../ui';
+import { Button, EmptyState, Icon } from '../ui';
 import { I } from '../ui/icons';
 
 const GROUP_LABEL: Record<string, string> = {
@@ -84,9 +85,12 @@ const REASON_TEXT: Record<string, string> = {
 
 export const GateOverview: React.FC = () => {
   const dshState = useStageStore((s) => s.dshState);
+  const dshError = useStageStore((s) => s.dshError);
+  const loadDshState = useStageStore((s) => s.loadDshState);
   const stages = useStageStore((s) => s.stages);
   const { dispatch, sending, dispatchingCmd } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
+  const projectPath = useProjectStore((s) => s.current?.path || '');
 
   // 轨迹门控汇总（stageStore 已在 loadDshState 时拉取 /api/trajectory-gate 全量，
   // 各阶段 gate_trajectory/gate_policy/gate_reason 已合并进 stages）——直接复用，
@@ -140,14 +144,49 @@ export const GateOverview: React.FC = () => {
     return { ok, pending, blocked };
   }, [cards]);
 
+  // 重试：重跑 loadDshState（会刷新 dsh_state 快照并恢复/重建网关事件订阅，幂等安全）
+  const handleRetry = () => {
+    if (!projectPath) {
+      pushToast('warn', '当前未打开项目，无法重试加载门控快照');
+      return;
+    }
+    void loadDshState(projectPath).catch(() => {});
+  };
+
   if (!dshState) {
+    // dsh_state 缺失/读取失败（dshError）≠ 正在加载：给专属错误态 + 可用的重试，
+    // 避免新项目/瞬时读取失败永久停在「等待加载」占位（无数据、无出路）。
+    if (dshError) {
+      return (
+        <div className="space-y-3">
+          <div className="border border-zinc-200 rounded-lg bg-white">
+            <EmptyState
+              icon={I.gauge}
+              title="门控快照不可用"
+              hint="未读到 .dsh/dsh_state.json（项目可能尚无该文件，或读取中断）。生成后点下方重试即可点亮门控全景。"
+            />
+          </div>
+          <div className="flex justify-center">
+            <Button variant="secondary" size="sm" onClick={handleRetry}>
+              <Icon name={I.refresh} size={14} />
+              重试
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    // 首次加载中：骨架屏（与驾驶舱其他视图同款，不闪「等待加载」占位）
     return (
-      <div className="border border-zinc-200 rounded-lg bg-white">
-        <EmptyState
-          icon={I.gauge}
-          title="等待 dsh_state 加载"
-          hint="门控全景读 .dsh/dsh_state.json 的门控快照，加载后自动点亮。"
-        />
+      <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2" role="status" aria-busy="true" aria-label="正在加载门控快照">
+        <div className="h-4 bg-zinc-200 rounded animate-pulse w-1/3" />
+        <div className="grid grid-cols-3 gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-14 bg-zinc-100 rounded animate-pulse" />
+          ))}
+        </div>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-16 bg-zinc-100 rounded animate-pulse" />
+        ))}
       </div>
     );
   }

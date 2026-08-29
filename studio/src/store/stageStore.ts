@@ -18,6 +18,9 @@ interface StageStore {
   eventsConnected: boolean;
   /** SQT 演示：dsh_state.json 最新原文（供驾驶舱直接读 gate.message）*/
   dshState: DshState | null;
+  /** dsh_state.json 缺失/读取失败（loadDshState 内 fetch 返回 null）→ 门控视图给错误态 + 重试，
+   *  不再永久停在「等待 dsh_state 加载」占位 */
+  dshError: boolean;
   /** 断点续跑：网关 /api/resume 恢复信息（网关重启/休眠后前端据此显示「已恢复到 X 阶段」+ 一键续跑）*/
   resumeInfo: ResumeInfo | null;
   /** 轨迹门控全量汇总（GET /api/trajectory-gate 不带 stage 的原始 payload；零新请求）：
@@ -198,6 +201,7 @@ export const useStageStore = create<StageStore>((set, get) => ({
   sessionId: null,
   eventsConnected: false,
   dshState: null,
+  dshError: false,
   resumeInfo: null,
   trajectoryGates: {},
   costData: null,
@@ -223,6 +227,8 @@ export const useStageStore = create<StageStore>((set, get) => ({
   },
 
   loadDshState: async (projectPath: string) => {
+    // 本次加载先清掉上次的失败标记：重试/项目切换后允许从失败态恢复
+    set({ dshError: false });
     // 刷新恢复：从 localStorage 读回本项目的 sessionId（按 projectKey 隔离，切换项目不串）
     const storedSid = ipc.getStoredSessionId(projectPath);
     if (storedSid) {
@@ -230,7 +236,9 @@ export const useStageStore = create<StageStore>((set, get) => ({
     }
     const dsh = await ipc.fetchDshState(projectPath);
     if (!dsh) {
+      // dsh_state 缺失/读取失败 ≠ 正在加载：置错误标记，门控视图据此给错误态 + 重试
       console.warn('[stageStore] 未找到 .dsh/dsh_state.json，SQT 演示数据不生效');
+      set({ dshError: true });
     } else {
       // 合并 dsh_state 里出现的全部阶段（不再只限 SQT 6：铺满 25 阶段后网关驱动全表）。
       // 只合并 dsh_state 实际有的 token，避免把 STAGE_TABLE 里废弃/变体节点也强行注入。
