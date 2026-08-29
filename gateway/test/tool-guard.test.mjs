@@ -216,6 +216,25 @@ for (const cmd of [
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
 
+console.log('== 3b) eval 内置解引用（漏网修复）==')
+// eval 的参数按真实命令执行（`eval "git push origin main"` 的 push 真实运行），
+// 不是惰性文本——git 词落在引号内被裸分支引号过滤当文本放过（echo "git status"
+// 语义），此前 `eval "git push"` 整段漏过守卫（实测漏网）。现须解引用后按真实
+// 命令判定；只读 eval（`eval "git status"`）解包后仍只读 → 放行（见 §4）。
+for (const cmd of [
+  'eval "git push origin main"',
+  'eval \'git reset --hard\'',
+  'eval "git clean -fd"',
+  'eval "git checkout -f main"',
+  'eval "git branch -D feature"',
+  'eval "git remote add origin http://x"',
+  'eval "git status && git push origin main"',
+  'eval "sh -c \'git push\'"',
+  'eval "echo x && git reset --hard"',
+]) {
+  assert(`拒绝 eval: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
+}
+
 console.log('== 4) 惰性文本 / 只读包装器不误伤 ==')
 for (const cmd of [
   'echo "git status"',
@@ -226,6 +245,10 @@ for (const cmd of [
   'cmd /c "git diff --stat"',
   'powershell -Command "git for-each-ref refs/tags"',
   'sh -c "git status && git log -1"',
+  // 2026-08-30 追加：只读 eval（解引用后子命令只读）→ 放行（不误伤）
+  'eval "git status"',
+  'eval \'git log --oneline -5\'',
+  'eval "git status && git log -1"',
   // PowerShell -c 短别名只读命令：解引用后子命令为只读 → 放行（不误伤）
   'powershell -c "git status"',
   'powershell -c "git log --oneline -5"',

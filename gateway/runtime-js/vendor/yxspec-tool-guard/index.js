@@ -274,6 +274,12 @@ function tokenizeShell(segment) {
  *      "git reset --hard"`）。
  *   5. 引号命令串后不允许再带参数（无法判定变量是否影响命令内容 → 保守不剥）；
  *      嵌套壳（`sh -c "sh -c 'git push'"`）由守卫侧的递归扫描逐层解包。
+ *   6. eval 内置（`eval "git push origin main"` / `eval 'git reset --hard'`）——
+ *      其参数按**真实命令**执行（不是惰性文本）：git 词落在引号内会被裸分支
+ *      引号过滤当文本放过（`echo "git status"` 语义），此前 `eval "git push"` 整段
+ *      漏过守卫（实测漏网）。eval 无 shell 家族概念，故独立于 sh/cmd/ps 家族判定：
+ *      exe 为裸 `eval` 时其全部参数由 shell 以空格拼接后按命令执行，故把
+ *      rest 各 token 文本 join 后返回，由守卫侧递归扫描逐层解包。
  */
 function unwrapShellExec(segment) {
   const toks = tokenizeShell(segment)
@@ -288,7 +294,10 @@ function unwrapShellExec(segment) {
   const shFamily = /^(?:sh|bash|dash|ksh|zsh)(?:\.exe)?$/.test(exe)
   const cmdFamily = /^cmd(?:\.exe)?$/.test(exe)
   const psFamily = /^(?:powershell|pwsh)(?:\.exe)?$/.test(exe)
-  if (!shFamily && !cmdFamily && !psFamily) return null
+  // eval 内置：参数按真实命令执行（见头注释 §6）。不做 shell 家族判定——
+  // eval 在 sh/bash/cmd/ps 里都存在，语义一致（对参数字符串执行命令解析）。
+  const evalBuiltin = exe === 'eval'
+  if (!shFamily && !cmdFamily && !psFamily && !evalBuiltin) return null
 
   // 命令 flag 后的引号串（须非空）即被执行的命令。不必要求是末位：
   // sh 的 -c 尾随实参是位置参数（$0/$1），cmd/ps 的尾随实参是 %* / args，
@@ -305,6 +314,13 @@ function unwrapShellExec(segment) {
 
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i]
+    // eval 内置：全部参数按 shell 空格拼接后作为命令执行（无 flag/隐式区分）。
+    // 返回 join 文本由守卫侧递归扫描——`eval "git push origin main"` 的 push 可被检出；
+    // 只读 eval（`eval "git status"`）解包后仍只读 → 放行不误伤。
+    if (evalBuiltin) {
+      const joined = rest.map((x) => x.text).join(' ').trim()
+      return joined === '' ? null : joined
+    }
     // 命令 flag → 其后引号串即被执行的命令（尾随实参忽略，理由见 commandAfter）
     if ((shFamily && isShCmd(t)) || (cmdFamily && isCmdCmd(t)) || (psFamily && isPsCmd(t))) {
       return commandAfter(i)
