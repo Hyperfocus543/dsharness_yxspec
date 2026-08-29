@@ -324,12 +324,21 @@ function advanceState(st, roundNo, total, score, verdict) {
 // ----------------------------------------------------------------------------
 // 留痕：轨迹 JSONL（runtime-data/trajectory/self_iteration/<stage>-<seq>.jsonl）
 // ----------------------------------------------------------------------------
-/** 自迭代轨迹目录现有最大 seq + 1（scan 目录，无则 1）。 */
-function nextSeqFor(dir) {
+/** 文件名段 → 归一化 stage 名（与 appendTrajectory 文件名 sanitize 同规则）。 */
+function sanitizeStage(stage) {
+  return String(stage ?? '').replace(/[^a-z0-9_]/g, '_')
+}
+
+/** 某阶段在自迭代轨迹目录现有最大 seq + 1（scan 目录，按阶段过滤，无则 1）。
+ *  必须按阶段过滤：目录里混着多阶段的留痕文件，全局 max+1 会把后写阶段的
+ *  seq 顶到 N+1，其文件名（只含 `<stage>-<seq>`，无阶段前缀）恰好复用已有
+ *  文件的路径 → appendFileSync 追加进他人文件，自迭代留痕被污染。 */
+function nextSeqFor(dir, stage) {
+  const prefix = sanitizeStage(stage)
   try {
     let max = 0
     for (const it of readdirSync(dir)) {
-      const m = /^[a-z0-9_]+-(\d+)\.jsonl$/.exec(it)
+      const m = new RegExp(`^${prefix}-(\\d+)\\.jsonl$`).exec(it)
       if (m) max = Math.max(max, Number(m[1]))
     }
     return max + 1
@@ -343,8 +352,8 @@ function appendTrajectory(trajRoot, stage, entry) {
   try {
     const dir = join(trajRoot, 'self_iteration')
     mkdirSync(dir, { recursive: true })
-    const seq = nextSeqFor(dir)
-    const file = join(dir, `${String(stage).replace(/[^a-z0-9_]/g, '_')}-${String(seq).padStart(3, '0')}.jsonl`)
+    const seq = nextSeqFor(dir, stage)
+    const file = join(dir, `${sanitizeStage(stage)}-${String(seq).padStart(3, '0')}.jsonl`)
     appendFileSync(file, JSON.stringify(entry) + '\n', 'utf8')
     return file
   } catch {
