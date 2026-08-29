@@ -113,6 +113,7 @@ const GIT_READONLY_SUBS = new Set([
   'status', 'diff', 'log', 'show', 'rev-parse', 'blame',
   'ls-files', 'ls-tree', 'describe', 'shortlog', 'whatchanged',
   'grep', 'count-objects', 'help', 'version',
+  'for-each-ref', // 只读 ref 枚举（git.mjs 拉 tag 清单用 `git for-each-ref refs/tags …`）
 ]);
 
 /** 需要带值 token 的 git 全局选项（-C/-c 双 token 形态占 2 个，`=` 连写形态占 1 个）。
@@ -150,7 +151,11 @@ const GIT_GLOBAL_VALUE_OPTS = new Set(['-C', '--git-dir', '--work-tree']);
  *      的命令，旧写法会先匹配到路径里的子串，把路径当参数串 → 只读列出被误伤。
  *  前 8 个 token 内找不到子命令（纯 flag/全局选项）→ null。 */
 function gitSubAndArgs(segment) {
-  let m =
+  const m =
+    // 引号包裹完整路径（`"C:\Program Files\Git\bin\git.exe" reset`）——引号内必须含
+    // 路径分隔符 + git basename，杜绝把 `echo "git status"` 这类引号串（无分隔符）
+    // 误判为调用。三个有捕获组分支（双引号路径/单引号路径/反引号路径）在下方
+    // 用 `m[1]` 与裸分支区分——裸分支没有捕获组，`m[1] === undefined`。
     /(?:^|\s)"([^"\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)"(?=\s|$)/i.exec(segment) ||
     /(?:^|\s)'([^'\r\n]+?[\\/]git(?:\.(?:exe|cmd|bat))?)'(?=\s|$)/i.exec(segment) ||
     // 前边界除 段首/空白 外，再认 shell 包装符（`(` 子 shell、`$(`/`$( )` 命令替换、
@@ -164,6 +169,18 @@ function gitSubAndArgs(segment) {
     // 都是真实调用；尾边界仍只认 空白/段尾（防 `import git;` / `pip install git+…` 误伤）。
     /(?:^|[\s(&;`{])(?:git(?:\.(?:exe|cmd|bat))?|[^\s"'`]*[\\/]git(?:\.(?:exe|cmd|bat))?)(?=\s|$)/i.exec(segment)
   if (!m) return null
+  // 裸分支引号过滤：`echo "git status"` / `echo 'git pull'` 这类「git 出现在引号包裹
+  // 的字符串里」不是 git 调用——否则 after 会切出 `status"`/`pull'` 这种带闭合引号
+  // 的伪子命令（∉ 只读集），一段纯 echo 被默认拒绝误伤。判定：裸分支（m[1] 为
+  // undefined）且 git 词之前出现奇数个引号 ⇒ 该 git 词位于引号串内部，跳过；
+  // 真调用（`git "reset" --hard` / `git -C "a b" status`）的 git 词本身在引号外，
+  // 前面引号成对（偶数），不满足条件，不误伤。引号路径/反引号分支不适用此过滤。
+  if (m[1] === undefined) {
+    const head = segment.slice(0, m.index + m[0].length)
+    const oddQuote =
+      ((head.match(/"/g) || []).length % 2 === 1) || ((head.match(/'/g) || []).length % 2 === 1)
+    if (oddQuote) return null
+  }
   // 子命令名后到段尾的参数串：先剥掉尾部 shell 包装闭合符（`)` 子 shell/命令替换、
   // `}` 花括号组、反引号）——`(git status)` 的 `status)`、`` `git status` `` 的
   // `status`` 若原样进 token 切分，子命令会带后缀（`status)` ∉ 只读集）→ 只读误伤。
