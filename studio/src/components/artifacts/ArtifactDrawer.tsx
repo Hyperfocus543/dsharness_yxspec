@@ -174,6 +174,7 @@ export const ArtifactDrawer: React.FC<ArtifactDrawerProps> = ({
             className="w-8 h-8 rounded-md hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-white transition-colors"
             onClick={onClose}
             title="关闭"
+            aria-label="关闭产物详情"
           >
             <Icon name={I.close} size={14} />
           </button>
