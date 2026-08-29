@@ -436,11 +436,15 @@ export async function getFileDiff({ path, staged = false, from = null, to = null
   }
   const res = await runGit(args, { cwd })
   if (!res.ok) return { ok: false, error: res.error, message: 'git diff 执行失败' }
-  const diff = (res.stdout ?? '').slice(0, 8000)
-  // 行数统计：新增 +N / 删除 -M（diff 行头 ^\+[^+] 与 ^-[^-] 计数）
+  const fullDiff = res.stdout ?? ''
+  const diff = fullDiff.slice(0, 8000)
+  // 行数统计：新增 +N / 删除 -M（diff 行头 ^\+[^+] 与 ^-[^-] 计数）。
+  // 必须统计完整 diff 而非截断后的预览——diff 超过 8000 字符时，若按
+  // diff（已截断）数行，后面的改动全部丢失（实测 500 行修改只数出 0/113），
+  // stats 是「改动量」语义，应与完整 diff 对齐；截断只作用于展示字段 diff。
   let added = 0
   let removed = 0
-  for (const l of diff.split('\n')) {
+  for (const l of fullDiff.split('\n')) {
     if (l.startsWith('+') && !l.startsWith('+++')) added++
     else if (l.startsWith('-') && !l.startsWith('---')) removed++
   }
