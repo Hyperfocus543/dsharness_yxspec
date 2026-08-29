@@ -212,6 +212,26 @@ for (const cmd of [
   'sh -c "git status & git push origin main"',
   'bash -c "git log & git reset --hard"',
   'powershell -c "git status & git clean -fd"',
+  // 2026-08-30 追加：命令 flag 与引号命令串「无空格连写」的包装器形态——cmd/bash/powershell
+  // 都接受 `cmd /c"git reset --hard"` 这类写法（开关直接贴引号串，等价于空格分隔，实测 cmd
+  // 真实执行）。此前 tokenizeShell 把 `-c"git reset --hard"` 按裸 \S+ 拆成 `-c"git` + `reset`…
+  // → 开关判定不命中 + 引号命令串被裸分支引号过滤当惰性文本 → 破坏性 git 整段漏过守卫
+  // （与空格分隔形态行为不一致），现须 DENY。
+  'cmd /c"git reset --hard"',
+  'cmd /k"git reset --hard"',
+  'cmd /q /c"git reset --hard"',
+  'cmd /c"git clean -fd"',
+  'cmd /c"echo hi & git push origin main"',
+  'cmd /c"git branch -D feature"',
+  'bash -c"git reset --hard"',
+  "bash -c'git push origin main'",
+  'sh -c"git clean -fd"',
+  'bash --command"git reset --hard"',
+  'bash -euxo pipefail -c"git push origin main"',
+  'powershell -Command"git reset --hard"',
+  'powershell -c"git push origin main"',
+  'pwsh -c"git clean -fd"',
+  'powershell -NoProfile -ExecutionPolicy Bypass -c"git checkout -f main"',
 ]) {
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -276,6 +296,15 @@ for (const cmd of [
   'bash -c "git log -1" x y',
   'powershell -NoProfile "git status" extra',
   'cmd /q "git status" extra',
+  // 2026-08-30 追加：无空格连写的只读包装器（与破坏性连写同 token 化路径）——
+  // 解引用后子命令只读 → 放行（不误伤）
+  'cmd /c"git status"',
+  'cmd /c"git diff --stat"',
+  'bash -c"git status"',
+  "bash -c'git log --oneline -5'",
+  'sh -c"git diff --stat"',
+  'powershell -c"git status"',
+  'pwsh -c"git log --oneline -5"',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }

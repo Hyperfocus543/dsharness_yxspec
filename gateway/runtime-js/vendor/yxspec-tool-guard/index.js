@@ -242,7 +242,14 @@ function gitArgsAfter(sub, segment) {
  */
 function tokenizeShell(segment) {
   const toks = []
-  const re = /"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|\S+/g
+  // 引号片段整体一个 token；另加「引号紧跟非空白前缀」的拆分支（`\S+(?=["'`])`）：
+  // cmd/bash/powershell 都接受「命令 flag 与引号命令串无空格连写」——`cmd /c"git reset
+  // --hard"`、`bash -c"git push"`、`powershell -Command"git clean -fd"` 的 `-c"…"` 若按
+  // 裸 `\S+` 拆，引号串被劈成碎片（`-c"git` + `reset`…）、开关判定不命中、引号命令串被
+  // 裸分支引号过滤当惰性文本放过 → shell 执行包装器整段漏过守卫（实测漏网，与空格分隔
+  // 形态 `cmd /c "…"` 行为不一致）。加该分支后 `-c"git reset --hard"` 拆成 `-c`（裸
+  // token）+ `git reset --hard`（引号 token），unwrapShellExec 照常解引用。
+  const re = /"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|\S+(?=["'`])|\S+/g
   let m
   while ((m = re.exec(segment))) {
     const raw = m[0]
