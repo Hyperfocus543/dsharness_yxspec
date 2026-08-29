@@ -69,28 +69,35 @@ const DEFAULT_TRAJ_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '.
 export const name = 'git-workspace'
 export const inject = ['sessions']
 
-/** 阶段命令 → token 权威表（复用网关 stages.mjs；harness 外运行/加载失败 → 空表，
+// 纯函数导出（单测/驾驶舱诊断复用；与 yxspec-tool-guard 导出判定的范式一致）
+export { stageOfPrompt }
+
+/** 阶段命令/token → 权威 token 表（复用网关 stages.mjs；harness 外运行/加载失败 → 空表，
  *  此时不判阶段，插件只做事件兜底，不抛错）。 */
-let CMD_TOKENS = null
+let STAGE_TOKENS = null
 try {
   const mod = await import('../../../../lib/stages.mjs')
-  const map = new Map()
+  const map = new Map() // token → { command }（键为阶段权威 token）
   for (const [token, st] of Object.entries(mod?.STAGES ?? {})) {
-    if (st?.command) map.set(st.command, token)
+    if (st?.command) map.set(token, { command: st.command })
   }
-  if (map.size > 0) CMD_TOKENS = map
+  if (map.size > 0) STAGE_TOKENS = map
 } catch {
-  CMD_TOKENS = null
+  STAGE_TOKENS = null
 }
 
-/** 边界感知匹配（与 stages.mjs resolveStage 同规则：命令后必须跟 空白/标点/结尾）。 */
+/** 边界感知匹配（与 stages.mjs resolveStage 同规则：命令后必须跟 空白/标点/结尾）。
+ *  返回**权威阶段 token**（如 sys_analysis），而非命令名——命令名（`/yxspec:sys-analysis`）
+ *  只做匹配锚点，命中后反查 token，否则 tag/审计/轨迹目录会写成命令名（错位、与前端
+ *  STAGE_ORDER 的 token 对不上）。 */
 function stageOfPrompt(prompt) {
-  if (!CMD_TOKENS) return null
+  if (!STAGE_TOKENS) return null
   const text = String(prompt ?? '')
-  for (const [cmd, token] of CMD_TOKENS) {
-    const esc = cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  for (const [token, st] of STAGE_TOKENS) {
+    const esc = st.command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const re = new RegExp(`(?:^|[^\\w-])${esc}(?:$|[\\s.,;:!?，。；：！？、)）]|(?:[^\\w-]))`)
     if (re.test(text)) return token
+    if (text.includes(token)) return token // token 本身（下划线形态）直接命中 → 兜底
   }
   return null
 }
@@ -170,7 +177,7 @@ export function apply(ctx, input = {}) {
     if (!logDir) return
     try { appendFileSync(join(logDir, 'git-workspace.log'), `${new Date().toISOString()} ${msg}\n`, 'utf8') } catch {}
   }
-  log(`apply() invoked; root=${root}; autoCommit=${cfgAutoCommit}; stages=${CMD_TOKENS ? CMD_TOKENS.size : '(unavailable)'}`)
+  log(`apply() invoked; root=${root}; autoCommit=${cfgAutoCommit}; stages=${STAGE_TOKENS ? STAGE_TOKENS.size : '(unavailable)'}`)
 
   // sessionId -> 当前活动阶段记录（open；turn/end 后置 done 并清空，异常收尾也清）。
   // seq 在 inbox/spliced 命中阶段时预分配（与 aspice-trajectory 同策略：此刻本次
