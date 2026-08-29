@@ -902,15 +902,19 @@ export async function gitOperate({ root, action, args = {} } = {}) {
  * clone url 白名单校验（纯函数）。
  * 规则：必须 https:// 或 git@ 或 ssh:// 开头；拒绝 file://、`-` 开头（避免当选项参数）、
  * 含空格、以及 `|` `;` `` ` `` `$` 等 shell 元字符（execFile 数组透传本不会解释，
- * 双保险防 URL 里混入注入式 payload；换行 `\n`/回车 `\r` 一并拒绝）。
+ * 双保险防 URL 里混入注入式 payload；换行 `\n`/回车 `\r`/NUL 一并拒绝）。
  * @param {string} url
  * @returns {boolean}
  */
 export function isSafeGitUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return false
-  // 换行/回车在任何位置都拒绝——trim() 会吞掉首尾的 \r\n，若只在 trim 后检查则
+  // 换行/回车/NUL 在任何位置都拒绝——trim() 会吞掉首尾的 \r\n，若只在 trim 后检查则
   // `https://x/y\r\n` 这类带尾换行的 url 会漏网（净化为干净 url 前必须见真身）。
-  if (/[\r\n]/.test(url)) return false
+  // NUL（\u0000）不在 \s 类里（`/\s/.test('\u0000')` === false），但 Node child_process
+  // 对含 NUL 的参数同步抛 ERR_INVALID_ARG_VALUE（实测 execFile/spawn 均如此）——若放行，
+  // cloneWithProgress 的 spawn 会在 Promise executor 内同步 throw → gitOperate 抛异常
+  // 逃出「任何 git 失败 → ok:false 不抛」契约 → 网关 500，故须显式拒绝。
+  if (/[\r\n\u0000]/.test(url)) return false
   const u = url.trim()
   if (u.length > 2000) return false
   if (!/^(https:\/\/|git@|ssh:\/\/)/.test(u)) return false

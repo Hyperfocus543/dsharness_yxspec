@@ -57,6 +57,7 @@ test('isSafeGitUrl：file://、- 开头、shell 元字符、含空格 → 拒绝
     'https://github.com/x\n',
     'git@github.com:org/repo\r',
     'https://github.com/\nby',
+    'https://github.com/x\u0000y', // NUL 字节（Node child_process 对含 NUL 参数同步抛 ERR_INVALID_ARG_VALUE）
     '', // 空
     null,
     undefined,
