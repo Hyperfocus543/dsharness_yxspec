@@ -869,49 +869,9 @@ export const GitWorkspaceCard: React.FC = () => {
     void doRollback();
   };
 
-  // ---- status 未就绪：加载骨架 / 失败 EmptyState ----
-  // loading 且已有内容时不打断：刷新时保留现有数据，不闪骨架（仅 status 缺失时出骨架/错误态）。
-  // 注：gitStore 出错时 status 也会被置 null，故内层只需判 loadError。
-  if (!status) {
-    if (loadError) {
-      return (
-        <div className="p-4 space-y-3">
-          <div className="border border-zinc-200 rounded-lg bg-white">
-            <EmptyState
-              icon={I.branch}
-              title="Git 工作区不可用"
-              hint="网关未响应或未启动（/api/git/status 拿不到状态）。确认 server.mjs 运行中，再点下方重试。"
-            />
-          </div>
-          {/* git 不可用且未登记任何工作区 → 引导添加本地/远程仓库（指向区块 A 的「添加」按钮） */}
-          {!workspaceLoading && !workspaceError && workspaces.length === 0 && (
-            <div className="text-xs text-zinc-400 text-center border border-dashed border-amber-200 rounded-lg px-3 py-2.5">
-              可点击右上角「+ 添加」，添加本地 git 仓库路径、粘贴远程仓库地址克隆，或新建本地仓库（git init）
-            </div>
-          )}
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={() => refreshStatus().catch(() => {})}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
-            >
-              <Icon name={I.refresh} size={11} />
-              重试
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2" role="status" aria-busy="true" aria-label="正在加载 Git 工作区状态">
-        <div className="h-4 bg-zinc-200 rounded animate-pulse w-1/3" />
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="h-8 bg-zinc-100 rounded animate-pulse" />
-        ))}
-      </div>
-    );
-  }
-
+  // status 未就绪的骨架/错误态不再整体 early-return：工作区管理（区块 A）不依赖
+  // status，登记/切换/添加在 status 失败或未加载时仍可用——「+ 添加」入口不因
+  // 网关状态端点失败而消失。错误态/骨架只作用于区块 C 及以下的状态展示区。
   return (
     <div className="p-4 space-y-4">
       {/* 标题行 + 刷新 */}
@@ -922,7 +882,7 @@ export const GitWorkspaceCard: React.FC = () => {
           </span>
           <span className="text-sm font-bold text-zinc-800">Git 工作区管控</span>
           <span className="text-xs text-zinc-400">
-            {gitOk ? `（${dirtyCount} 处改动）` : '（git 不可用，状态未知）'}
+            {gitOk ? `（${dirtyCount} 处改动）` : !status ? (loading ? '（状态加载中…）' : '（状态不可用）') : '（git 不可用，状态未知）'}
           </span>
         </div>
         <button
@@ -1178,8 +1138,47 @@ export const GitWorkspaceCard: React.FC = () => {
         )}
       </div>
 
-      {/* 区块 C：当前工作区操作按钮行（git 可用且有活动工作区才显示） */}
-      {gitOk && activeWorkspace && (
+      {/* 区块 C 及以下状态展示区：status 未就绪（加载中/失败）时给专属骨架/错误态，
+          不再整体替换卡片——工作区管理（区块 A）不依赖 status，登记/切换/添加保持可用，
+          错误态里的「点右上角 + 添加」引导与上方真实按钮对得上。 */}
+      {!status ? (
+        loadError ? (
+          <div className="space-y-2">
+            <div className="border border-zinc-200 rounded-lg bg-white">
+              <EmptyState
+                icon={I.branch}
+                title="Git 工作区状态不可用"
+                hint="网关未响应或未启动（/api/git/status 拿不到状态）。确认 server.mjs 运行中，再点下方重试。工作区登记/添加不受影响。"
+              />
+            </div>
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => refreshStatus().catch(() => {})}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+              >
+                <Icon name={I.refresh} size={11} />
+                重试
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2"
+            role="status"
+            aria-busy="true"
+            aria-label="正在加载 Git 工作区状态"
+          >
+            <div className="h-4 bg-zinc-200 rounded animate-pulse w-1/3" />
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-8 bg-zinc-100 rounded animate-pulse" />
+            ))}
+          </div>
+        )
+      ) : (
+        <>
+          {/* 区块 C：当前工作区操作按钮行（git 可用且有活动工作区才显示） */}
+          {gitOk && activeWorkspace && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-50 text-emerald-700 font-mono border border-emerald-200/70 truncate max-w-56" title={activeWorkspace.root}>
@@ -1500,6 +1499,8 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
         )}
       </div>
+        </>
+      )}
 
       {/* git 写操作留痕：clone/fetch/pull/push/checkout/init 的审计列表（时间倒序）。
           数据源 = 网关 git-workspace-audit.jsonl（写操作自动追加，append-only）。
