@@ -79,6 +79,9 @@ test('isSafeTargetDir：盘符根、..、相对路径、空 → 拒绝', () => {
     'C:\\', // 盘符根
     'D:/',
     'D:\\',
+    'D://', // 重复分隔符盘符根（Windows 同样落在盘符根）
+    'D:\\\\',
+    'C://',
     'C:',
     'D:/Work/../x', // .. 逃逸
     'D:/../x',
@@ -119,6 +122,11 @@ test('gitOperate init：dir 校验先于 git（非法目录 → bad-request，�
   const driveRoot = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: 'D:/' } })
   assert.equal(driveRoot.ok, false)
   assert.equal(driveRoot.error, 'bad-request', 'init dir 为盘符根应报 bad-request')
+
+  // 重复分隔符盘符根（D:// 在 Windows 同样落在盘符根）→ bad-request
+  const driveRootDup = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: 'D://' } })
+  assert.equal(driveRootDup.ok, false)
+  assert.equal(driveRootDup.error, 'bad-request', 'init dir 为重复分隔符盘符根应报 bad-request')
 
   // 含 .. 段 → bad-request
   const dotdot = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: 'D:/Work/../x' } })

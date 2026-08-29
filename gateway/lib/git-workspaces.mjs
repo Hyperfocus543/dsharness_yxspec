@@ -83,9 +83,11 @@ function isWindowsAbsolute(p) {
   return typeof p === 'string' && /^[A-Za-z]:[\\/]/.test(p)
 }
 
-/** Windows 盘符根（`D:/` / `D:\`）：clone 目标不允许落在盘符根。 */
+/** Windows 盘符根（`D:/` / `D:\` / `D://` / `D:\\`）：clone 目标不允许落在盘符根。
+ *  重复分隔符（`D://`）在 Windows 上同样指向盘符根（git clone/init 落在 D:\），
+ *  故 `[\\/]+` 匹配任意连续分隔符序列，而非单个。 */
 function isWindowsDriveRoot(p) {
-  return /^[A-Za-z]:[\\/]$/.test(p)
+  return /^[A-Za-z]:[\\/]+$/.test(p)
 }
 
 /**
