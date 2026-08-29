@@ -223,3 +223,30 @@ test('setActiveWorkspace：全新注册表（磁盘无 defaultRoot）id=default 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// 磁盘 defaultRoot 是 addWorkspace 时的陈旧快照；跨进程换项目 / YXSPEC_GIT_ROOT
+// 变更后，gitOperate / setActiveWorkspace 必须按当前生效根重新解析，不能用陈旧快照
+// 比对——否则 UI 显示默认工作区正常，但所有写操作 unknown-workspace、激活 not-found。
+test('defaultRoot 恒按当前生效根解析：磁盘陈旧快照不阻断写操作/激活', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-stale-'))
+  const regPath = join(dir, 'registry.json')
+  writeFileSync(regPath, JSON.stringify({ version: 1, defaultRoot: 'D:/Work/01_Projects/OLD_PROJECT', activeId: null, workspaces: [] }))
+  const prevWs = process.env.YXSPEC_GIT_WORKSPACES
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_WORKSPACES = regPath
+  process.env.YXSPEC_GIT_AUDIT = join(dir, 'audit.jsonl')
+  try {
+    // gitOperate：当前默认根（= 本仓库）可操作（branch 只读列表）
+    const op = await gitOperate({ root: process.cwd(), action: 'branch' })
+    assert.equal(op.ok, true, `当前默认根写操作应可用，实际: ${JSON.stringify(op)}`)
+    // setActiveWorkspace：id=default 仍可激活（陈旧快照不阻断）
+    const act = await setActiveWorkspace({ id: 'default' })
+    assert.equal(act.ok, true, `陈旧 defaultRoot 下 id=default 应可激活，实际: ${JSON.stringify(act)}`)
+  } finally {
+    if (prevWs === undefined) delete process.env.YXSPEC_GIT_WORKSPACES
+    else process.env.YXSPEC_GIT_WORKSPACES = prevWs
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

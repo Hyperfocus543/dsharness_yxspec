@@ -305,10 +305,9 @@ export async function setActiveWorkspace({ id } = {}) {
   const reg = readRegistry()
   // default 根只在 listWorkspaces 内存合并（磁盘注册表不落 default 条目），
   // 故显式认可 id==='default'（defaultRoot 存在即视为合法 active）。
-  // 与 gitOperate 同口径动态补当前生效根：全新注册表（从未 addWorkspace，
-  // 磁盘无 defaultRoot）时也能把「默认工作区」设为 active——否则 UI 上
-  // 自动工作区的「设为当前」在首次使用恒 not-found。
-  if (!reg.defaultRoot) {
+  // 与 gitOperate/listWorkspaces 同口径恒重新解析当前生效根：磁盘 defaultRoot 是
+  // addWorkspace 时的陈旧快照，跨进程换项目后仍认它为合法 active 会误导前端。
+  {
     const gr = await resolveGitRoot()
     reg.defaultRoot = gr ? gr.root : null
   }
@@ -369,9 +368,12 @@ export async function gitOperate({ root, action, args = {} } = {}) {
   //    故先 `git -C <root> rev-parse --show-toplevel` 归一后再比对。
   //    clone 例外：其 root 只是「目标父目录」锚点，本身无需已登记。
   const reg = readRegistry()
-  // defaultRoot 动态补当前生效根（磁盘注册表只在手动登记时才写 default 条目；
-  // 与 listWorkspaces 同口径，保证「默认工作区」恒可操作，否则所有写操作 unknown-workspace）
-  if (!reg.defaultRoot) {
+  // defaultRoot 动态补当前生效根（与 listWorkspaces 同口径：恒重新解析，绝不用
+  // 磁盘陈旧快照）。磁盘 defaultRoot 只在 addWorkspace 时落盘一次快照，跨进程
+  // 换项目 / YXSPEC_GIT_ROOT 变更后即陈旧——若「仅当磁盘缺省才重解析」，写操作
+  // 会拿陈旧根比对 → 新的默认根 unknown-workspace，而 listWorkspaces 却显示正常
+  // （前端看着默认工作区是活动的，fetch/pull/push 全失败）。
+  {
     const gr = await resolveGitRoot()
     reg.defaultRoot = gr ? gr.root : null
   }
