@@ -137,6 +137,8 @@ const StageDetail: React.FC<{
   /** 打开产物抽屉 */
   onSelectStage?: (token: string) => void;
 }> = ({ token, status, stages, onClose, onJump, onSelectStage }) => {
+  // dialog 标题 id：浮层命名（aria-labelledby）+ 打开时焦点移入关闭按钮（键盘可直接关）
+  const dialogTitleId = `stage-detail-title-${token}`;
   const m = STAGE_TABLE[token];
   const n = status.artifacts_count ?? status.artifacts?.length ?? 0;
   const pair = pairStageOf(token);
@@ -149,6 +151,7 @@ const StageDetail: React.FC<{
       onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
       role="dialog"
       aria-modal="true"
+      aria-labelledby={dialogTitleId}
     >
       <div
         className="w-full max-w-md bg-white rounded-xl border border-zinc-200 shadow-xl p-4 space-y-3"
@@ -158,7 +161,7 @@ const StageDetail: React.FC<{
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold font-mono text-zinc-800">{token}</span>
+              <span id={dialogTitleId} className="text-sm font-bold font-mono text-zinc-800">{token}</span>
               <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-xs font-mono">{m.aspice}</span>
               {status.status === 'completed' && <span className="text-sage-600 text-xs">已完成</span>}
             </div>
@@ -166,6 +169,7 @@ const StageDetail: React.FC<{
           </div>
           <button
             type="button"
+            autoFocus
             onClick={onClose}
             className="shrink-0 p-1 rounded text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-all active:scale-[0.96]"
             aria-label="关闭"
