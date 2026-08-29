@@ -21,7 +21,7 @@
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { GATEWAY_BASE, fetchTask, pollTask, fetchResumeInfo, type TaskStatus } from './ipc';
+import { GATEWAY_BASE, fetchTask, pollTask, fetchResumeInfo, setActiveGitWorkspace, addGitWorkspace, removeGitWorkspace, type TaskStatus } from './ipc';
 
 /** 构造简化 Response（fetchTask 只用 status/ok/json，不需要真 Response） */
 function okResponse(body: unknown, status = 200) {
@@ -258,5 +258,54 @@ describe('fetchResumeInfo', () => {
     const res = await fetchResumeInfo('p');
 
     expect(res).toBeNull();
+  });
+});
+
+describe('git 工作区写操作响应归一（网关 mutation 返回 { ok, activeId, list:[] } → GitWorkspaceList）', () => {
+  // 网关 /api/git/workspaces/active 等 mutation 端点返回 `{ ok, activeId, list: Workspace[] }`
+  // （list 为数组），而 GET 端点返回 `{ version, defaultRoot, activeId, workspaces: [...] }`。
+  // store 只认 GitWorkspaceList（list.workspaces.find / set({ workspaces })），若不归一，
+  // 「设为当前/移除/添加」workspaces 为 undefined → TypeError、列表滞留旧值。
+  const mutResp = {
+    ok: true,
+    activeId: 'default',
+    list: [
+      { id: 'default', name: 'default', root: 'D:/Work/01_Projects/Aima_X1_BCM', source: 'auto' },
+      { id: 'ws-1', name: 'b', root: 'D:/Work/b', source: 'manual' },
+    ],
+  };
+
+  it('setActiveGitWorkspace：mutation 响应归一为 { workspaces:[] }，store 可直接消费', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse(mutResp));
+
+    const list = await setActiveGitWorkspace('default');
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${GATEWAY_BASE}/api/git/workspaces/active`,
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ id: 'default' }) }),
+    );
+    expect(list.activeId).toBe('default');
+    expect(Array.isArray(list.workspaces)).toBe(true);
+    expect(list.workspaces).toHaveLength(2);
+    expect(list.workspaces[0]).toEqual({ id: 'default', name: 'default', root: 'D:/Work/01_Projects/Aima_X1_BCM', source: 'auto' });
+  });
+
+  it('addGitWorkspace / removeGitWorkspace：缺 activeId → null，workspaces 取 list', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ ok: true, already: false, workspace: { id: 'ws-2', name: 'c', root: 'D:/Work/c', source: 'manual' }, list: mutResp.list }));
+
+    const added = await addGitWorkspace('D:/Work/c');
+    expect(added.activeId).toBeNull();
+    expect(added.workspaces).toHaveLength(2);
+
+    mockFetch.mockResolvedValueOnce(okResponse({ ok: true, list: [mutResp.list[0]] }));
+
+    const removed = await removeGitWorkspace('ws-1');
+    expect(removed.workspaces).toHaveLength(1);
+    expect(removed.workspaces[0].id).toBe('default');
+  });
+
+  it('mutation 响应缺 list / 非数组 → 抛错（不静默吞掉坏响应）', async () => {
+    mockFetch.mockResolvedValueOnce(okResponse({ ok: true, activeId: null }));
+    await expect(setActiveGitWorkspace('default')).rejects.toThrow(/缺少工作区列表/);
   });
 });

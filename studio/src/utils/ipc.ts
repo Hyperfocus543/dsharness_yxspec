@@ -1515,6 +1515,28 @@ export async function fetchGitWorkspaces(): Promise<GitWorkspaceList | null> {
 }
 
 /**
+ * 网关 /api/git/workspaces 写操作响应 → GitWorkspaceList。
+ * mutation 端点返回形态是 `{ ok, already?, workspace?, activeId?, list: Workspace[] }`
+ * （list 为数组），而 GET /api/git/workspaces 返回 `{ version, defaultRoot, activeId,
+ * workspaces: [...] }`。store 只认 GitWorkspaceList（`list.workspaces.find(...)` /
+ * `set({ workspaces: list.workspaces })`），若把 mutation 响应原样 cast，workspaces 是
+ * undefined → 「设为当前/移除/添加」全部 TypeError、本地列表滞留旧值。此归一化把
+ * mutation 响应对齐 GET 契约；activeId 缺省（add/remove 网关不带）→ null，
+ * store 回落列表首项（default 自动条目在前）。
+ */
+function toGitWorkspaceList(data: unknown): GitWorkspaceList | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (!Array.isArray(d.list)) return null;
+  return {
+    version: typeof d.version === 'number' ? d.version : 1,
+    defaultRoot: typeof d.defaultRoot === 'string' ? d.defaultRoot : null,
+    activeId: typeof d.activeId === 'string' ? d.activeId : null,
+    workspaces: d.list as GitWorkspace[],
+  };
+}
+
+/**
  * POST /api/git/workspaces：手动登记一个工作区根目录；失败抛错（由 store/调用方推 error toast）。
  */
 export async function addGitWorkspace(root: string): Promise<GitWorkspaceList> {
@@ -1524,13 +1546,15 @@ export async function addGitWorkspace(root: string): Promise<GitWorkspaceList> {
     body: JSON.stringify({ root }),
   });
   const data = (await res.json().catch(() => null)) as
-    | GitWorkspaceList
+    | Record<string, unknown>
     | { error?: string; message?: string }
     | null;
   if (!res.ok) {
     throw new Error((data as { message?: string; error?: string })?.message || `HTTP ${res.status}`);
   }
-  return data as GitWorkspaceList;
+  const list = toGitWorkspaceList(data);
+  if (!list) throw new Error('网关响应缺少工作区列表');
+  return list;
 }
 
 /**
@@ -1542,13 +1566,15 @@ export async function removeGitWorkspace(id: string): Promise<GitWorkspaceList> 
     headers: { Accept: 'application/json' },
   });
   const data = (await res.json().catch(() => null)) as
-    | GitWorkspaceList
+    | Record<string, unknown>
     | { error?: string; message?: string }
     | null;
   if (!res.ok) {
     throw new Error((data as { message?: string; error?: string })?.message || `HTTP ${res.status}`);
   }
-  return data as GitWorkspaceList;
+  const list = toGitWorkspaceList(data);
+  if (!list) throw new Error('网关响应缺少工作区列表');
+  return list;
 }
 
 /**
@@ -1561,13 +1587,15 @@ export async function setActiveGitWorkspace(id: string): Promise<GitWorkspaceLis
     body: JSON.stringify({ id }),
   });
   const data = (await res.json().catch(() => null)) as
-    | GitWorkspaceList
+    | Record<string, unknown>
     | { error?: string; message?: string }
     | null;
   if (!res.ok) {
     throw new Error((data as { message?: string; error?: string })?.message || `HTTP ${res.status}`);
   }
-  return data as GitWorkspaceList;
+  const list = toGitWorkspaceList(data);
+  if (!list) throw new Error('网关响应缺少工作区列表');
+  return list;
 }
 
 /**
