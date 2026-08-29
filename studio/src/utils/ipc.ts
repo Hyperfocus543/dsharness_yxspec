@@ -1248,6 +1248,9 @@ export interface GitStatus {
   recentCommits?: GitRecentCommit[];
   /** 仓库 tag 清单（普通/注解/远端 tag，按创建时间倒序，最多 20 个；无 → 空数组） */
   tags?: string[];
+  /** 指向当前 HEAD 的 tag（普通 tag = objectname / 注解 tag = peeled commit 对齐；
+   *  前端 tag 列表据此把 HEAD tag 高亮 + 标「HEAD」角标；无 → 空数组） */
+  headTags?: string[];
 }
 
 /** 单条阶段留痕记录（阶段↔commit↔tag 对照）。 */

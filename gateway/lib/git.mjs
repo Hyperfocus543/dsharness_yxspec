@@ -195,6 +195,7 @@ export async function getStatus() {
     behind: 0,
     recentCommits: [],
     tags: [],
+    headTags: [],
     root: null,
     error: null,
   }
@@ -213,8 +214,9 @@ export async function getStatus() {
     // 富格式 log：hash + unix 时间戳 + subject（与 getStageRecords 同款 format，
     // 便于前端展示提交时间；subject 不换行，message 兜底取 subject）
     runGit(['log', '-5', '--date=unix', '--format=%h%x09%ct%x09%s'], { cwd }),
-    // tag 清单：refname:short（普通/注解/远端 tag 均显示，按字母序）
-    runGit(['for-each-ref', 'refs/tags', '--sort=-creatordate', '--format=%(refname:short)'], { cwd }),
+    // tag 清单：refname:short + 指向 commit（普通=objectname / 注解=peeled），
+    // 按创建时间倒序（普通/注解/远端 tag 均显示，最多 20 个）
+    runGit(['for-each-ref', 'refs/tags', '--sort=-creatordate', '--format=%(refname:short)%09%(objectname)%09%(*objectname)'], { cwd }),
   ])
   if (!statusR.ok) {
     base.error =
@@ -279,8 +281,26 @@ export async function getStatus() {
     }
   }
   base.tags = tagR.ok
-    ? tagR.stdout.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20)
+    ? tagR.stdout.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20).map((l) => l.split('\t')[0])
     : []
+  // headTags：指向当前 HEAD 的 tag（普通 tag = objectname；注解 tag = peeled 指向 commit）。
+  // 前端 tag 列表据此把 HEAD tag 高亮 + 标「HEAD」角标（git 语义：tag 指向 HEAD = 当前检查点）。
+  // for-each-ref 只输出 20 行上限（base.tags 同款切片），HEAD 恰在切掉的部分时返回空数组——
+  // 只影响高亮展示，不影响 tags 全量可见，属可接受降级。
+  const headTags = new Set()
+  if (tagR.ok && headR.ok) {
+    const headShort = headR.stdout.trim() // rev-parse --short 输出短 hash（唯一前缀）
+    if (headShort) {
+      for (const l of tagR.stdout.split('\n')) {
+        if (!l.trim()) continue
+        const [name, obj, peeled] = l.split('\t')
+        const commitHash = peeled || obj // 轻量 tag：obj=commit；注解 tag：peeled=commit
+        // 短 hash 是完整 hash 的确定唯一前缀（rev-parse --short 保证唯一性）→ 前缀比对
+        if (commitHash && commitHash.startsWith(headShort) && name) headTags.add(name)
+      }
+    }
+  }
+  base.headTags = [...headTags].slice(0, 20)
   base.gitAvailable = true
   base.error = null
   return base

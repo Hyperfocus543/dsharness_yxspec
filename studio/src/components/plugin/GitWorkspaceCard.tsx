@@ -270,6 +270,9 @@ export const GitWorkspaceCard: React.FC = () => {
   // 阶段留痕：当前选中 stage（默认第一个有命令的阶段）+ 确认中的回滚目标
   const stageTokens = Object.keys(STAGE_TABLE) as StageToken[];
   const [traceStage, setTraceStage] = React.useState<string>(stageTokens[0] ?? '');
+  // 阶段留痕「仅 tag 检查点」过滤：只显示打上 tag 的留痕（里程碑节点），
+  // 过滤是纯前端展示态（不重拉接口），tag 缺失的留痕不参与勾选
+  const [traceTagOnly, setTraceTagOnly] = React.useState(false);
   const [confirmTarget, setConfirmTarget] = React.useState<GitStageTrace | null>(null);
   const [rollbackReason, setRollbackReason] = React.useState('');
   // 回滚留档提交中：禁用确认按钮 + 显示进度，防重复提交
@@ -329,6 +332,9 @@ export const GitWorkspaceCard: React.FC = () => {
     return m;
   }, [recent]);
   const tags = status?.tags ?? [];
+  // 指向当前 HEAD 的 tag（后端 /api/git/status 已解析；老网关无此字段 → 空数组，
+  // tag 列表退化为全中性色展示，HEAD 高亮静默缺失不报错）
+  const headTags = status?.headTags ?? [];
   // git 连接态：status 存在时 loadError 必为 false（loadError 会在上方 early-return 成
   // EmptyState，见 403-425 行），因此本分支实际只有两态 —— git 可用（sage 绿）或
   // git 不可用（amber 警告：网关在线但工作区非 git 仓库 / 未装 git）。
@@ -472,22 +478,34 @@ export const GitWorkspaceCard: React.FC = () => {
             )}
           </div>
         )}
-        {/* tag 清单：普通/注解/远端 tag 徽标流（git for-each-ref refs/tags，最多 20 个） */}
+        {/* tag 清单：普通/注解/远端 tag 徽标流（git for-each-ref refs/tags，最多 20 个）。
+            指向当前 HEAD 的 tag（headTags）实心 emerald + 「HEAD」角标 —— git 语义上
+            tag 指向 HEAD = 当前检查点，一眼区分「历史里程碑」与「当前节点」。 */}
         {tags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
             <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400 shrink-0">
               <Icon name={I.tag} size={11} />
               {tags.length} 个 tag
             </span>
-            {tags.map((t) => (
-              <span
-                key={t}
-                className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
-                title={t}
-              >
-                {t}
-              </span>
-            ))}
+            {tags.map((t) => {
+              const isHead = headTags.includes(t);
+              return (
+                <span
+                  key={t}
+                  className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border ${
+                    isHead
+                      ? 'bg-emerald-600 text-white border-emerald-700'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200/70'
+                  }`}
+                  title={isHead ? `指向当前 HEAD（当前检查点）` : t}
+                >
+                  {isHead && (
+                    <span className="text-[9px] font-bold uppercase tracking-wide opacity-90">HEAD</span>
+                  )}
+                  {t}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
@@ -610,6 +628,31 @@ export const GitWorkspaceCard: React.FC = () => {
           <span className="text-[10px] text-zinc-400">
             {commitsLoading || !commits ? '加载中…' : commitsError ? '加载失败' : `${commits.length} 条留痕`}
           </span>
+          {/* 仅 tag 检查点：只看打上 tag 的留痕（里程碑节点）。
+              计数随开关实时变化；无 tag 留痕时开关灰置并给原因。 */}
+          <button
+            type="button"
+            onClick={() => setTraceTagOnly((v) => !v)}
+            disabled={commitsLoading || !commits || commitsError || (commits ?? []).every((c) => !c.tag)}
+            aria-pressed={traceTagOnly}
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
+              traceTagOnly
+                ? 'bg-emerald-600 text-white border-emerald-700'
+                : 'bg-white border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
+            }`}
+            title={
+              !commits || commits.length === 0
+                ? '该阶段暂无留痕'
+                : commits.every((c) => !c.tag)
+                  ? '该阶段留痕均未打 tag：过滤无结果'
+                  : traceTagOnly
+                    ? '当前只显示打上 tag 的留痕（点击恢复全部）'
+                    : `只看打上 tag 的留痕（${commits.filter((c) => c.tag).length} 条）`
+            }
+          >
+            <Icon name={I.tag} size={10} weight={traceTagOnly ? 'fill' : undefined} />
+            仅 tag 检查点
+          </button>
         </div>
         {/* commits 初始为 null（未加载）≠ 空数组（已确认无留痕）：null 归入骨架屏，
             避免首帧误闪「该阶段暂无留痕记录 + 0 条留痕」，再切到加载态。 */}
@@ -633,22 +676,32 @@ export const GitWorkspaceCard: React.FC = () => {
             </button>
           </div>
         ) : commits && commits.length > 0 ? (
-          <div className="space-y-1">
-            {commits.map((rec) => (
-              <TraceRow
-                key={`${rec.seq}-${rec.commit}`}
-                rec={rec}
-                stage={traceStage}
-                confirming={confirmTarget?.seq === rec.seq && confirmTarget?.commit === rec.commit}
-                onRollback={() => {
-                  setConfirmTarget(rec);
-                  setRollbackReason('');
-                }}
-                prevCommit={gitTraceBase(commits, rec.seq)}
-                gitOk={gitOk}
-              />
-            ))}
-          </div>
+          // 仅 tag 检查点：过滤后可能为空（全部无 tag 的留痕被滤掉）→ 给专属空态，
+          // 不误报「该阶段暂无留痕记录」（原始数据仍在，只是被当前视图滤掉了）
+          traceTagOnly && !commits.some((c) => c.tag) ? (
+            <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-amber-200 rounded-lg">
+              该阶段留痕均未打 tag，无检查点可显示（切换「仅 tag 检查点」查看全部）
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {commits
+                .filter((rec) => !traceTagOnly || rec.tag)
+                .map((rec) => (
+                  <TraceRow
+                    key={`${rec.seq}-${rec.commit}`}
+                    rec={rec}
+                    stage={traceStage}
+                    confirming={confirmTarget?.seq === rec.seq && confirmTarget?.commit === rec.commit}
+                    onRollback={() => {
+                      setConfirmTarget(rec);
+                      setRollbackReason('');
+                    }}
+                    prevCommit={gitTraceBase(commits, rec.seq)}
+                    gitOk={gitOk}
+                  />
+                ))}
+            </div>
+          )
         ) : (
           <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
             {traceStage ? `该阶段暂无留痕记录（${traceStage}）` : '未选择阶段'}
