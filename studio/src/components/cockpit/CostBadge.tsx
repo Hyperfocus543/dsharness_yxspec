@@ -23,6 +23,8 @@ import {
   badgeLabel,
   weekSummary,
   trendSuffix,
+  weekEstCost,
+  estCostLabel,
   type TrendDirection,
 } from '../../utils/costBadge';
 
@@ -65,8 +67,15 @@ export const CostBadge: React.FC<{ onOpen: () => void }> = ({ onOpen }) => {
   const total = weekTotal(trend!, hasTokenData);
   const dir = weekTrend(trend!, hasTokenData);
   const st = DIR_STYLE[dir];
+  // 费用估算（¥）：单价已配置才给金额；否则 null（角标只显示 token/次数 + 趋势，
+  // 不把「未配置单价」误显示成 ¥0.0000）。单价已配置但账本无 token（hasTokenData=false）
+  // → token 列恒 0，估算为 ¥0.0000 —— 这种"有价无 token"的账本与 CostDashboard 同口径
+  // （estCost 算出 0），角标如实展示 0 元，tooltip 有「未统计 usage」补充说明。
+  const estCost = weekEstCost(trend, costData?.pricePerMillion);
+  const estShown = estCost != null; // 单价已配置（金额可算），不论是否 0 元
   const tooltip = [
     weekSummary(total, hasTokenData),
+    estShown ? `近 7 天费用估算：${estCostLabel(estCost)}` : '未配置 token 单价：不估算金额',
     trendSuffix(dir),
     '',
     '近 7 天每日（最新在前）：',
@@ -88,6 +97,17 @@ export const CostBadge: React.FC<{ onOpen: () => void }> = ({ onOpen }) => {
     >
       <Icon name={I.coins} size={13} className="text-zinc-400 group-hover:text-emerald-600 transition-colors" />
       <span className="tabular-nums text-zinc-600">{badgeLabel(total, hasTokenData)}</span>
+      {/* 费用估算迷你 chip：单价已配置才显示（金额可算）。w 是文案基准宽度，视觉上
+          金额与 token 合计对齐。老网关无 trend → 整角标不渲染，自然不显示金额。 */}
+      {estShown && (
+        <span
+          className="shrink-0 inline-flex items-center gap-0.5 pl-1.5 border-l border-zinc-200 text-[10px] text-emerald-700 tabular-nums font-medium"
+          title={`近 7 天费用估算（单价 输入 ¥${costData?.pricePerMillion.input}/M · 输出 ¥${costData?.pricePerMillion.output}/M）`}
+        >
+          <Icon name={I.wallet} size={10} weight="fill" />
+          {estCostLabel(estCost)}
+        </span>
+      )}
       <span className={`text-[10px] leading-none ${st.cls}`}>{st.arrow}</span>
       {/* hover 明细浮层：近 7 天每日口径（新→旧），与角标紧凑成一体 */}
       <span className="absolute top-full right-0 mt-1 z-30 rounded-lg border border-zinc-200 bg-white shadow-lg p-2.5 space-y-1 opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity">

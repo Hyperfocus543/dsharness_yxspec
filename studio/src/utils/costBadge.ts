@@ -64,3 +64,33 @@ export const TREND_LABEL: Record<TrendDirection, string> = {
 export function trendSuffix(trend: TrendDirection): string {
   return TREND_LABEL[trend];
 }
+
+/** 单价（每百万 token，¥）——与网关 /api/cost pricePerMillion 同形。 */
+export interface CostPrice {
+  input: number;
+  output: number;
+}
+
+/**
+ * 近 7 天费用估算：逐日 prompt/completion token 按各自单价折算求和（¥）。
+ * 单价均 ≤ 0（未配置）→ null（角标不渲染金额，避免误估 0 元）。
+ * 口径与 CostDashboard estCost 严格一致：token / 1_000_000 × 单价。
+ */
+export function weekEstCost(
+  trend: CostTrendDay[] | null | undefined,
+  price: CostPrice | null | undefined,
+): number | null {
+  if (!price || (price.input <= 0 && price.output <= 0)) return null;
+  let cost = 0;
+  for (const d of trend ?? []) {
+    cost += (d.promptTokens / 1_000_000) * price.input;
+    cost += (d.completionTokens / 1_000_000) * price.output;
+  }
+  return Number.isFinite(cost) ? cost : null;
+}
+
+/** 金额文案：¥ + toFixed(4)（与 CostDashboard 估算金额同格式）；null → 不渲染占位。 */
+export function estCostLabel(cost: number | null | undefined): string {
+  if (cost == null || !Number.isFinite(cost)) return '—';
+  return `¥${cost.toFixed(4)}`;
+}

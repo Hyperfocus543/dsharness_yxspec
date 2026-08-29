@@ -13,6 +13,8 @@ import {
   badgeLabel,
   weekSummary,
   trendSuffix,
+  weekEstCost,
+  estCostLabel,
 } from './costBadge';
 import type { CostTrendDay } from './ipc';
 
@@ -123,5 +125,38 @@ describe('badgeLabel / weekSummary（角标文案）', () => {
     expect(trendSuffix('up')).toBe('↑ 较前段走高');
     expect(trendSuffix('down')).toBe('↓ 较前段回落');
     expect(trendSuffix('flat')).toBe('＝ 与前段持平');
+  });
+});
+
+describe('weekEstCost / estCostLabel（近 7 天费用估算）', () => {
+  const PRICE = { input: 10, output: 30 }; // ¥/百万 token（与 CostDashboard 口径一致）
+
+  it('按 prompt/completion 各自单价折算求和', () => {
+    const trend = [
+      day({ promptTokens: 1_000_000, completionTokens: 500_000 }),
+      day({ promptTokens: 0, completionTokens: 500_000 }),
+    ];
+    // 输入：1M → ¥10；输出：1M → ¥30；合计 ¥40
+    expect(weekEstCost(trend, PRICE)).toBe(40);
+  });
+
+  it('空 trend / 空单价 → null（不估算）', () => {
+    expect(weekEstCost([], PRICE)).toBe(0); // 无记录日 → 0 元（非 null：单价已配置）
+    expect(weekEstCost(undefined, PRICE)).toBe(0);
+    expect(weekEstCost([day({ promptTokens: 1 }), day({ completionTokens: 1 })], null)).toBeNull();
+    expect(weekEstCost([day({ promptTokens: 1 })], undefined)).toBeNull();
+    expect(weekEstCost([day({ promptTokens: 1 })], { input: 0, output: 0 })).toBeNull();
+  });
+
+  it('无 token 数据（账本无 usage）→ 0 元（token 列恒 0，与 CostDashboard 同口径）', () => {
+    const trend = [day({ runs: 5 }), day({ runs: 3 })];
+    expect(weekEstCost(trend, PRICE)).toBe(0);
+  });
+
+  it('金额文案：¥ + toFixed(4)；null → —', () => {
+    expect(estCostLabel(40)).toBe('¥40.0000');
+    expect(estCostLabel(0)).toBe('¥0.0000');
+    expect(estCostLabel(null)).toBe('—');
+    expect(estCostLabel(undefined)).toBe('—');
   });
 });
