@@ -110,6 +110,10 @@ const STAGE_UPSTREAM = {
 //   引号串是「被执行命令」而非 `echo "git status"` 那种惰性文本，须先解引用再
 //   按真实命令内容判定——否则 git 词落在引号内会被裸分支引号过滤当作文本放过，
 //   `sh -c "git reset --hard"` 整段漏过守卫（实测漏网）。
+// 命令替换（`$(…)` / 反引号）：在子 shell 真实执行，**双引号包裹也执行**（bash
+//   双引号只保留 `$`、`` ` ``、`\`、`!` 的特殊性，不关闭 `$()`/反引号替换）——
+//   `echo "x $(git push)"` 的 push 真实运行，此前被误当惰性文本整段漏过守卫；
+//   只有单引号区间内才是惰性文本（单引号原样保留一切字符，含 `$()`/反引号）。
 // =============================================================================
 
 /** 只读/安全 git 子命令（无 flag 争议，直接放行）。 */
@@ -437,8 +441,12 @@ function splitCommandSegments(command) {
 /** 从段内提取 shell 命令替换/子 shell 的命令文本（`$(…)` / `…` / `(…)`），
  *  供递归扫描。命令替换（`$(git push)` / `` `git push` ``）在子 shell 里真实执行，
  *  破坏性 git 命令不能因外层是只读 git 调用就被放过；子 shell `(…)` 同理。
- *  引号包裹区间的 `$(…)` 是惰性文本（`echo "x $(git push)"` 不执行），不提取——
- *  引号由 splitCommandSegments 原样留在段文本里，本函数只从非引号区提取。
+ *  惰性文本判定只认**单引号**区间：bash 双引号不关闭 `$()`/反引号替换（`echo "x
+ *  $(git push)"` 的 push 真实执行），此前把双引号也当惰性 → 破坏性 git 整段漏过
+ *  守卫。双引号内的 `$(…)`/`` `…` `` 须照常提取；单引号区间（`'$(git push)'` /
+ *  `'git log `git pull`'`）才是惰性文本，不提取。
+ *  注意：双引号区间整体不被本函数处理——双引号内的 git 调用仍由裸分支引号过滤
+ *  拦截（`echo "git push"` 不执行），只有其中的命令替换/子 shell 提升为真实命令。
  * @param {string} seg 段文本（splitCommandSegments 已把引号区间作为字面内容保留）
  * @returns {string[]} 要递归扫描的命令文本片段（无 → []）
  */
@@ -448,12 +456,46 @@ function extractionTexts(seg) {
   let m
   while ((m = re.exec(seg))) {
     const body = m[1] ?? m[2] ?? m[3]
-    // 提取体不能落在引号区间内：引号区间内的 `$(…)`/`(…)` 是文本不执行。
-    const head = seg.slice(0, m.index)
-    if (((head.match(/"/g) || []).length % 2 === 1) || ((head.match(/'/g) || []).length % 2 === 1)) continue
+    // 引号区间判定用字符流状态机（quoteStateAt），不用「数引号对数」：
+    // 双引号内的撇号（`echo "don't $(git push)"`）会被数成单引号开区间 →
+    // 命令替换被误当惰性文本漏过守卫。状态机按 bash 引号规则逐字符走：
+    //   单引号内一切字面（含 $()/反引号/子 shell，不提取）；
+    //   双引号内反斜杠转义下一个字符（$ ` " \ 换行），撇号是普通字符；
+    //   未引号区反斜杠转义下一个字符（可能是引号本身）。
+    const { single, double } = quoteStateAt(seg, m.index)
+    if (single) continue
+    // 分支差异：命令替换 `$()`/反引号 在 bash 双引号内**真实执行**（双引号不关闭
+    // 替换）→ 提取；子 shell `(…)` 在双引号内是字面文本（`echo "run (git reset
+    // --hard)"` 不执行）→ 仅未引号区才提取。
+    if (m[1] == null && m[2] == null && double) continue
     if (body && body.trim()) out.push(body)
   }
   return out
+}
+
+/** 段内 pos 位置的引号状态（单/双引号是否开启），按 bash 引号规则逐字符扫描。
+ *  反斜杠处理：单引号内反斜杠是字面字符（`'\''` 靠闭开引号，不靠转义），
+ *  不进转义；双引号内 `\` 转义 `$`/`` ` ``/`"`/`\`/换行；未引号区 `\` 转义下一字符
+ *  （可能是引号本身，如 `\"` 不开启双引号）。@returns {{single: boolean, double: boolean}} */
+function quoteStateAt(seg, pos) {
+  let single = false
+  let double = false
+  for (let i = 0; i < pos; i++) {
+    const ch = seg[i]
+    if (single) {
+      if (ch === "'") single = false
+      continue
+    }
+    if (double) {
+      if (ch === '\\') { i += 1; continue }
+      if (ch === '"') double = false
+      continue
+    }
+    if (ch === '\\') { i += 1; continue }
+    if (ch === "'") single = true
+    else if (ch === '"') double = true
+  }
+  return { single, double }
 }
 
 /** 递归扫描命令文本：shell 执行包装器（sh -c "…" / cmd /c "…" / powershell -Command "…"）

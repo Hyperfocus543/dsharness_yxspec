@@ -218,6 +218,10 @@ console.log('== 5) 段内命令替换/子 shell 解引用（漏网修复）==')
 // 命令替换（$(…) / `…`）与子 shell（(…)）在子进程真实执行——破坏性 git 藏在
 // 只读 git 调用的命令替换里会整段漏过守卫（外层段首个子命令是只读 status，
 // 旧实现只扫外层一个 git 调用）。须递归解引用后按独立命令判定。
+// 2026-08-30 追加：**双引号包裹的命令替换也真实执行**（bash 双引号只保留 $ / 反引号 /
+// \ / ! 的特殊性，不关闭 $() 与反引号替换）——`echo "x $(git push)"` 的 push 真实运行，
+// 此前被误当惰性文本整段漏过守卫（旧 §6 放行：漏网）；现须拒绝。只有单引号区间
+// （原样保留一切字符）才是惰性文本，仍在 §6 放行。
 for (const cmd of [
   // 只读命令替换 → 解引用后仍只读，放行（不误伤）
   'git status $(git status)',
@@ -232,6 +236,19 @@ for (const cmd of [
   'git status (git push origin main)',
   'git status $(git clean -fd)',
   'git log `git checkout -f main`',
+  // 2026-08-30 追加：双引号内的命令替换/反引号同样真实执行 → 须拒绝
+  'echo "git status $(git push)"',
+  'echo "built $(git push origin main)"',
+  'echo "x $(git clean -fd)"',
+  'echo "x `git push origin main`"',
+  'echo "head $(git reset --hard)"',
+  // 2026-08-30 追加：双引号内的撇号是普通字符，不能把它当单引号开区间——
+  // `echo "don't $(git push)"` 的 push 仍真实执行，须拒绝（数引号对数会漏网）
+  'echo "don\'t $(git push origin main)"',
+  'echo "it\'s $(git reset --hard)"',
+  'echo "couldn\'t $(git clean -fd)"',
+  // 双引号内反斜杠转义（\" 不关闭双引号）→ 引号状态仍是双引号 → 命令替换仍执行
+  'echo "a \\" b $(git push origin main)"',
 ]) {
   const deny = gitGuardDeny(cmd)
   if (cmd.includes('$(git status)') || cmd.includes('$(echo hi)')) {
@@ -242,11 +259,15 @@ for (const cmd of [
 }
 
 console.log('== 6) 惰性文本引号内命令替换不误伤 ==')
-// 引号包裹区间内的 $(…) 是字面文本（echo 输出），不执行 → 放行
+// 惰性文本只认**单引号**区间（bash 单引号原样保留一切字符，含 $()/反引号/子 shell，
+// 命令内容不执行）；双引号内的 `(…)` 子 shell 也是字面文本（双引号不把括号当语法），
+// 但双引号内的 `$(…)`/反引号命令替换真实执行，已在 §5 拒绝。
 for (const cmd of [
-  'echo "git status $(git push)"',
   "echo 'git log `git pull`'",
+  "echo 'git status $(git push)'",
+  "echo '$(git reset --hard)'",
   'echo "run (git reset --hard)"',
+  'echo "print (git push origin main)"',
 ]) {
   assert(`放行惰性文本: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
