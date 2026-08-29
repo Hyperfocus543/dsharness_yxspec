@@ -305,6 +305,13 @@ export async function setActiveWorkspace({ id } = {}) {
   const reg = readRegistry()
   // default 根只在 listWorkspaces 内存合并（磁盘注册表不落 default 条目），
   // 故显式认可 id==='default'（defaultRoot 存在即视为合法 active）。
+  // 与 gitOperate 同口径动态补当前生效根：全新注册表（从未 addWorkspace，
+  // 磁盘无 defaultRoot）时也能把「默认工作区」设为 active——否则 UI 上
+  // 自动工作区的「设为当前」在首次使用恒 not-found。
+  if (!reg.defaultRoot) {
+    const gr = await resolveGitRoot()
+    reg.defaultRoot = gr ? gr.root : null
+  }
   const inList = reg.workspaces.some((w) => w.id === id)
   const isDefault = id === 'default' && reg.defaultRoot
   if (!inList && !isDefault) return { ok: false, error: 'not-found' }

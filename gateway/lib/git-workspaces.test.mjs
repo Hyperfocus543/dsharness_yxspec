@@ -10,13 +10,15 @@
 //   - canRemoveWorkspace：default/auto 拒绝，不存在 not-found，手动条放行
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, setActiveWorkspace } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -183,4 +185,29 @@ test('canRemoveWorkspace：default/auto 拒绝、不存在 not-found、手动放
   assert.equal(canRemoveWorkspace('ws-1', { id: 'ws-1', source: 'auto' }).error, 'cannot-remove-default')
   assert.equal(canRemoveWorkspace('nope', undefined).error, 'not-found')
   assert.deepEqual(canRemoveWorkspace('ws-1', { id: 'ws-1', source: 'manual' }), { ok: true })
+})
+
+// 全新注册表（磁盘无 defaultRoot，未 addWorkspace）下，自动默认工作区的
+// 「设为当前」也应可用 —— gitOperate 已动态补当前生效根，setActiveWorkspace
+// 曾只读磁盘 defaultRoot 而恒 not-found。用临时注册表 + cwd 指向 git 仓库探测。
+test('setActiveWorkspace：全新注册表（磁盘无 defaultRoot）id=default 可激活', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-setactive-'))
+  const regPath = join(dir, 'registry.json')
+  writeFileSync(regPath, JSON.stringify({ version: 1, defaultRoot: null, activeId: null, workspaces: [] }))
+  const prevWs = process.env.YXSPEC_GIT_WORKSPACES
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_WORKSPACES = regPath
+  process.env.YXSPEC_GIT_AUDIT = join(dir, 'audit.jsonl')
+  try {
+    const r = await setActiveWorkspace({ id: 'default' })
+    assert.equal(r.ok, true, `id=default 应可激活，实际: ${JSON.stringify(r)}`)
+    assert.equal(r.activeId, 'default')
+    assert.ok(Array.isArray(r.list))
+  } finally {
+    if (prevWs === undefined) delete process.env.YXSPEC_GIT_WORKSPACES
+    else process.env.YXSPEC_GIT_WORKSPACES = prevWs
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
