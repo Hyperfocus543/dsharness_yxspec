@@ -37,6 +37,12 @@ for (const cmd of [
   'git diff --cached',
   'git rev-parse --show-toplevel',
   'git for-each-ref refs/tags --format=%(refname:short)',
+  // 2026-08-30 追加：git-workspaces.mjs 落后摘要用 `git rev-list --count HEAD..@{u}`、
+  // `git show-ref --tags` 同为只读 ref 枚举——此前不在只读白名单 → 默认拒绝误伤，
+  // 网关自身命令被自家守卫拦截（自洽性回归）。
+  'git rev-list --count HEAD..@{u}',
+  'git show-ref --tags',
+  'git show-ref --head',
   'git branch',
   'git branch -a',
   'git branch --merged main',

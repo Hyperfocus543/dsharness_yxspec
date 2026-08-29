@@ -121,7 +121,7 @@ const GIT_READONLY_SUBS = new Set([
   'status', 'diff', 'log', 'show', 'rev-parse', 'blame',
   'ls-files', 'ls-tree', 'describe', 'shortlog', 'whatchanged',
   'grep', 'count-objects', 'help', 'version',
-  'for-each-ref', // 只读 ref 枚举（git.mjs 拉 tag 清单用 `git for-each-ref refs/tags …`）
+  'for-each-ref', 'rev-list', 'show-ref', // 只读 ref 枚举（git.mjs 拉 tag 清单用 `git for-each-ref`；git-workspaces.mjs 落后摘要用 `git rev-list --count HEAD..@{u}`；show-ref 同属只读 ref 枚举）
 ]);
 
 /** 需要带值 token 的 git 全局选项（-C/-c 双 token 形态占 2 个，`=` 连写形态占 1 个）。
