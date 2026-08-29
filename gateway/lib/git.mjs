@@ -303,19 +303,33 @@ export async function getStatus(root) {
   if (first.startsWith('## ')) {
     const headPart = first.slice(3)
     const bracket = headPart.match(/\[([^\]]*)\]$/)
-    // 游离 HEAD 的领先/落后在括号里（`## HEAD (no branch, ahead 1)`），不在方括号，
-    // 故 branchInfo 先把方括号剥掉，游离头部/括号区间由 parsePorcelainHead 处理。
+    // 游离 HEAD 的领先/落后在括号里（`## HEAD (no branch, ahead 1, behind 2)`），不在
+    // 方括号——若只解析方括号，游离态的领先/落后恒读不到（前端分支框显示「领先 0 · 落后 0」，
+    // 而实际游离 HEAD 也可能落后远端若干提交）。branchInfo 先剥方括号，游离头部/括号区间
+    // 交给 parsePorcelainHead；ahead/behind 分别从「方括号 + 游离括号」两处提取，两处都没有
+    // 才回落 0。
     const branchInfo = bracket ? headPart.slice(0, bracket.index).trim() : headPart.trim()
     const parsed = parsePorcelainHead(branchInfo)
     base.branch = parsed.branch
     base.detached = parsed.detached
+    let ahead = 0
+    let behind = 0
     if (bracket) {
       const inner = bracket[1]
-      const ahead = inner.match(/ahead (\d+)/)
-      const behind = inner.match(/behind (\d+)/)
-      base.ahead = ahead ? Number(ahead[1]) : 0
-      base.behind = behind ? Number(behind[1]) : 0
+      const a = inner.match(/ahead (\d+)/)
+      const b = inner.match(/behind (\d+)/)
+      ahead = a ? Number(a[1]) : ahead
+      behind = b ? Number(b[1]) : behind
     }
+    if (parsed.detached) {
+      // 游离括号内同样可能带 ahead/behind（`## HEAD (no branch, ahead 1)`）
+      const a = headPart.match(/ahead (\d+)/)
+      const b = headPart.match(/behind (\d+)/)
+      if (a) ahead = Number(a[1])
+      if (b) behind = Number(b[1])
+    }
+    base.ahead = ahead
+    base.behind = behind
   }
   // 其余行 = 脏文件（porcelain v1：前两字符 XY，X=暂存态，Y=工作区态；untracked = ??）
   for (const line of lines.slice(1)) {
