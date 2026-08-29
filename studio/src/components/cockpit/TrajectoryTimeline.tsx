@@ -23,6 +23,7 @@ import { I } from '../ui/icons';
 import { useGitStore } from '../../store/gitStore';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
 import { traceBaseAt } from '../../utils/gitTrace';
+import { filterTraceRows } from '../../utils/traceFilters';
 import { TrajectoryPanel } from './TrajectoryPanel';
 
 /** 毫秒 → 人类可读耗时（与项目时间约定一致：h m / m s / s） */
@@ -203,6 +204,10 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [onlyFailed, setOnlyFailed] = React.useState(false);
+  const [onlyTagged, setOnlyTagged] = React.useState(false);
+  // 文本过滤（输入即过滤）：阶段/命令/状态/commit/tag 子串。与「仅失败」「仅检查点」
+  // 开关同层叠加（作用轨迹行），阶段小计 chips 不受影响（计数恒为全量）。
+  const [textQuery, setTextQuery] = React.useState('');
   // 展开的阶段详情（点击行内阶段徽标 → 打开单阶段面板）
   const [openStage, setOpenStage] = React.useState<string | null>(null);
   // 活动工作区 root：commit diff 按活动 root 拉（多工作区不串根）
@@ -262,6 +267,16 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
     );
   }, [data]);
 
+  // 过滤计数（零新接口，纯派生）：检查点 / 失败 总数供「仅检查点」「仅失败」开关
+  // 的角标（勾选态显示当前过滤子集数，未勾选显示可过滤总数）。
+  // 必须在条件 return 之前调用（hooks 顺序恒定）：data 为 null（加载/错误态）
+  // 时按空数据算 → 0，不渲染进 UI；加载完成后才是真实计数。
+  const checkpointTotal = React.useMemo(() => (data?.rows ?? []).filter((r) => r.tag).length, [data]);
+  const failureTotal = React.useMemo(
+    () => (data?.rows ?? []).filter((r) => r.status === 'failed' || r.status === 'blocked' || r.rolled_back).length,
+    [data],
+  );
+
   if (loading) {
     return (
       <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2" role="status" aria-busy="true" aria-label="正在加载全部轨迹">
@@ -294,9 +309,11 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
     );
   }
 
-  const rows = onlyFailed
-    ? data.rows.filter((r) => r.status === 'failed' || r.status === 'blocked' || r.rolled_back)
-    : data.rows;
+  const rows = filterTraceRows(data.rows, {
+    onlyFailed,
+    onlyTagged,
+    text: textQuery,
+  });
 
   return (
     <div className="space-y-3">
@@ -309,20 +326,59 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
           <span className="text-sm font-bold text-zinc-800">全部轨迹</span>
           <span className="text-xs text-zinc-400">（{data.total} 次执行）</span>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+          {/* 文本过滤：阶段/命令/状态/commit/tag 子串（输入即过滤）。选中任一开关时
+              计数角标显示当前子集数（如 3/12），未选中显示可过滤总数。 */}
+          <div className="relative inline-flex items-center">
+            <Icon name={I.search} size={11} className="text-zinc-400 absolute left-1.5 pointer-events-none" />
+            <input
+              type="search"
+              value={textQuery}
+              onChange={(e) => setTextQuery(e.target.value)}
+              placeholder="过滤阶段 / commit / tag…"
+              aria-label="过滤轨迹：阶段 / 命令 / 状态 / commit / tag"
+              className="text-xs border border-zinc-300 rounded-md pl-6 pr-1.5 py-1 bg-white text-zinc-600 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 w-40"
+            />
+          </div>
           <button
             type="button"
-            onClick={() => setOnlyFailed(!onlyFailed)}
+            onClick={() => {
+              setOnlyTagged(!onlyTagged);
+              setOnlyFailed(false); // 互斥：勾检查点时收起仅失败，避免双过滤叠加语义混乱
+            }}
+            aria-pressed={onlyTagged}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-all active:scale-[0.98] ${
+              onlyTagged
+                ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                : 'bg-white border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
+            }`}
+            title="只看打上 yxspec 阶段收尾 tag 的执行（git 里程碑检查点）；与「仅失败」互斥"
+          >
+            <Icon name={I.tag} size={11} />
+            仅检查点
+            <span className={`tabular-nums ${onlyTagged ? 'text-emerald-600' : 'text-zinc-400'}`}>
+              {onlyTagged ? rows.length : checkpointTotal}/{data.total}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOnlyFailed(!onlyFailed);
+              setOnlyTagged(false); // 互斥：勾仅失败时收起检查点
+            }}
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-all active:scale-[0.98] ${
               onlyFailed
                 ? 'bg-red-50 border-red-300 text-red-700'
                 : 'bg-white border-zinc-200 text-zinc-500 hover:border-red-300 hover:text-red-600'
             }`}
-            title="只看失败/打回/已回滚（排障聚焦）"
+            title="只看失败/打回/已回滚（排障聚焦）；与「仅检查点」互斥"
             aria-pressed={onlyFailed}
           >
             <Icon name={I.warn} size={11} />
             仅失败
+            <span className={`tabular-nums ${onlyFailed ? 'text-red-500' : 'text-zinc-400'}`}>
+              {onlyFailed ? rows.length : failureTotal}/{data.total}
+            </span>
           </button>
           <button
             type="button"
@@ -360,7 +416,15 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
       {/* 时间轴：所有轨迹按时间倒序一条流 */}
       {rows.length === 0 ? (
         <div className="text-xs text-zinc-400 py-6 text-center border border-dashed border-zinc-200 rounded-lg">
-          {onlyFailed ? '没有失败/打回的轨迹' : '还没有任何阶段执行记录'}
+          {textQuery.trim()
+            ? '没有匹配该过滤条件的轨迹'
+            : onlyTagged
+              ? data.gitAvailable
+                ? '没有打 tag 的检查点（阶段正常收尾才打 yxspec tag；git 可用时为空）'
+                : 'git 不可用：无 commit/tag 关联，无法展示检查点'
+              : onlyFailed
+                ? '没有失败/打回的轨迹'
+                : '还没有任何阶段执行记录'}
         </div>
       ) : (
         <div className="space-y-1">
