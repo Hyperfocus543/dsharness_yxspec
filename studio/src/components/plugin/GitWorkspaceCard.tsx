@@ -379,6 +379,15 @@ export const GitWorkspaceCard: React.FC = () => {
   // push 二次确认（区块 C）：点 push 展开红边确认框
   const [pushConfirmOpen, setPushConfirmOpen] = React.useState(false);
 
+  // 活动工作区切换 → 分支缓存属于旧 root：清空并收起分支面板，
+  // 否则在 A 展开过的分支列表会在切到 B 后原样展示，选中 checkout 会串根执行到 B。
+  React.useEffect(() => {
+    setBranches([]);
+    setBranchPanelOpen(false);
+    setBranchValue('');
+    setBranchError(null);
+  }, [activeWorkspace?.id]);
+
   // 工作区校验（前端只做空串拦截，路径存在性由网关校验）
   const validateWsPath = (p: string): string | null =>
     !p || !p.trim() ? '请输入本地仓库路径' : null;
