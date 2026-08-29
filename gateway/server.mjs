@@ -35,6 +35,7 @@ import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
 import { getStatus, getStageRecords, getFileDiff, recordRollback } from './lib/git.mjs'
+import { listWorkspaces, addWorkspace, removeWorkspace, setActiveWorkspace, gitOperate } from './lib/git-workspaces.mjs'
 import { selfIterationOverview } from './lib/self-iteration.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
@@ -720,21 +721,23 @@ const server = createServer(async (req, res) => {
     }
 
     // ---------- git 工作区状态 API（lib/git.mjs，只读 git + 追加审计 JSONL） ----------
-    // 红线：网关只"只读执行 git + 追加审计 JSONL"，绝不执行 git reset / git push。
-    // git 不可用（不是仓库/未装 git）时三个端点都优雅降级：仍返回 200，
-    // 带 gitAvailable:false + error 字段，前端按 gitAvailable 渲染降级态。
-    //   GET /api/git/status               → 工作区状态（分支/HEAD/脏文件/领先落后/最近提交）
-    //   GET /api/git/commits?stage=<token> → 阶段 ↔ commit ↔ tag 对照表（轨迹 × git log）
-    //   GET /api/git/diff?path=&staged=    → 单个脏文件 diff 预览（hover 用，只读）
+    // 红线：本模块做「只读 git + 追加审计 JSONL」；写操作（clone/fetch/pull/push/
+    // checkout）集中在 lib/git-workspaces.mjs，全部走白名单 + 审计 JSONL，push 需
+    // 前端显式触发。git 不可用（不是仓库/未装 git）时三个端点都优雅降级：仍返回
+    // 200，带 gitAvailable:false + error 字段，前端按 gitAvailable 渲染降级态。
+    // 只读端点支持 ?root= 显式工作区（resolveGitRoot 的 root 参数，source:'explicit'）：
+    //   GET /api/git/status?root=               → 工作区状态（分支/HEAD/脏文件/领先落后/最近提交）
+    //   GET /api/git/commits?stage=<token>&root= → 阶段 ↔ commit ↔ tag 对照表（轨迹 × git log）
+    //   GET /api/git/diff?path=&staged=&root=    → 单个脏文件 diff 预览（hover 用，只读）
     //   POST /api/git/rollback {stage,seq,commit,reason} → 回滚审计留档（只追加 JSONL，不执行 git）
     if (req.method === 'GET' && path === '/api/git/status') {
-      return json(res, 200, await getStatus())
+      return json(res, 200, await getStatus(url.searchParams.get('root') || undefined))
     }
 
     if (req.method === 'GET' && path === '/api/git/commits') {
       const stage = url.searchParams.get('stage') ?? ''
       if (!stage) return json(res, 400, { ok: false, error: 'stage required' })
-      return json(res, 200, await getStageRecords(stage))
+      return json(res, 200, await getStageRecords(stage, url.searchParams.get('root') || undefined))
     }
 
     // 单个脏文件 diff 预览（hover 用）：GET /api/git/diff?path=<repo-relative>&staged=1
@@ -750,7 +753,7 @@ const server = createServer(async (req, res) => {
       const to = url.searchParams.get('to')
       const rangeMode = typeof from === 'string' && from.trim() !== '' && /^[0-9a-fA-F]{4,40}$/.test(from)
       if (!p && !rangeMode) return json(res, 400, { ok: false, error: 'path required' })
-      return json(res, 200, await getFileDiff({ path: p, staged, from, to }))
+      return json(res, 200, await getFileDiff({ path: p, staged, from, to, root: url.searchParams.get('root') || undefined }))
     }
 
     if (req.method === 'POST' && path === '/api/git/rollback') {
@@ -773,6 +776,44 @@ const server = createServer(async (req, res) => {
       }
       console.log(`[gateway] /api/git/rollback: stage=${r.stage} seq=${r.seq}${r.already ? '（幂等命中）' : ''}`)
       return json(res, 200, r)
+    }
+
+    // ---------- git 工作区管理 API（lib/git-workspaces.mjs，写操作走白名单 + 审计 JSONL） ----------
+    // 注册表：git-workspaces.json（defaultRoot 自动合并 + manual 手动登记）；activeId 前端切换。
+    // git 写操作（clone/fetch/pull/push/checkout/branch）集中在本模块，root 必须是已登记
+    // 工作区（或 defaultRoot），每次写操作追加审计 JSONL，push 需前端显式触发。
+    // 注意顺序：/api/git/workspaces/active 须在 /api/git/workspaces/:id 之前匹配。
+    //   GET    /api/git/workspaces                      → 工作区列表（含 defaultRoot 自动条目）
+    //   POST   /api/git/workspaces {root}               → 登记工作区（校验 git 仓库）
+    //   PUT    /api/git/workspaces/active {id}          → 切换 active 工作区
+    //   DELETE /api/git/workspaces/:id                  → 移除手动登记工作区（default/auto 拒绝）
+    //   POST   /api/git/operate {root,action,args}      → git 写操作白名单（clone/fetch/pull/push/checkout/branch）
+    if (req.method === 'GET' && path === '/api/git/workspaces') {
+      return json(res, 200, await listWorkspaces())
+    }
+
+    if (req.method === 'PUT' && path === '/api/git/workspaces/active') {
+      const body = await readBody(req)
+      const r = await setActiveWorkspace({ id: body?.id })
+      return json(res, r.ok ? 200 : (r.error === 'not-found' ? 404 : 400), r)
+    }
+
+    if (req.method === 'POST' && path === '/api/git/workspaces') {
+      const body = await readBody(req)
+      const r = await addWorkspace({ root: body?.root })
+      return json(res, r.ok ? 200 : (r.error === 'not-a-git-repo' ? 422 : 400), r)
+    }
+
+    const wsDel = path.match(/^\/api\/git\/workspaces\/([^/]+)$/)
+    if (req.method === 'DELETE' && wsDel) {
+      const r = await removeWorkspace({ id: decodeURIComponent(wsDel[1]) })
+      return json(res, r.ok ? 200 : (r.error === 'cannot-remove-default' ? 409 : r.error === 'not-found' ? 404 : 400), r)
+    }
+
+    if (req.method === 'POST' && path === '/api/git/operate') {
+      const body = await readBody(req)
+      const r = await gitOperate(body || {})
+      return json(res, r.ok ? 200 : (r.error === 'unknown-action' || r.error === 'bad-request' ? 400 : 422), r)
     }
 
     // 执行成本统计：GET /api/cost

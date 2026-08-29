@@ -18,7 +18,7 @@ import { EmptyState, GitDiffPreview, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
-import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace } from '../../utils/ipc';
+import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
@@ -267,6 +267,14 @@ export const GitWorkspaceCard: React.FC = () => {
   const rollback = useGitStore((s) => s.rollback);
   const pushToast = useToastStore((s) => s.push);
 
+  // 多工作区管理：注册表 / 活动工作区 / 写操作态（gitOperate、workspaces 增删共用）
+  const workspaces = useGitStore((s) => s.workspaces);
+  const activeWorkspace = useGitStore((s) => s.activeWorkspace);
+  const workspaceLoading = useGitStore((s) => s.workspaceLoading);
+  const workspaceError = useGitStore((s) => s.workspaceError);
+  const operating = useGitStore((s) => s.operating);
+  const refreshWorkspaces = useGitStore((s) => s.refreshWorkspaces);
+
   // 阶段留痕：当前选中 stage（默认第一个有命令的阶段）+ 确认中的回滚目标
   const stageTokens = Object.keys(STAGE_TABLE) as StageToken[];
   const [traceStage, setTraceStage] = React.useState<string>(stageTokens[0] ?? '');
@@ -298,16 +306,25 @@ export const GitWorkspaceCard: React.FC = () => {
     if (changed) confirmRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [confirmTarget]);
 
-  // 挂载即拉一次工作区状态；初始 stage 对应轨迹也一起拉
+  // 挂载即拉一次工作区注册表 + 工作区状态；初始 stage 对应轨迹也一起拉。
+  // 注意：工作区列表可能先于 status 就绪（网关同时提供两路由），即便 status 未就绪
+  // 也先渲染工作区区块，让用户能添加/切换工作区——故这里不等 status。
   React.useEffect(() => {
+    refreshWorkspaces().catch(() => {});
     refreshStatus().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshStatus]);
+  }, [refreshWorkspaces, refreshStatus]);
 
   React.useEffect(() => {
     loadCommits(traceStage).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceStage, loadCommits]);
+
+  // 挂载时拉一次工作区注册表（多工作区视图）
+  React.useEffect(() => {
+    refreshWorkspaces().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshWorkspaces]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
   // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）。
@@ -340,6 +357,148 @@ export const GitWorkspaceCard: React.FC = () => {
   // git 不可用（amber 警告：网关在线但工作区非 git 仓库 / 未装 git）。
   // 旧实现把 !gitOk 渲染成「未连接」灰标，与下方红色 error 条语义冲突（网关明明连着）。
   const gitOk = status?.gitAvailable === true;
+
+  // ---- 工作区管理 UI 状态 ----
+  // 添加表单（区块 B）：默认收起，点「+ 添加」展开；form 内 tab 决定本地/远程
+  const [wsFormOpen, setWsFormOpen] = React.useState(false);
+  const [wsMode, setWsMode] = React.useState<'local' | 'remote'>('local');
+  const [wsPath, setWsPath] = React.useState('');
+  const [wsUrl, setWsUrl] = React.useState('');
+  const [wsDir, setWsDir] = React.useState('');
+  const [wsFormError, setWsFormError] = React.useState<string | null>(null);
+  // 分支切换（区块 C）：首次展开时拉 branches，选中后 checkout
+  const [branchPanelOpen, setBranchPanelOpen] = React.useState(false);
+  const [branches, setBranches] = React.useState<string[]>([]);
+  const [branchLoading, setBranchLoading] = React.useState(false);
+  const [branchValue, setBranchValue] = React.useState('');
+  const [branchError, setBranchError] = React.useState<string | null>(null);
+  // push 二次确认（区块 C）：点 push 展开红边确认框
+  const [pushConfirmOpen, setPushConfirmOpen] = React.useState(false);
+
+  // 工作区校验（前端只做空串拦截，路径存在性由网关校验）
+  const validateWsPath = (p: string): string | null =>
+    !p || !p.trim() ? '请输入本地仓库路径' : null;
+
+  // 添加本地工作区：登记后刷新注册表 + 状态（status 按新 active 的 root 重拉）
+  const doAddLocal = async () => {
+    const err = validateWsPath(wsPath);
+    if (err) {
+      setWsFormError(err);
+      return;
+    }
+    setWsFormError(null);
+    try {
+      await useGitStore.getState().addWorkspace(wsPath.trim());
+      pushToast('success', '已添加工作区');
+      setWsPath('');
+      setWsFormOpen(false);
+      await refreshWorkspaces().catch(() => {});
+      await refreshStatus().catch(() => {});
+    } catch (e: any) {
+      setWsFormError(e?.message || '添加失败');
+      pushToast('error', `添加工作区失败：${e?.message || e}`);
+    }
+  };
+
+  // 克隆远程仓库：gitOperate clone → 网关自动登记 → 成功后刷新注册表 + 状态
+  const doCloneRemote = async () => {
+    const err = !wsUrl || !wsUrl.trim() ? '请输入远程仓库地址' : null;
+    if (err) {
+      setWsFormError(err);
+      return;
+    }
+    setWsFormError(null);
+    try {
+      await useGitStore.getState().gitOperate({
+        root: wsDir.trim() || activeWorkspace?.root || '',
+        action: 'clone',
+        args: { url: wsUrl.trim(), dir: wsDir.trim() || activeWorkspace?.root || '' },
+      });
+      pushToast('success', '克隆完成，已登记工作区');
+      setWsUrl('');
+      setWsDir('');
+      setWsFormOpen(false);
+      await refreshWorkspaces().catch(() => {});
+      await refreshStatus().catch(() => {});
+    } catch (e: any) {
+      setWsFormError(e?.message || '克隆失败');
+      pushToast('error', `克隆失败：${e?.message || e}`);
+    }
+  };
+
+  const handleAddSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (operating) return;
+    void (wsMode === 'local' ? doAddLocal() : doCloneRemote());
+  };
+
+  const doSetActive = async (id: string) => {
+    try {
+      await useGitStore.getState().setActive(id);
+      pushToast('success', '已切换当前工作区');
+    } catch (e: any) {
+      pushToast('error', `切换工作区失败：${e?.message || e}`);
+    }
+  };
+
+  const doRemove = async (id: string) => {
+    try {
+      await useGitStore.getState().removeWorkspace(id);
+      pushToast('success', '已移除工作区');
+    } catch (e: any) {
+      pushToast('error', `移除工作区失败：${e?.message || e}`);
+    }
+  };
+
+  // 分支列表：首次打开面板才拉（gitOperate branch 只读列分支，不做切换）
+  const loadBranches = async () => {
+    if (branches.length > 0 || !activeWorkspace) return;
+    setBranchLoading(true);
+    setBranchError(null);
+    try {
+      const res = await useGitStore.getState().gitOperate({
+        root: activeWorkspace.root,
+        action: 'branch',
+      });
+      setBranches(res?.branches ?? []);
+    } catch (e: any) {
+      setBranchError(e?.message || '分支列表加载失败');
+    } finally {
+      setBranchLoading(false);
+    }
+  };
+
+  const doCheckout = async (branch: string) => {
+    if (!activeWorkspace || !branch) return;
+    setBranchError(null);
+    try {
+      await useGitStore.getState().gitOperate({
+        root: activeWorkspace.root,
+        action: 'checkout',
+        args: { branch },
+      });
+      pushToast('success', `已切换到分支 ${branch}`);
+      setBranchValue('');
+      setBranchPanelOpen(false);
+      await refreshStatus().catch(() => {});
+    } catch (e: any) {
+      setBranchError(e?.message || `切换分支失败：${branch}`);
+    }
+  };
+
+  // git 写操作（fetch/pull/push）：成功后刷新状态，失败推 error toast
+  const doGitOperate = async (action: 'fetch' | 'pull' | 'push') => {
+    if (!activeWorkspace) return;
+    const label = action === 'fetch' ? '拉取远端' : action === 'pull' ? '同步远端' : '推送本地提交';
+    try {
+      await useGitStore.getState().gitOperate({ root: activeWorkspace.root, action });
+      pushToast('success', action === 'fetch' ? '已拉取远端更新' : action === 'pull' ? '已同步远端更新' : '已推送到远端');
+      if (action === 'push') setPushConfirmOpen(false);
+      await refreshStatus().catch(() => {});
+    } catch (e: any) {
+      pushToast('error', `${label}失败：${e?.message || e}`);
+    }
+  };
 
   const doRollback = async () => {
     if (!confirmTarget || rolling) return;
@@ -392,6 +551,12 @@ export const GitWorkspaceCard: React.FC = () => {
               hint="网关未响应或未启动（/api/git/status 拿不到状态）。确认 server.mjs 运行中，再点下方重试。"
             />
           </div>
+          {/* git 不可用且未登记任何工作区 → 引导添加本地/远程仓库（指向区块 A 的「添加」按钮） */}
+          {!workspaceLoading && !workspaceError && workspaces.length === 0 && (
+            <div className="text-xs text-zinc-400 text-center border border-dashed border-amber-200 rounded-lg px-3 py-2.5">
+              可点击右上角「+ 添加」，添加本地 git 仓库路径，或粘贴远程仓库地址克隆
+            </div>
+          )}
           <div className="flex justify-center">
             <button
               type="button"
@@ -439,6 +604,319 @@ export const GitWorkspaceCard: React.FC = () => {
           {loading ? '刷新中…' : '刷新'}
         </button>
       </div>
+
+      {/* 区块 A：工作区列表（多仓库）——顶部连接卡之前。
+          展示网关注册表（auto 自动透传默认根 / manual 手动登记），可切换当前活动工作区、
+          移除手动登记；git 不可用但已有工作区时仍渲染本区块（登记表不依赖 git 可用）。 */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <SectionLabel>工作区</SectionLabel>
+          <button
+            type="button"
+            onClick={() => setWsFormOpen((v) => !v)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+            aria-expanded={wsFormOpen}
+            title={wsFormOpen ? '收起添加表单' : '添加本地仓库或克隆远程仓库'}
+          >
+            <Icon name={I.plus} size={11} />
+            添加
+          </button>
+        </div>
+
+        {workspaceLoading ? (
+          <div className="space-y-1" role="status" aria-busy="true" aria-label="正在加载工作区列表">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-9 bg-zinc-100 rounded-lg animate-pulse" />
+            ))}
+          </div>
+        ) : workspaceError ? (
+          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-red-200 rounded-lg space-y-1.5">
+            <div>工作区列表加载失败（{workspaceError}）</div>
+            <button
+              type="button"
+              onClick={() => refreshWorkspaces().catch(() => {})}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+            >
+              <Icon name={I.refresh} size={11} />
+              重试
+            </button>
+          </div>
+        ) : workspaces.length === 0 ? (
+          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
+            暂无工作区，点右上角「+ 添加」登记本地仓库或克隆远程仓库
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {workspaces.map((w: GitWorkspace) => {
+              const isActive = activeWorkspace?.id === w.id;
+              const isAuto = w.source === 'auto';
+              return (
+                <div
+                  key={w.id}
+                  className={`group flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-all ${
+                    isActive ? 'border-emerald-400 bg-emerald-50/40' : 'border-zinc-200 bg-white hover:border-zinc-300'
+                  }`}
+                >
+                  <span
+                    className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-medium ${
+                      isAuto ? 'bg-sage-100 text-sage-700' : 'bg-zinc-100 text-zinc-600'
+                    }`}
+                    title={isAuto ? '自动透传默认根目录' : '手动登记的工作区'}
+                  >
+                    {isAuto ? '自动' : '手动'}
+                  </span>
+                  <span className="shrink-0 text-zinc-600">
+                    <Icon name={I.branch} size={11} />
+                  </span>
+                  <span className="font-mono text-zinc-700 truncate min-w-0" title={w.root}>
+                    {w.name}
+                  </span>
+                  <span className="ml-auto shrink-0 text-[10px] text-zinc-400 truncate max-w-48" title={w.root}>
+                    {w.root}
+                  </span>
+                  {/* hover 操作：非当前行「设为当前」；手动行「移除」；自动当前行标「默认」 */}
+                  {!isActive && (
+                    <button
+                      type="button"
+                      onClick={() => doSetActive(w.id)}
+                      disabled={operating}
+                      className="hidden sm:inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed group-hover:inline-flex"
+                      title="切换为当前工作区"
+                    >
+                      设为当前
+                    </button>
+                  )}
+                  {!isAuto && (
+                    <button
+                      type="button"
+                      onClick={() => doRemove(w.id)}
+                      disabled={operating}
+                      className="hidden sm:inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed group-hover:inline-flex"
+                      title="移除该工作区（不做删除，仅取消登记）"
+                    >
+                      <Icon name={I.trash} size={11} />
+                      移除
+                    </button>
+                  )}
+                  {isActive && isAuto && (
+                    <span
+                      className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-mono border border-emerald-200/70"
+                      title="当前工作区（自动透传默认根，不可移除）"
+                    >
+                      当前 · 默认
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 区块 B：添加工作区表单（默认收起；复用回滚确认面板的 form 范式，zinc 中性边） */}
+        {wsFormOpen && (
+          <form
+            onSubmit={handleAddSubmit}
+            className="rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 space-y-2 animate-fade-in-up"
+          >
+            {/* 模式 tabs：本地路径 / 远程仓库 */}
+            <div className="flex gap-1">
+              {(
+                [
+                  ['local', '本地路径'],
+                  ['remote', '远程仓库'],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    setWsMode(mode);
+                    setWsFormError(null);
+                  }}
+                  className={`px-2 py-0.5 rounded text-xs border transition-all active:scale-[0.98] ${
+                    wsMode === mode
+                      ? 'bg-emerald-600 text-white border-emerald-700'
+                      : 'bg-white border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {wsMode === 'local' ? (
+              <input
+                autoFocus
+                className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                value={wsPath}
+                onChange={(e) => setWsPath(e.target.value)}
+                placeholder="D:/Work/01_Projects/..."
+                title="本地 git 仓库根目录"
+              />
+            ) : (
+              <div className="space-y-1.5">
+                <input
+                  autoFocus
+                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                  value={wsUrl}
+                  onChange={(e) => setWsUrl(e.target.value)}
+                  placeholder="https://github.com/..."
+                  title="远程仓库地址（https 或 git@）"
+                />
+                <input
+                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                  value={wsDir}
+                  onChange={(e) => setWsDir(e.target.value)}
+                  placeholder="D:/Work/04_Temp/"
+                  title="克隆目标目录（默认当前活动工作区根目录）"
+                />
+              </div>
+            )}
+
+            {wsFormError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{wsFormError}</div>}
+
+            <div className="flex gap-1.5">
+              <button
+                type="submit"
+                disabled={operating}
+                className="px-2.5 py-1 rounded text-xs bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {operating ? '执行中…' : wsMode === 'local' ? '添加' : '克隆'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWsFormOpen(false);
+                  setWsFormError(null);
+                }}
+                disabled={operating}
+                className="px-2.5 py-1 rounded text-xs bg-white border border-zinc-300 text-zinc-600 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                取消
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* 区块 C：当前工作区操作按钮行（git 可用且有活动工作区才显示） */}
+      {gitOk && activeWorkspace && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-50 text-emerald-700 font-mono border border-emerald-200/70 truncate max-w-56" title={activeWorkspace.root}>
+              {activeWorkspace.name}
+            </span>
+            <span className="text-[10px] text-zinc-400 truncate max-w-48" title={activeWorkspace.root}>
+              {activeWorkspace.root}
+            </span>
+            <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => doGitOperate('fetch')}
+                disabled={operating}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                title="从远端拉取更新（不合并）"
+              >
+                <Icon name={I.download} size={11} />
+                {operating ? '执行中…' : 'fetch'}
+              </button>
+              <button
+                type="button"
+                onClick={() => doGitOperate('pull')}
+                disabled={operating}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                title="拉取并合并远端更新"
+              >
+                <Icon name={I.swap} size={11} />
+                {operating ? '执行中…' : 'pull'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPushConfirmOpen((v) => !v)}
+                disabled={operating}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                title="推送本地提交到远端"
+              >
+                <Icon name={I.upload} size={11} />
+                {operating ? '执行中…' : 'push'}
+              </button>
+              <div className="relative inline-flex items-center">
+                <Icon name={I.branch} size={11} className="text-zinc-400 absolute left-1.5 pointer-events-none" />
+                <select
+                  className="text-xs border border-zinc-300 rounded-md pl-6 pr-1.5 py-0.5 bg-white text-zinc-600"
+                  value={branchValue}
+                  onChange={async (e) => {
+                    setBranchValue(e.target.value);
+                    if (e.target.value === '__open__') {
+                      setBranchPanelOpen(true);
+                      await loadBranches().catch(() => {});
+                      return;
+                    }
+                    if (e.target.value) await doCheckout(e.target.value);
+                  }}
+                  disabled={operating || branchLoading}
+                  title="切换分支（选择后执行 checkout）"
+                >
+                  {branchLoading ? (
+                    <option value="" disabled>
+                      加载分支中…
+                    </option>
+                  ) : branchPanelOpen ? (
+                    <>
+                      <option value="" disabled>
+                        选择分支…
+                      </option>
+                      {branches.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </>
+                  ) : (
+                    <option value="__open__">切换分支</option>
+                  )}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* push 二次确认：点 push 展开（红边 form，回车即可确认） */}
+          {pushConfirmOpen && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (operating) return;
+                void doGitOperate('push');
+              }}
+              className="rounded-lg border border-red-200 bg-red-50/40 p-2.5 space-y-2 animate-fade-in-up"
+            >
+              <div className="text-xs text-zinc-700">
+                确认 push 到远端？此操作将发布本地提交。
+                <span className="block text-[11px] text-zinc-400 mt-1">仓库：{activeWorkspace.root}</span>
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  type="submit"
+                  disabled={operating}
+                  className="px-2.5 py-1 rounded text-xs bg-red-600 text-white hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {operating ? '执行中…' : '确认 push'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPushConfirmOpen(false)}
+                  disabled={operating}
+                  className="px-2.5 py-1 rounded text-xs bg-white border border-zinc-300 text-zinc-600 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  取消
+                </button>
+              </div>
+            </form>
+          )}
+
+          {branchError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{branchError}</div>}
+        </div>
+      )}
 
       {/* 顶部：分支 + HEAD + 连接状态徽标 */}
       <div className="rounded-lg border border-zinc-200 bg-white p-3 space-y-1.5">

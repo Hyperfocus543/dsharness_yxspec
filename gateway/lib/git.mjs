@@ -7,6 +7,8 @@
 //   3. recordRollback(...)    — 回滚审计留档（JSONL 尾部追加，只留档不执行 git reset）
 //
 // gitRoot 解析规则（优先级从高到低）：
+//   0. resolveGitRoot(root) 显式 root 参数（HTTP 层 ?root= 工作区切换）—— 只校验
+//      该路径，成功 → source:'explicit'；失败 → 返回 null（不回落 env/默认根）
 //   1. process.env.YXSPEC_GIT_ROOT            —— 显式指定要查看的 git 仓库根
 //   2. process.env.YXSPEC_PROJECT_ROOT || PROJECT_ROOT（lib/paths.mjs 缺省）
 //   3. git rev-parse --show-toplevel 兜底     —— 在 cwd 下找仓库根
@@ -18,8 +20,9 @@
 //     （空格、引号、$、;、| 等）也不会被解释，彻底杜绝命令注入。
 //   - 严禁用 shell 拼接字符串去 exec（如 `exec('git status ' + userInput)`）。
 //
-// 红线：本模块只做「只读 git + 追加审计 JSONL」；绝不执行 git reset / git push /
-// 其他破坏性操作。所有函数优雅处理 git 不可用（不是仓库/没装 git → 返回
+// 红线：本模块做「只读 git + 追加审计 JSONL」；写操作（clone/fetch/pull/push/
+// checkout）集中在 lib/git-workspaces.mjs，全部走白名单 + 审计 JSONL，push 需
+// 前端显式触发。所有函数优雅处理 git 不可用（不是仓库/没装 git → 返回
 // gitAvailable:false + error 字段，不抛异常；路由照常 200，前端按 gitAvailable 降级）。
 // =============================================================================
 import { execFile } from 'node:child_process'
@@ -126,10 +129,20 @@ function porcelainStatus(xy) {
 }
 
 /**
- * 解析 git 仓库根（候选优先级见文件头）。全部失败 → null。
+ * 解析 git 仓库根（候选优先级见文件头）。
+ * 可选 root 参数：显式指定要查看的工作区 —— 只校验该路径，
+ * `git -C <root> rev-parse --show-toplevel` 成功 → { root: <真实根>, source: 'explicit' }；
+ * 失败 → null（不回落 env/默认根，与 git.mjs 只读职责一致，跨工作区不会误串根）。
+ * 无 root → 走 env/YXSPEC_PROJECT_ROOT/cwd 兜底候选链。
+ * @param {string} [root] 显式工作区根
  * @returns {Promise<{root: string, source: string} | null>}
  */
-export async function resolveGitRoot() {
+export async function resolveGitRoot(root) {
+  if (typeof root === 'string' && root.trim()) {
+    const r = await runGit(['-C', root.trim(), 'rev-parse', '--show-toplevel'])
+    if (r.ok && r.stdout.trim()) return { root: r.stdout.trim(), source: 'explicit' }
+    return null
+  }
   const candidates = []
   if (process.env.YXSPEC_GIT_ROOT) candidates.push({ root: process.env.YXSPEC_GIT_ROOT, source: 'YXSPEC_GIT_ROOT' })
   const projectRoot = process.env.YXSPEC_PROJECT_ROOT || PROJECT_ROOT
@@ -182,9 +195,10 @@ export async function loadGitIndex(cwd) {
  * GET /api/git/status 数据源。
  * 返回工作区 git 全貌：分支 / HEAD / 脏文件 / 领先落后 / 最近 5 条提交。
  * git 不可用（不是仓库/未安装）→ gitAvailable:false + error，不抛。
+ * @param {string} [root] 显式工作区根（缺省走 env/默认根解析）
  * @returns {Promise<object>}
  */
-export async function getStatus() {
+export async function getStatus(root) {
   const base = {
     gitAvailable: false,
     branch: null,
@@ -199,9 +213,9 @@ export async function getStatus() {
     root: null,
     error: null,
   }
-  const gr = await resolveGitRoot()
+  const gr = await resolveGitRoot(root)
   if (!gr) {
-    base.error = 'not-a-git-repo：未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库）'
+    base.error = 'not-a-git-repo：未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库，或传 root 参数）'
     return base
   }
   base.root = gr.root
@@ -331,9 +345,10 @@ function toStageRow(r) {
  * git 不可用 → gitAvailable:false，记录照常返回（commit/tag 为 null）。
  * 未知阶段 → { ok:false, error:'unknown-stage' }。
  * @param {string} stage 阶段 token
+ * @param {string} [root] 显式工作区根（缺省走 env/默认根解析）
  * @returns {Promise<object>} { ok, stage, gitAvailable, root, total, records, error? }
  */
-export async function getStageRecords(stage) {
+export async function getStageRecords(stage, root) {
   if (!isStageToken(stage)) return { ok: false, error: 'unknown-stage', stage }
   const records = listTrajectories(stage) // 复用 trajectory.mjs 解析（含 rollback 合并、时间升序）
   const out = {
@@ -345,9 +360,9 @@ export async function getStageRecords(stage) {
     records: [],
     error: null,
   }
-  const gr = await resolveGitRoot()
+  const gr = await resolveGitRoot(root)
   if (!gr) {
-    out.error = 'not-a-git-repo：未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库）'
+    out.error = 'not-a-git-repo：未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库，或传 root 参数）'
     out.records = records.map((r) => toStageRow(r))
     return out
   }
@@ -391,7 +406,7 @@ export async function getStageRecords(stage) {
  * 返回 { ok, status, path, staged, diff, stats, error }；任何 git 失败 → { ok:false, error }。
  * 红线：路径不参与 shell 拼接（execFile 数组透传）；只读 git diff，绝不写文件。
  */
-export async function getFileDiff({ path, staged = false, from = null, to = null } = {}) {
+export async function getFileDiff({ path, staged = false, from = null, to = null, root } = {}) {
   const p = typeof path === 'string' ? path.replace(/\\/g, '/').trim() : ''
   const fromStr = typeof from === 'string' && from.trim() ? from.trim() : null
   const toStr = typeof to === 'string' && to.trim() ? to.trim() : null
@@ -404,8 +419,8 @@ export async function getFileDiff({ path, staged = false, from = null, to = null
       return { ok: false, error: 'bad-request', message: 'path 必须为仓库内相对路径' }
     }
   }
-  const gr = await resolveGitRoot()
-  if (!gr) return { ok: false, error: 'not-a-git-repo', message: '未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库）' }
+  const gr = await resolveGitRoot(root)
+  if (!gr) return { ok: false, error: 'not-a-git-repo', message: '未找到仓库根（可设 YXSPEC_GIT_ROOT 指向 git 仓库，或传 root 参数）' }
   const cwd = gr.root
 
   // 脏文件模式才需要 porcelain 状态判定；range 模式直接整仓 diff（状态置 'range'）

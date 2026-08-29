@@ -2,12 +2,14 @@
 // gitStore — Git 工作区管控状态（网关 /api/git*）
 // 数据源：网关经 @yxspec/tool-guard 白名单的只读 git 采集 + .dsh/git-audit/ 留痕。
 // 红线：前端不执行 git —— 本 store 只做状态镜像 + 刷新 + 回滚留档（不执行）。
-// 回滚成功后 push toast（调用方 UI 再补一句「不自动执行」）。
+// 多工作区：workspaces 为网关注册表（auto 自动透传默认根 / manual 手动登记），
+// 活动工作区 activeWorkspace 决定 status/commits 按哪个 root 拉取。
+// 写操作（回滚留档/operate/workspaces 增删）失败抛错，由调用方 UI 处理 toast。
 // =============================================================================
 
 import { create } from 'zustand';
 import * as ipc from '../utils/ipc';
-import type { GitStatus, GitStageTrace } from '../utils/ipc';
+import type { GitStatus, GitStageTrace, GitWorkspace } from '../utils/ipc';
 import { useToastStore } from './toastStore';
 
 interface GitStore {
@@ -18,6 +20,25 @@ interface GitStore {
   /** status 加载失败（网关未起）时置 true */
   loadError: boolean;
   refreshStatus: () => Promise<void>;
+  /** GET /api/git/workspaces 注册表快照；初始 [] */
+  workspaces: GitWorkspace[];
+  /** 当前活动工作区；缺省回落 defaultRoot（后端 activeId → 首项 → null） */
+  activeWorkspace: GitWorkspace | null;
+  /** workspaces 是否在加载中 */
+  workspaceLoading: boolean;
+  /** workspaces 加载失败（网关未响应）时置错误文案 */
+  workspaceError: string | null;
+  /** git 写操作（/api/git/operate）进行中（按钮 loading） */
+  operating: boolean;
+  refreshWorkspaces: () => Promise<void>;
+  /** 切换活动工作区（PUT active → 本地更新 → 按新 root 重拉 status） */
+  setActive: (id: string) => Promise<void>;
+  /** 手动登记工作区根目录；失败抛错由调用方处理 */
+  addWorkspace: (root: string) => Promise<void>;
+  /** 移除工作区；若删的是 active，active 按后端 activeId 回落 */
+  removeWorkspace: (id: string) => Promise<void>;
+  /** 执行 git 写操作（clone/fetch/pull/push/checkout/branch）；失败抛错由调用方处理 */
+  gitOperate: (opts: ipc.GitOperateParams) => Promise<ipc.GitOperateResult | null>;
   /** 当前已查询的阶段轨迹；未查询/失败为 null */
   commits: GitStageTrace[] | null;
   /** commits 是否在加载中 */
@@ -29,7 +50,7 @@ interface GitStore {
   rollback: (params: ipc.GitRollbackParams) => Promise<boolean>;
 }
 
-export const useGitStore = create<GitStore>((set) => ({
+export const useGitStore = create<GitStore>((set, get) => ({
   status: null,
   loading: false,
   loadError: false,
@@ -37,7 +58,8 @@ export const useGitStore = create<GitStore>((set) => ({
   refreshStatus: async () => {
     set({ loading: true, loadError: false });
     try {
-      const data = await ipc.getGitStatus();
+      // 多工作区：status 永远按当前活动工作区 root 拉取；缺省（无 root）由网关回退默认根。
+      const data = await ipc.getGitStatus(get().activeWorkspace?.root);
       if (data) {
         set({ status: data, loading: false, loadError: false });
       } else {
@@ -45,6 +67,70 @@ export const useGitStore = create<GitStore>((set) => ({
       }
     } catch {
       set({ status: null, loading: false, loadError: true });
+    }
+  },
+
+  workspaces: [],
+  activeWorkspace: null,
+  workspaceLoading: false,
+  workspaceError: null,
+  operating: false,
+
+  refreshWorkspaces: async () => {
+    set({ workspaceLoading: true, workspaceError: null });
+    try {
+      const data = await ipc.fetchGitWorkspaces();
+      if (!data) {
+        // 网关未起/路由未就绪 → 降级为可感知的错误态，不误报「无工作区」
+        set({ workspaceLoading: false, workspaceError: '网关未响应' });
+        return;
+      }
+      const active =
+        data.workspaces.find((w) => w.id === data.activeId) ??
+        data.workspaces[0] ??
+        null;
+      set({
+        workspaces: data.workspaces,
+        activeWorkspace: active,
+        workspaceLoading: false,
+        workspaceError: null,
+      });
+    } catch {
+      set({ workspaceLoading: false, workspaceError: '网关未响应' });
+    }
+  },
+
+  setActive: async (id) => {
+    const list = await ipc.setActiveGitWorkspace(id);
+    const active = list.workspaces.find((w) => w.id === id) ?? list.workspaces[0] ?? null;
+    set({ workspaces: list.workspaces, activeWorkspace: active });
+    // 切到新 root 后立即按该 root 重拉 status（其他只读采集后续按需刷新）
+    await get().refreshStatus();
+  },
+
+  addWorkspace: async (root) => {
+    const list = await ipc.addGitWorkspace(root);
+    // 失败由 addGitWorkspace 抛错，调用方 UI 推 error toast；这里只做成功后同步列表。
+    set({ workspaces: list.workspaces });
+  },
+
+  removeWorkspace: async (id) => {
+    const list = await ipc.removeGitWorkspace(id);
+    const active =
+      list.workspaces.find((w) => w.id === list.activeId) ??
+      list.workspaces[0] ??
+      null;
+    set({ workspaces: list.workspaces, activeWorkspace: active });
+    // 若删的是活动工作区，active 已回落 → 让 status 跟着新 root 走
+    await get().refreshStatus();
+  },
+
+  gitOperate: async (opts) => {
+    set({ operating: true });
+    try {
+      return await ipc.gitOperate(opts);
+    } finally {
+      set({ operating: false });
     }
   },
 

@@ -1242,6 +1242,8 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   error?: string | null;
+  /** 状态对应的仓库根目录（后端返回；多工作区下前端用它识别当前 status 属于哪个 root） */
+  root?: string | null;
   /** 最近提交（时间倒序，最多 5 条即可）；后端 git log 采集，可为空数组 */
   recent?: GitRecentCommit[];
   /** 后端实际字段名：/api/git/status 返回 recentCommits */
@@ -1271,10 +1273,17 @@ export interface GitStageTrace {
   finishedAt: string | null;
 }
 
-/** GET /api/git/status：拉工作区状态；失败返回 null。 */
-export async function getGitStatus(): Promise<GitStatus | null> {
+/**
+ * GET /api/git/status：拉工作区状态；失败返回 null。
+ * @param root 目标工作区根目录（可选；多工作区下指定 root 则后端返回该 root 的状态，缺省为活动/默认 root）
+ */
+export async function getGitStatus(root?: string): Promise<GitStatus | null> {
   try {
-    const res = await fetch(`${GATEWAY_BASE}/api/git/status`, {
+    const url =
+      root != null && root !== ''
+        ? `${GATEWAY_BASE}/api/git/status?root=${encodeURIComponent(root)}`
+        : `${GATEWAY_BASE}/api/git/status`;
+    const res = await fetch(url, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
@@ -1381,6 +1390,135 @@ export async function recordGitRollback(params: GitRollbackParams): Promise<GitR
     throw new Error(data?.error || `HTTP ${res.status}`);
   }
   return data || { ok: false };
+}
+
+// -----------------------------------------------------------------------------
+// Git 工作区管理 API（网关 /api/git/workspaces + /api/git/operate）
+// 多工作区：网关维护一个注册表（source=auto 自动透传默认根 / manual 手动登记），
+// 前端由此切换「当前活动工作区」，status/commits 等都按活动 root 拉取。
+// -----------------------------------------------------------------------------
+
+/** 单个 git 工作区（来源 auto=自动透传默认根 / manual=手动登记） */
+export interface GitWorkspace {
+  id: string;
+  name: string;
+  root: string;
+  source: 'auto' | 'manual';
+}
+
+/** GET /api/git/workspaces 响应 */
+export interface GitWorkspaceList {
+  version: number;
+  defaultRoot: string | null;
+  activeId: string | null;
+  workspaces: GitWorkspace[];
+}
+
+/** POST /api/git/operate 请求体 */
+export interface GitOperateParams {
+  root: string;
+  action: 'clone' | 'fetch' | 'pull' | 'push' | 'checkout' | 'branch';
+  args?: Record<string, string>;
+}
+
+/** POST /api/git/operate 响应 */
+export interface GitOperateResult {
+  ok: boolean;
+  root?: string;
+  cloneDir?: string;
+  stdout?: string;
+  branches?: string[];
+  head?: string | null;
+  error?: string;
+  message?: string;
+}
+
+/**
+ * GET /api/git/workspaces：拉工作区注册表；失败返回 null（网关未起时降级）。
+ */
+export async function fetchGitWorkspaces(): Promise<GitWorkspaceList | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/git/workspaces`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as GitWorkspaceList;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST /api/git/workspaces：手动登记一个工作区根目录；失败抛错（由 store/调用方推 error toast）。
+ */
+export async function addGitWorkspace(root: string): Promise<GitWorkspaceList> {
+  const res = await fetch(`${GATEWAY_BASE}/api/git/workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ root }),
+  });
+  const data = (await res.json().catch(() => null)) as
+    | GitWorkspaceList
+    | { error?: string; message?: string }
+    | null;
+  if (!res.ok) {
+    throw new Error((data as { message?: string; error?: string })?.message || `HTTP ${res.status}`);
+  }
+  return data as GitWorkspaceList;
+}
+
+/**
+ * DELETE /api/git/workspaces/{id}：移除一个工作区；失败抛错。
+ */
+export async function removeGitWorkspace(id: string): Promise<GitWorkspaceList> {
+  const res = await fetch(`${GATEWAY_BASE}/api/git/workspaces/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  });
+  const data = (await res.json().catch(() => null)) as
+    | GitWorkspaceList
+    | { error?: string; message?: string }
+    | null;
+  if (!res.ok) {
+    throw new Error((data as { message?: string; error?: string })?.message || `HTTP ${res.status}`);
+  }
+  return data as GitWorkspaceList;
+}
+
+/**
+ * PUT /api/git/workspaces/active：切换活动工作区；失败抛错。
+ */
+export async function setActiveGitWorkspace(id: string): Promise<GitWorkspaceList> {
+  const res = await fetch(`${GATEWAY_BASE}/api/git/workspaces/active`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  const data = (await res.json().catch(() => null)) as
+    | GitWorkspaceList
+    | { error?: string; message?: string }
+    | null;
+  if (!res.ok) {
+    throw new Error((data as { message?: string; error?: string })?.message || `HTTP ${res.status}`);
+  }
+  return data as GitWorkspaceList;
+}
+
+/**
+ * POST /api/git/operate：执行 git 写操作（clone/fetch/pull/push/checkout/branch）。
+ * 成功后返回结果（含 stdout / branches 等）；非 2xx 抛 Error（优先后端 message，其次 error，回退 HTTP 状态）。
+ */
+export async function gitOperate(opts: GitOperateParams): Promise<GitOperateResult> {
+  const res = await fetch(`${GATEWAY_BASE}/api/git/operate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  const data = (await res.json().catch(() => null)) as GitOperateResult | null;
+  if (!res.ok) {
+    throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
+  }
+  return data as GitOperateResult;
 }
 
 // =============================================================================

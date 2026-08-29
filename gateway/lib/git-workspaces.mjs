@@ -1,0 +1,450 @@
+// =============================================================================
+// git-workspaces.mjs — 网关工作区注册表 + git 写操作模块
+// =============================================================================
+// 职责：
+//   1. listWorkspaces()        — 注册表列表（自动合并当前生效根为 defaultRoot）
+//   2. addWorkspace({root})    — 校验 git 仓库 → 登记进注册表
+//   3. removeWorkspace({id})   — 移除手动登记的工作区（default/auto 拒绝）
+//   4. setActiveWorkspace({id})— 切换 activeId
+//   5. gitOperate({root,action,args}) — git 写操作白名单（clone/fetch/pull/push/
+//      checkout/branch -a），每个 action 的 root 必须是已登记工作区或 defaultRoot
+//
+// 与 git.mjs 的分工：git.mjs 只读 git + 追加审计 JSONL（绝不写操作）；本模块
+// 是「受白名单约束的 git 写操作层」。写操作一律走 execFile（无 shell，数组透传
+// 参数，路径/参数含 shell 元字符也不会被解释），每次写操作（branch 只读列表除外）
+// 追加审计 JSONL（照 recordRollback 的 mkdirSync + appendFileSync 范式）。
+//
+// 注册表文件（JSON）：{ version, defaultRoot, activeId, workspaces:[{id,name,root,source}] }
+//   默认 gateway/runtime-js/runtime-data/git-workspaces.json，可用 YXSPEC_GIT_WORKSPACES 覆盖。
+//   每条 source：'auto'（当前生效根，由 resolveGitRoot 推导，id 恒 'default'）或
+//   'manual'（addWorkspace 手动登记，id 为 ws-<n> 递增）。
+// 审计文件（JSONL）：默认 gateway/runtime-js/runtime-data/git-workspace-audit.jsonl，
+//   可用 YXSPEC_GIT_AUDIT 覆盖。只追加不修改，失败仅 console.log 记录不抛。
+//
+// 红线：
+//   - git 写操作仅限下方白名单；其余 action → { ok:false, error:'unknown-action' }
+//   - 任何 git 失败 → { ok:false, error, message }（不抛异常，失败也记审计）
+//   - clone 的 url / checkout 的 branch 不做 shell 拼接（execFile 数组透传），
+//     但 url 仍过 isSafeGitUrl 白名单、dir 过 isSafeTargetDir，双保险防误用。
+// =============================================================================
+import { execFile } from 'node:child_process'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { resolveGitRoot } from './git.mjs'
+
+const REGISTRY_VERSION = 1
+const REGISTRY_FILE =
+  process.env.YXSPEC_GIT_WORKSPACES ||
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime-js', 'runtime-data', 'git-workspaces.json')
+const AUDIT_FILE =
+  process.env.YXSPEC_GIT_AUDIT ||
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime-js', 'runtime-data', 'git-workspace-audit.jsonl')
+const GIT_OP_TIMEOUT_MS = Number(process.env.YXSPEC_GIT_OP_TIMEOUT_MS ?? 120000)
+// 单独一条审计 JSONL 的截断上限（避免恶意/异常 stdout 撑爆审计文件；只截断记录不截断执行）
+const AUDIT_STDOUT_MAX = 4000
+
+/**
+ * 单次 git 调用（execFile，无 shell）。任何失败都返回 ok:false，不抛。
+ * 与 git.mjs 的 runGit 同款实现（该函数未导出，此处本地复刻，避免改动现有文件）。
+ * @param {string[]} args
+ * @param {{cwd?: string, timeoutMs?: number}} [opts]
+ * @returns {Promise<{ok: boolean, stdout: string, stderr: string, error?: string, code?: string|null}>}
+ */
+function runGit(args, { cwd, timeoutMs = GIT_OP_TIMEOUT_MS } = {}) {
+  return new Promise((resolve_) => {
+    execFile(
+      'git',
+      args,
+      { cwd, timeout: timeoutMs, encoding: 'utf8', windowsHide: true },
+      (err, stdout, stderr) => {
+        if (err) {
+          resolve_({
+            ok: false,
+            error:
+              err.code === 'ENOENT'
+                ? 'git-not-installed'
+                : String((stderr ?? '').trim() || err.message || 'git error'),
+            code: err.code ?? null,
+          })
+          return
+        }
+        resolve_({ ok: true, stdout: stdout ?? '', stderr: stderr ?? '' })
+      },
+    )
+  })
+}
+
+/** Windows 绝对路径判定：`D:/` 或 `D:\` 盘符开头（大小写均可，正斜杠归一）。 */
+function isWindowsAbsolute(p) {
+  return typeof p === 'string' && /^[A-Za-z]:[\\/]/.test(p)
+}
+
+/** Windows 盘符根（`D:/` / `D:\`）：clone 目标不允许落在盘符根。 */
+function isWindowsDriveRoot(p) {
+  return /^[A-Za-z]:[\\/]$/.test(p)
+}
+
+/**
+ * 工作区 id 推导。
+ * source:'auto' → 恒 'default'；source:'manual' → 优先 ws-<n> 递增，其次 root hash 短码。
+ * @param {object} entry { root, source }
+ * @param {string[]} existingIds 已占用 id（自动条目含 'default'）
+ */
+function workspaceIdFor({ root, source }, existingIds) {
+  if (source === 'auto') return 'default'
+  const rootNorm = String(root).replace(/\\/g, '/')
+  for (let n = 1; ; n++) {
+    const id = `ws-${n}`
+    if (!existingIds.includes(id)) return id
+  }
+}
+
+/** 由 root 末段目录名推断 name（默认工作区给可读名）。 */
+function workspaceNameFor({ root, source }) {
+  if (source === 'auto') return 'default'
+  let name = ''
+  try {
+    // 规范化路径（确保尾分隔符剥离后取末段）
+    name = basenameOf(String(root).replace(/[\\/]+$/, ''))
+  } catch {
+    name = ''
+  }
+  return name || 'workspace'
+}
+
+function basenameOf(p) {
+  const norm = p.replace(/\\/g, '/')
+  const parts = norm.split('/').filter(Boolean)
+  return parts[parts.length - 1] ?? ''
+}
+export { basenameOf }
+
+/**
+ * 追加审计 JSONL 行（照 git.mjs recordRollback 范式：mkdirSync + appendFileSync）。
+ * 失败不抛，仅 console.log 记录（审计是尽力而为，不能因审计失败阻断 git 操作）。
+ */
+function appendAuditLine(entry) {
+  try {
+    mkdirSync(dirname(AUDIT_FILE), { recursive: true })
+    appendFileSync(AUDIT_FILE, JSON.stringify(entry) + '\n', 'utf8')
+  } catch (e) {
+    console.log(`[gateway] git-workspaces 审计落盘失败: ${e?.message ?? e}`)
+  }
+}
+
+/** 追加 git 写操作审计（照规范固定字段）。args 对象序列化前先截断 stdout。 */
+function recordGitOp({ root, action, args, ok, stdout, error }) {
+  const rec = { at: Date.now(), root, action, args }
+  if (ok === true) rec.ok = true
+  else rec.ok = false
+  if (stdout != null) rec.stdout = String(stdout).slice(0, AUDIT_STDOUT_MAX)
+  if (error != null) rec.error = String(error)
+  appendAuditLine(rec)
+}
+
+/** 读注册表 JSON；文件缺失/损坏 → 返回空结构（不抛）。 */
+function readRegistry() {
+  let data = null
+  try {
+    data = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'))
+  } catch {
+    data = null // 文件不存在或 JSON 损坏 → 视为空注册表，落盘时重建
+  }
+  return {
+    version: REGISTRY_VERSION,
+    defaultRoot: data && typeof data.defaultRoot === 'string' ? data.defaultRoot : null,
+    activeId: data && typeof data.activeId === 'string' ? data.activeId : null,
+    workspaces: Array.isArray(data && data.workspaces) ? data.workspaces : [],
+  }
+}
+
+/** 写回注册表 JSON（覆盖写，注册表是单份 JSON 文档；失败抛给调用方转 ok:false）。 */
+function writeRegistry(reg) {
+  mkdirSync(dirname(REGISTRY_FILE), { recursive: true })
+  writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2) + '\n', 'utf8')
+}
+
+/** 合并当前生效根（resolveGitRoot）为 defaultRoot 条目，返回新注册表对象。 */
+function withDefaultRoot(reg) {
+  const ws = Array.isArray(reg.workspaces) ? reg.workspaces.slice() : []
+  const existing = new Set(ws.map((w) => w.root))
+  if (reg.defaultRoot && typeof reg.defaultRoot === 'string' && !existing.has(reg.defaultRoot)) {
+    ws.unshift({ id: 'default', name: workspaceNameFor({ root: reg.defaultRoot, source: 'auto' }), root: reg.defaultRoot, source: 'auto' })
+  }
+  // activeId 校验：active 工作区已不存在 → 回落 defaultRoot 对应条
+  let activeId = reg.activeId
+  const activeExists = ws.some((w) => w.id === activeId)
+  if (!activeExists) {
+    const def = ws.find((w) => w.id === 'default' && w.source === 'auto')
+    activeId = def ? def.id : null
+  }
+  return { version: REGISTRY_VERSION, defaultRoot: reg.defaultRoot, activeId, workspaces: ws }
+}
+
+/**
+ * 列出工作区（合并当前生效根）。
+ * 返回 { version, defaultRoot, activeId, workspaces: [{id,name,root,source},...] }。
+ */
+export async function listWorkspaces() {
+  const gr = await resolveGitRoot()
+  const reg = readRegistry()
+  const reg2 = { ...reg, defaultRoot: gr ? gr.root : null }
+  const out = withDefaultRoot(reg2)
+  return {
+    version: out.version,
+    defaultRoot: out.defaultRoot,
+    activeId: out.activeId,
+    workspaces: out.workspaces,
+  }
+}
+
+/** 校验 root 是合法 git 仓库并取真实根。成功 → {root}；失败 → {error, message}。 */
+async function verifyGitRepo(root) {
+  const r = await runGit(['-C', root, 'rev-parse', '--show-toplevel'])
+  if (!r.ok) {
+    if (r.error === 'git-not-installed') return { error: 'git-not-installed', message: 'git 未安装' }
+    return { error: 'not-a-git-repo', message: `不是 git 仓库：${r.error}` }
+  }
+  const realRoot = (r.stdout ?? '').trim()
+  if (!realRoot) return { error: 'not-a-git-repo', message: 'git rev-parse 未返回仓库根' }
+  return { root: realRoot.replace(/\\/g, '/') }
+}
+
+/**
+ * 登记工作区。
+ * - root 必须非空、绝对路径（盘符开头）、不含 `..` 逃逸、归一为正斜杠
+ * - 必须是 git 仓库（git -C <root> rev-parse --show-toplevel）→ 取真实根
+ * - 已存在同 root → { ok:true, already:true, list }
+ * - 成功 → { ok:true, already:false, workspace, list }
+ * - 失败 → { ok:false, error:'not-a-git-repo'|'bad-request', message }
+ */
+export async function addWorkspace({ root } = {}) {
+  if (typeof root !== 'string' || !root.trim()) {
+    return { ok: false, error: 'bad-request', message: 'root 不能为空' }
+  }
+  const rootNorm = root.trim().replace(/\\/g, '/')
+  if (!isWindowsAbsolute(rootNorm)) {
+    return { ok: false, error: 'bad-request', message: 'root 必须为绝对路径（Windows 盘符开头）' }
+  }
+  if (rootNorm.split('/').includes('..')) {
+    return { ok: false, error: 'bad-request', message: 'root 不能含 .. 路径段' }
+  }
+  const verified = await verifyGitRepo(rootNorm)
+  if (!verified.root) {
+    return { ok: false, error: verified.error, message: verified.message }
+  }
+  const reg = readRegistry()
+  const existing = reg.workspaces.find((w) => w.root === verified.root)
+  if (existing) {
+    const list = await listWorkspaces()
+    return { ok: true, already: true, workspace: existing, list: list.workspaces }
+  }
+  const entry = {
+    id: workspaceIdFor({ root: verified.root, source: 'manual' }, reg.workspaces.map((w) => w.id).concat('default')),
+    name: workspaceNameFor({ root: verified.root, source: 'manual' }),
+    root: verified.root,
+    source: 'manual',
+  }
+  // 落盘时补 defaultRoot（磁盘注册表首次写入时 default 根也持久化，
+  // 否则 defaultRoot 恒 null，setActive/gitOperate 读盘拿不到 default）
+  const gr = await resolveGitRoot()
+  const newReg = {
+    ...reg,
+    defaultRoot: reg.defaultRoot || (gr ? gr.root : null),
+    workspaces: [...reg.workspaces, entry],
+  }
+  try {
+    writeRegistry(newReg)
+  } catch (e) {
+    return { ok: false, error: 'write-failed', message: String(e?.message ?? e) }
+  }
+  const list = await listWorkspaces()
+  return { ok: true, already: false, workspace: entry, list: list.workspaces }
+}
+
+/** 内部工具：removeWorkspace 的纯判定（可导出供测试）。 */
+export function canRemoveWorkspace(id, target) {
+  if (id === 'default' || (target && target.source === 'auto')) {
+    return { ok: false, error: 'cannot-remove-default' }
+  }
+  if (!target) return { ok: false, error: 'not-found' }
+  return { ok: true }
+}
+
+/**
+ * 移除工作区。
+ * - id='default' 或该条 source='auto' → { ok:false, error:'cannot-remove-default' }
+ * - 不存在 → { ok:false, error:'not-found' }
+ * - 成功 → { ok:true, list }
+ */
+export async function removeWorkspace({ id } = {}) {
+  const reg = readRegistry()
+  const target = reg.workspaces.find((w) => w.id === id)
+  const verdict = canRemoveWorkspace(id, target)
+  if (!verdict.ok) return { ok: false, error: verdict.error }
+  const newReg = { ...reg, workspaces: reg.workspaces.filter((w) => w.id !== id) }
+  try {
+    writeRegistry(newReg)
+  } catch (e) {
+    return { ok: false, error: 'write-failed', message: String(e?.message ?? e) }
+  }
+  const list = await listWorkspaces()
+  return { ok: true, list: list.workspaces }
+}
+
+/**
+ * 切换 active 工作区。
+ * - id 不在列表 → { ok:false, error:'not-found' }
+ * - 成功 → { ok:true, activeId, list }
+ */
+export async function setActiveWorkspace({ id } = {}) {
+  const reg = readRegistry()
+  // default 根只在 listWorkspaces 内存合并（磁盘注册表不落 default 条目），
+  // 故显式认可 id==='default'（defaultRoot 存在即视为合法 active）。
+  const inList = reg.workspaces.some((w) => w.id === id)
+  const isDefault = id === 'default' && reg.defaultRoot
+  if (!inList && !isDefault) return { ok: false, error: 'not-found' }
+  const newReg = { ...reg, activeId: id }
+  try {
+    writeRegistry(newReg)
+  } catch (e) {
+    return { ok: false, error: 'write-failed', message: String(e?.message ?? e) }
+  }
+  const list = await listWorkspaces()
+  return { ok: true, activeId: id, list: list.workspaces }
+}
+
+/**
+ * git 写操作白名单（受 URL 白名单 + 已登记工作区约束）。
+ * @param {{root: string, action: string, args?: object}} param0
+ */
+export async function gitOperate({ root, action, args = {} } = {}) {
+  // 1) action 白名单校验（未知 action 直接拒绝，不触碰 git）
+  const KNOWN = ['clone', 'fetch', 'pull', 'push', 'checkout', 'branch']
+  if (!KNOWN.includes(action)) {
+    return { ok: false, error: 'unknown-action', message: `不支持的操作：${action}` }
+  }
+  // 2) root 必须是已登记工作区（或等于 defaultRoot）——按真实仓库根比对：
+  //    注册表存的是 rev-parse 归一后的顶层根，请求的 root 可能是其子目录，
+  //    故先 `git -C <root> rev-parse --show-toplevel` 归一后再比对。
+  //    clone 例外：其 root 只是「目标父目录」锚点，本身无需已登记。
+  const reg = readRegistry()
+  // defaultRoot 动态补当前生效根（磁盘注册表只在手动登记时才写 default 条目；
+  // 与 listWorkspaces 同口径，保证「默认工作区」恒可操作，否则所有写操作 unknown-workspace）
+  if (!reg.defaultRoot) {
+    const gr = await resolveGitRoot()
+    reg.defaultRoot = gr ? gr.root : null
+  }
+  let realRoot = null
+  if (action !== 'clone') {
+    if (typeof root !== 'string' || !root.trim()) {
+      return { ok: false, error: 'bad-request', message: 'root 不能为空' }
+    }
+    const rootNorm = root.trim().replace(/\\/g, '/')
+    if (!isWindowsAbsolute(rootNorm)) {
+      return { ok: false, error: 'bad-request', message: 'root 必须为绝对路径（Windows 盘符开头）' }
+    }
+    if (rootNorm.split('/').includes('..')) {
+      return { ok: false, error: 'bad-request', message: 'root 不能含 .. 路径段' }
+    }
+    const v = await verifyGitRepo(rootNorm)
+    if (!v.root) return { ok: false, error: v.error, message: v.message }
+    realRoot = v.root
+  } else {
+    const rootNorm = typeof root === 'string' ? root.trim().replace(/\\/g, '/') : ''
+    realRoot = rootNorm
+  }
+  const isRegistered =
+    reg.workspaces.some((w) => w.root === realRoot) || (reg.defaultRoot && reg.defaultRoot === realRoot)
+  if (!isRegistered) {
+    return { ok: false, error: 'unknown-workspace', message: 'root 不是已登记的工作区' }
+  }
+  // 3) clone 特有校验（url + 目标目录），clone 的 root 参数只是「目标父目录」锚点
+  if (action === 'clone') {
+    const url = typeof args.url === 'string' ? args.url.trim() : ''
+    if (!isSafeGitUrl(url)) {
+      return { ok: false, error: 'bad-request', message: 'clone url 非法（仅允许 https:// / git@ / ssh://，且不含 shell 元字符）' }
+    }
+    const dir = typeof args.dir === 'string' ? args.dir.trim().replace(/\\/g, '/') : ''
+    if (!isSafeTargetDir(dir)) {
+      return { ok: false, error: 'bad-request', message: 'clone 目标目录非法（需绝对路径、非盘符根、不含 ..）' }
+    }
+    const g = await runGit(['clone', url, dir], { cwd: realRoot })
+    recordGitOp({ root: realRoot, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
+    if (!g.ok) return { ok: false, error: g.error, message: 'git clone 执行失败' }
+    // clone 成功后自动登记新仓库进工作区列表
+    const added = await addWorkspace({ root: dir })
+    return { ok: true, root: dir, cloneDir: dir, registered: added.ok ? added.workspace ?? added.already : false }
+  }
+  // 4) checkout 特有校验（branch 非空、无空格）
+  if (action === 'checkout') {
+    const branch = typeof args.branch === 'string' ? args.branch.trim() : ''
+    if (!branch) return { ok: false, error: 'bad-request', message: 'checkout 需提供 branch' }
+    if (/\s/.test(branch)) return { ok: false, error: 'bad-request', message: 'branch 不能含空格' }
+    const g = await runGit(['checkout', branch], { cwd: realRoot })
+    recordGitOp({ root: realRoot, action: 'checkout', args: { branch }, ok: g.ok, stdout: g.stdout, error: g.error })
+    if (!g.ok) return { ok: false, error: g.error, message: 'git checkout 执行失败' }
+    return { ok: true, stdout: g.stdout }
+  }
+  // 5) 其余写操作（fetch / pull / push）
+  if (action === 'fetch') {
+    const g = await runGit(['fetch', '--all', '--prune'], { cwd: realRoot })
+    recordGitOp({ root: realRoot, action: 'fetch', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
+    if (!g.ok) return { ok: false, error: g.error, message: 'git fetch 执行失败' }
+    return { ok: true, stdout: g.stdout }
+  }
+  if (action === 'pull') {
+    const g = await runGit(['pull', '--ff-only'], { cwd: realRoot })
+    recordGitOp({ root: realRoot, action: 'pull', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
+    if (!g.ok) return { ok: false, error: g.error, message: 'git pull 执行失败' }
+    return { ok: true, stdout: g.stdout, head: null }
+  }
+  if (action === 'push') {
+    const g = await runGit(['push'], { cwd: realRoot })
+    recordGitOp({ root: realRoot, action: 'push', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
+    if (!g.ok) return { ok: false, error: g.error, message: 'git push 执行失败' }
+    // push 成功回显 `HEAD -> branch` 信息（git push 默认输出第一行即远端更新摘要）
+    const line = (g.stdout || '').split('\n').find((l) => /HEAD\s*->/.test(l))
+    return { ok: true, stdout: g.stdout, head: line || null }
+  }
+  // 6) branch -a：只读列表（不追加写审计）
+  const g = await runGit(['branch', '-a'], { cwd: realRoot })
+  if (!g.ok) return { ok: false, error: g.error, message: 'git branch 执行失败' }
+  const branches = (g.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => l.replace(/^\*\s*/, '').trim())
+  return { ok: true, branches }
+}
+
+/**
+ * clone url 白名单校验（纯函数）。
+ * 规则：必须 https:// 或 git@ 或 ssh:// 开头；拒绝 file://、`-` 开头（避免当选项参数）、
+ * 含空格、以及 `|` `;` `` ` `` `$` 等 shell 元字符（execFile 数组透传本不会解释，
+ * 双保险防 URL 里混入注入式 payload；换行 `\n`/回车 `\r` 一并拒绝）。
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isSafeGitUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false
+  const u = url.trim()
+  if (u.length > 2000) return false
+  if (!/^(https:\/\/|git@|ssh:\/\/)/.test(u)) return false
+  if (/[|;`$&<>"'\s\r\n]/.test(u)) return false
+  return true
+}
+
+/**
+ * clone 目标目录校验（纯函数）。
+ * 规则：Windows 绝对路径（盘符开头，正/反斜杠均可）→ 归一正斜杠后须非盘符根、
+ * 不含 `..` 段；相对路径 / 空 / 非盘符绝对路径一律拒绝。
+ * @param {string} dir
+ * @returns {boolean}
+ */
+export function isSafeTargetDir(dir) {
+  if (typeof dir !== 'string' || !dir.trim()) return false
+  const d = dir.trim()
+  if (!isWindowsAbsolute(d)) return false
+  const norm = d.replace(/\\/g, '/')
+  if (isWindowsDriveRoot(norm)) return false
+  if (norm.split('/').includes('..')) return false
+  return true
+}
