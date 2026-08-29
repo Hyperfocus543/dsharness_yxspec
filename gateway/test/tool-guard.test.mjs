@@ -69,6 +69,13 @@ for (const cmd of [
   'git rm -rf src',
   'git branch -D feature',
   'git branch --move old new',
+  // 2026-08-29 追加：裸分支名创建（refs 写操作）此前整段漏过守卫——
+  // `git branch foo` 无任何破坏性 flag，默认拒绝策略却放行创建。
+  'git branch foo',
+  'git branch foo main',
+  'git branch --track foo',
+  'git branch -t foo',
+  'git branch -t foo main',
   'git tag v1.0',
   'git tag -d v1.0',
   'git remote add origin http://x',

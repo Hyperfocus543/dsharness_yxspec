@@ -328,9 +328,6 @@ function gitSubUnsafe(sub, segment) {
     // 长 flag 必须完整词 + 边界 `(?:=|\s|$)`——等号连写形态（`--set-upstream-to=origin/main`、
     // `--move=foo`）与空格/结尾等价，此前只认 `(?:\s|$)`，`=` 连写漏网。
     // 完整词边界仍由该后缀保证（`--move` 后接 `-`/字母不命中，不误伤）。
-    // 只读的 --list/--remotes/--all/--no-color 不进白名单 → 默认拒绝（与 tag 的
-    // 「pattern 以 - 开头按不匹配」同策略：宁可误伤不放过）。
-    const after = gitArgsAfter('branch', segment);
     // 短 flag 用 `(?:^|\s)-(?!-)[a-zA-Z]*[dDmMcCuuf]`：破坏性字母出现在「单连字符
     // flag 簇」任意位置即拦截（d/D 删除、m/M 重命名、c/C 复制、u 改 upstream、
     // f 强覆盖）。旧 `(?:^|-)X(?:\s|$)` 只认后跟空白/结尾，漏掉 git 支持的「短 flag
@@ -339,9 +336,31 @@ function gitSubUnsafe(sub, segment) {
     //   前缀 `(?:^|\s)` + `(?!-)`：只认单连字符短 flag——长 flag 第二个 `-`（--merged
     // 的 -m、--format 的 -f）与分支名内嵌 `-`（feature-del 的 -d）前导都不是空白/行首，
     // 不落匹配，防误伤；`[a-zA-Z]*` 使簇内多 flag（-aD）与连写值（-uorigin/…）都能命中。
-    return /(?:^|\s)-(?!-)[a-zA-Z]*[dDmMcCuuf]|--(?:delete|move|copy|force|edit-description|set-upstream|unset-upstream|set-upstream-to|unset-upstream-to)(?:=|\s|$)/.test(
-      after,
-    );
+    // 该正则必须先于「裸分支名创建」判定：`--merged main -d foo` 这类「列清单 flag +
+    // 破坏性 flag」混合形态靠它兜住（列清单判定会把 -d foo 误当 pattern 放行）。
+    const after = gitArgsAfter('branch', segment);
+    if (/(?:^|\s)-(?!-)[a-zA-Z]*[dDmMcCuuf]|--(?:delete|move|copy|force|edit-description|set-upstream|unset-upstream|set-upstream-to|unset-upstream-to)(?:=|\s|$)/.test(after)) {
+      return true;
+    }
+    // 裸分支名创建检测：`git branch foo` / `git branch foo main` / `git branch --track foo` /
+    // `git branch -t foo` —— 无任何列清单 flag 时，首个非 flag 实参即「要创建的分支名」，
+    // 是 refs 写操作，此前整段漏过守卫（默认拒绝策略下只读 branch 列表却放行创建）。
+    // 列清单 flag（-l/--list/--merged/--no-merged/--contains/--no-contains/--points-at/
+    // -a/-r/-v/--all/--remotes/--verbose）后的实参是 pattern/commit，只读放行：
+    //   `git branch --merged main` / `git branch -a` / `git branch --list feature/*` 仍放行。
+    // 逐 token 扫：非 flag 实参出现时，前面见过列清单 flag → pattern（放行）；否则 → 创建（拒绝）。
+    const tokens = after.split(/\s+/).filter(Boolean);
+    let seenListFlag = false;
+    for (const t of tokens) {
+      if (t.startsWith('-')) {
+        if (/^-(?:l|a|r|v)+$/.test(t) || /^--(?:list|all|remotes|verbose|merged|no-merged|contains|no-contains|points-at)(?:=|$)/.test(t)) {
+          seenListFlag = true;
+        }
+        continue;
+      }
+      if (!seenListFlag) return true; // 无列清单 flag 的裸实参 = 要创建的分支名 → 拒绝
+    }
+    return false;
   }
   if (sub === 'tag') {
     // 只读：无参（列出）、-l/--list [pattern]（列出过滤，如 `git tag -l 'v1.*'`）。
