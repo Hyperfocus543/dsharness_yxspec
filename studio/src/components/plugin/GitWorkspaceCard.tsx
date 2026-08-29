@@ -851,6 +851,12 @@ export const GitWorkspaceCard: React.FC = () => {
       loadAudit().catch(() => {});
     } catch (e: any) {
       setBranchError(e?.message || `切换分支失败：${branch}`);
+      // 失败回退分支选择：checkout 失败后 branchValue 仍指向该分支，下拉框会把
+      // 它显示成「已选中」，与头部实际分支相悖（所见≠实际）；且该 option 已
+      // 命中选中态，再点同一条分支 onChange 不触发 → 无法原地重试。
+      // 清空回「选择分支…」占位，面板保持展开可立即重选（值已复位，重选同一条
+      // 分支也会重新触发 onChange）。
+      setBranchValue('');
     }
   };
 
