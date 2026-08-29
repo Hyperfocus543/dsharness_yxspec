@@ -486,7 +486,7 @@ export async function gitOperate({ root, action, args = {} } = {}) {
       return { ok: false, error: 'bad-request', message: `init 目标目录不可用：${String(e?.message ?? e)}` }
     }
     const g = await runGit(['init'], { cwd: dir })
-    recordGitOp({ root: dir, action: 'init', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
+    recordGitOp({ root: dir, action: 'init', args: { dir }, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git init 执行失败' }
     // init 后即 git 仓库 → 自动登记进工作区列表（verifyGitRepo 通过）
     const added = await addWorkspace({ root: dir })
