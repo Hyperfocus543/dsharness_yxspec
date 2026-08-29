@@ -15,6 +15,7 @@ import { ReportExport } from './components/cockpit/ReportExport';
 import { ModelSettings } from './components/settings/ModelSettings';import { PluginCenter } from './components/plugin/PluginCenter';
 import { GitWorkspaceCard } from './components/plugin/GitWorkspaceCard';
 import { SelfIterationCard } from './components/plugin/SelfIterationCard';
+import { TrajectoryTimeline } from './components/cockpit/TrajectoryTimeline';
 
 export const DEFAULT_TASKS_FILES = [
   'task_init.md',
@@ -77,6 +78,8 @@ export function renderFunctionCard(card: FunctionCard, ctx: FunctionCardCtx) {
       return <GitWorkspaceCard />;
     case 'self-iteration':
       return <SelfIterationCard defaultStage={ctx.currentStage ?? undefined} />;
+    case 'trajectory':
+      return <TrajectoryTimeline />;
     default:
       return null;
   }

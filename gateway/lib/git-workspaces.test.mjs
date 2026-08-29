@@ -1,18 +1,22 @@
 // git-workspaces.mjs 纯函数单测（Git 工作区注册表 + 写操作白名单）
-// 运行：cd gateway && node --test lib/git-workspaces.test.mjs
+// 运行：node --test gateway/lib/git-workspaces.test.mjs（任意 cwd）
 // 覆盖：
 //   - isSafeGitUrl：https:// / git@ / ssh:// 合法；file://、-u、url;rm、`cmd`、含空格 → false
 //   - isSafeTargetDir：D:/Work/x 合法、D:\Work\x 归一合法、C:\ 盘符根 false、
 //     D:/Work/../x false、相对路径 false、空 false
 //   - gitOperate 未知 action → ok:false（error:'unknown-action'）
+//   - gitOperate init：dir 非法（相对/盘符根/..）→ bad-request（校验先于 git），
+//     init 不再返回 unknown-action
 //   - canRemoveWorkspace：default/auto 拒绝，不存在 not-found，手动条放行
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 
-const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace } = mod
+// 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
+const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -102,6 +106,29 @@ test('gitOperate：未知 action → ok:false', async () => {
   assert.equal(r.error, 'unknown-action')
 })
 
+test('gitOperate init：dir 校验先于 git（非法目录 → bad-request，不触碰 git）', async () => {
+  // init 已进白名单：不再返回 unknown-action，而是进入 dir 校验。
+  // 相对目录 → bad-request
+  const relDir = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: 'work/y' } })
+  assert.equal(relDir.ok, false)
+  assert.equal(relDir.error, 'bad-request', 'init dir 相对路径应报 bad-request')
+
+  // 盘符根 → bad-request
+  const driveRoot = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: 'D:/' } })
+  assert.equal(driveRoot.ok, false)
+  assert.equal(driveRoot.error, 'bad-request', 'init dir 为盘符根应报 bad-request')
+
+  // 含 .. 段 → bad-request
+  const dotdot = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: 'D:/Work/../x' } })
+  assert.equal(dotdot.ok, false)
+  assert.equal(dotdot.error, 'bad-request', 'init dir 含 .. 应报 bad-request')
+
+  // dir 缺省 / 空 → bad-request
+  const missing = await gitOperate({ root: 'D:/Work', action: 'init', args: {} })
+  assert.equal(missing.ok, false)
+  assert.equal(missing.error, 'bad-request', 'init 缺 dir 应报 bad-request')
+})
+
 test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外），url/dir 校验先于 git', async () => {
   // clone 的 root 只是「目标父目录」锚点，本身无需已登记（头注释红线声明）。
   // 修复前：未登记 root → 先撞 isRegistered → unknown-workspace，url/dir 校验死代码；
@@ -124,6 +151,30 @@ test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外�
   const badDir = await gitOperate({ root: 'D:/Work', action: 'clone', args: { url: 'https://github.com/a/b.git', dir: 'work/y' } })
   assert.equal(badDir.ok, false)
   assert.equal(badDir.error, 'bad-request', 'clone dir 相对路径应报 bad-request')
+})
+
+test('parseNumstat：加删行 + 文件数', () => {
+  assert.deepEqual(parseNumstat('1\t2\tREADME.md\n10\t0\tlib/a.mjs\n'), { files: 2, added: 11, removed: 2 })
+})
+
+test('parseNumstat：二进制 `-\t-` 行只计文件数不计行数', () => {
+  assert.deepEqual(parseNumstat('-\t-\tassets/logo.png\n3\t1\tsrc/main.ts\n'), { files: 2, added: 3, removed: 1 })
+})
+
+test('parseNumstat：空输出 / 纯空白 → null', () => {
+  assert.equal(parseNumstat(''), null)
+  assert.equal(parseNumstat('   \n'), null)
+  assert.equal(parseNumstat('\n\n'), null)
+})
+
+test('parseNumstat：含空格路径（TAB 分隔不受影响）', () => {
+  const out = '2\t0\tdocs/my file.md\n'
+  assert.deepEqual(parseNumstat(out), { files: 1, added: 2, removed: 0 })
+})
+
+test('parseNumstat：非字符串 → null', () => {
+  assert.equal(parseNumstat(null), null)
+  assert.equal(parseNumstat(undefined), null)
 })
 
 test('canRemoveWorkspace：default/auto 拒绝、不存在 not-found、手动放行', () => {

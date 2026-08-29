@@ -23,6 +23,9 @@ import {
 import { useFeatureStore } from '../../store/featureStore';
 import { useToastStore } from '../../store/toastStore';
 
+// 输入框行数 clamp 范围：[2, 10]，防止拖没 / 拖出可视区
+const clampRows = (n: number) => Math.max(2, Math.min(10, Math.round(n)));
+
 export const LLMConsole: React.FC = () => {
   const {
     prompt,
@@ -86,6 +89,18 @@ export const LLMConsole: React.FC = () => {
     [slashOpen, prompt, features],
   );
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  // 输入框高度（行数）—— 默认 3 行，记住上次拖的行数（localStorage 持久化）
+  const [inputRows, setInputRows] = React.useState<number>(() => {
+    try {
+      const raw = localStorage.getItem('yxspec-studio.console-input-rows');
+      const n = raw ? Number(raw) : NaN;
+      if (Number.isFinite(n) && n >= 2) return clampRows(n);
+    } catch {
+      /* ignore */
+    }
+    return 3;
+  });
+  const inputDragRef = React.useRef<{ startY: number; startRows: number } | null>(null);
 
   const closeSlash = () => setSlashOpen(false);
 
@@ -186,6 +201,32 @@ export const LLMConsole: React.FC = () => {
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat, loading]);
+
+  // 输入区拖拽调整高度：向上拖 → 行数变多（每 24px ≈ 1 行），实时写 localStorage
+  React.useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = inputDragRef.current;
+      if (!d) return;
+      const next = clampRows(d.startRows + (d.startY - e.clientY) / 24);
+      setInputRows(next);
+      try {
+        localStorage.setItem('yxspec-studio.console-input-rows', String(next));
+      } catch {
+        /* ignore */
+      }
+    };
+    const onUp = () => {
+      inputDragRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
 
   const connTone = connState === 'ok' ? 'ok' : connState === 'err' ? 'err' : 'idle';
   const connLabel = connState === 'ok' ? '已连接执行网关' : connState === 'err' ? '网关未连接' : '检查连接…';
@@ -363,17 +404,32 @@ export const LLMConsole: React.FC = () => {
               onHover={setSlashHighlight}
             />
           )}
-          <textarea
-            ref={textareaRef}
-            className="flex-1 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
-            rows={2}
-            placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
-            aria-label="派活指令输入框"
-            aria-expanded={slashOpen}
-            value={prompt}
-            onChange={(e) => onPromptChange(e.target.value)}
-            onKeyDown={onInputKeyDown}
-          />
+          <div className="flex flex-col flex-1 min-w-0 gap-1">
+            {/* 输入区拖拽手柄：对话区与输入区之间，可单独拉高/压低输入框 */}
+            <div
+              className="h-1.5 cursor-row-resize group relative -mx-1"
+              onMouseDown={(e) => {
+                inputDragRef.current = { startY: e.clientY, startRows: inputRows };
+                document.body.style.cursor = 'row-resize';
+                document.body.style.userSelect = 'none';
+                e.preventDefault();
+              }}
+              title="拖动调整输入框高度"
+            >
+              <div className="h-0.5 w-full bg-transparent group-hover:bg-emerald-300/70 group-active:bg-emerald-500 transition-colors" />
+            </div>
+            <textarea
+              ref={textareaRef}
+              className="flex-1 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              rows={inputRows}
+              placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
+              aria-label="派活指令输入框"
+              aria-expanded={slashOpen}
+              value={prompt}
+              onChange={(e) => onPromptChange(e.target.value)}
+              onKeyDown={onInputKeyDown}
+            />
+          </div>
           {loading && (
             <Button
               variant="danger"

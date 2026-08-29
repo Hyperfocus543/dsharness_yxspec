@@ -168,7 +168,9 @@ describe('pollTask', () => {
   it('超时（timeoutMs 到，任务一直 running）→ 返回 null', async () => {
     mockFetch.mockResolvedValue(okResponse(runningTask));
 
-    const res = await pollTask('task-123', { timeoutMs: 30, intervalMs: 10 });
+    // timeout 别给太小（原 30ms 在 CI 满载时可能超时前只轮询 1 次，flaky）；
+    // 300ms 足够跑多次轮询又不显著拖慢单测。
+    const res = await pollTask('task-123', { timeoutMs: 300, intervalMs: 10 });
 
     expect(res).toBeNull();
     // 超时前持续轮询过多次（而非一次就退）

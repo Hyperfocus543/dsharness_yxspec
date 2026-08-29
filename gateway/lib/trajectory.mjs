@@ -292,6 +292,13 @@ export function trajectoryStatus(rec, meta) {
     toolResults: Array.isArray(rec.tools) ? rec.tools.filter((t) => t.type === 'tool/result').length : 0,
     tokens: rec.cost?.tokens ?? 0,
     reason: rec.reason ?? null,
+    // 展示透传（不参与三态门控判定）：模型名 + reasoning 摘要
+    model: rec.model ?? null,
+    reasoning: {
+      tokens: rec.cost?.reasoningTokens ?? 0,
+      hasReasoning: rec.cost?.hasReasoning === true,
+      deltaCount: rec.reasoningDeltaCount ?? 0,
+    },
   }
 }
 
@@ -461,9 +468,10 @@ export function exportOtelGenAi(stage) {
     const t0 = rec.startedAt ?? 0
     const t1 = rec.finishedAt ?? Date.now()
     const seq = rec.seq ?? 0
+    // 模型名：每条记录可各自记录 model（rec.model?.name），无记录 → null
+    const model = rec.model?.name ?? null
 
     // turn/start：回合边界（阶段执行一次 = 一条 gen_ai.system span，含整体 token 汇总）
-    const model = null // 轨迹聚合未记录模型名（request/header 事件未聚合），置 null
     spans.push({
       name: 'turn/start',
       kind: GENAI_KIND['gen_ai.system'],
@@ -484,6 +492,7 @@ export function exportOtelGenAi(stage) {
         'gen_ai.usage.cache_read_input_tokens': rec.cost?.cacheReadTokens ?? 0,
         'gen_ai.usage.cache_creation_input_tokens': rec.cost?.cacheWriteTokens ?? 0,
         'gen_ai.usage.total_tokens': rec.cost?.tokens ?? 0,
+        'gen_ai.reasoning_tokens': rec.cost?.reasoningTokens ?? 0,
       },
       model,
     })
@@ -505,6 +514,7 @@ export function exportOtelGenAi(stage) {
           'gen_ai.usage.cache_read_input_tokens': rec.cost?.cacheReadTokens ?? 0,
           'gen_ai.usage.cache_creation_input_tokens': rec.cost?.cacheWriteTokens ?? 0,
           'gen_ai.usage.total_tokens': rec.cost?.tokens ?? 0,
+          'gen_ai.reasoning_tokens': rec.cost?.reasoningTokens ?? 0,
         },
         model,
       })

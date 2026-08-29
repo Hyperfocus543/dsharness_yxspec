@@ -356,10 +356,11 @@ export const GitWorkspaceCard: React.FC = () => {
   // ---- 工作区管理 UI 状态 ----
   // 添加表单（区块 B）：默认收起，点「+ 添加」展开；form 内 tab 决定本地/远程
   const [wsFormOpen, setWsFormOpen] = React.useState(false);
-  const [wsMode, setWsMode] = React.useState<'local' | 'remote'>('local');
+  const [wsMode, setWsMode] = React.useState<'local' | 'remote' | 'init'>('local');
   const [wsPath, setWsPath] = React.useState('');
   const [wsUrl, setWsUrl] = React.useState('');
   const [wsDir, setWsDir] = React.useState('');
+  const [wsInitDir, setWsInitDir] = React.useState('');
   const [wsFormError, setWsFormError] = React.useState<string | null>(null);
   // 分支切换（区块 C）：首次展开时拉 branches，选中后 checkout
   const [branchPanelOpen, setBranchPanelOpen] = React.useState(false);
@@ -421,10 +422,41 @@ export const GitWorkspaceCard: React.FC = () => {
     }
   };
 
+  // 新建本地仓库：gitOperate init → 网关 mkdir + git init + 自动登记 → 成功后刷新注册表 + 状态
+  const doInitLocal = async () => {
+    const target = wsInitDir.trim();
+    const err = !target
+      ? '请输入新建仓库目录'
+      : !/^[A-Za-z]:[\\/]/.test(target)
+        ? '需为 Windows 绝对路径（如 D:/Work/04_Temp/新仓库目录）'
+        : null;
+    if (err) {
+      setWsFormError(err);
+      return;
+    }
+    setWsFormError(null);
+    try {
+      await useGitStore.getState().gitOperate({
+        // root 语义同 clone：只是「目标父目录」锚点（网关 init 只取 args.dir，不要求已登记）
+        root: activeWorkspace?.root || '',
+        action: 'init',
+        args: { dir: target },
+      });
+      pushToast('success', '已创建并登记新仓库');
+      setWsInitDir('');
+      setWsFormOpen(false);
+      await refreshWorkspaces().catch(() => {});
+      await refreshStatus().catch(() => {});
+    } catch (e: any) {
+      setWsFormError(e?.message || '新建仓库失败');
+      pushToast('error', `新建仓库失败：${e?.message || e}`);
+    }
+  };
+
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (operating) return;
-    void (wsMode === 'local' ? doAddLocal() : doCloneRemote());
+    void (wsMode === 'local' ? doAddLocal() : wsMode === 'init' ? doInitLocal() : doCloneRemote());
   };
 
   const doSetActive = async (id: string) => {
@@ -486,8 +518,20 @@ export const GitWorkspaceCard: React.FC = () => {
     if (!activeWorkspace) return;
     const label = action === 'fetch' ? '拉取远端' : action === 'pull' ? '同步远端' : '推送本地提交';
     try {
-      await useGitStore.getState().gitOperate({ root: activeWorkspace.root, action });
-      pushToast('success', action === 'fetch' ? '已拉取远端更新' : action === 'pull' ? '已同步远端更新' : '已推送到远端');
+      const res = await useGitStore.getState().gitOperate({ root: activeWorkspace.root, action });
+      // pull 成功后若网关返回了提交文件统计（旧→新 HEAD diff），拼进成功 toast：
+      // 「已同步远端更新（3 文件 +10/-2）」——无新提交（stats 缺省 null）时维持原文案。
+      const stats = res?.stats;
+      pushToast(
+        'success',
+        action === 'fetch'
+          ? '已拉取远端更新'
+          : action === 'pull'
+            ? stats
+              ? `已同步远端更新（${stats.files} 文件 +${stats.added}/-${stats.removed}）`
+              : '已同步远端更新'
+            : '已推送到远端',
+      );
       if (action === 'push') setPushConfirmOpen(false);
       await refreshStatus().catch(() => {});
     } catch (e: any) {
@@ -549,7 +593,7 @@ export const GitWorkspaceCard: React.FC = () => {
           {/* git 不可用且未登记任何工作区 → 引导添加本地/远程仓库（指向区块 A 的「添加」按钮） */}
           {!workspaceLoading && !workspaceError && workspaces.length === 0 && (
             <div className="text-xs text-zinc-400 text-center border border-dashed border-amber-200 rounded-lg px-3 py-2.5">
-              可点击右上角「+ 添加」，添加本地 git 仓库路径，或粘贴远程仓库地址克隆
+              可点击右上角「+ 添加」，添加本地 git 仓库路径、粘贴远程仓库地址克隆，或新建本地仓库（git init）
             </div>
           )}
           <div className="flex justify-center">
@@ -611,7 +655,7 @@ export const GitWorkspaceCard: React.FC = () => {
             onClick={() => setWsFormOpen((v) => !v)}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
             aria-expanded={wsFormOpen}
-            title={wsFormOpen ? '收起添加表单' : '添加本地仓库或克隆远程仓库'}
+            title={wsFormOpen ? '收起添加表单' : '添加本地仓库、克隆远程仓库，或新建本地仓库'}
           >
             <Icon name={I.plus} size={11} />
             添加
@@ -638,7 +682,7 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
         ) : workspaces.length === 0 ? (
           <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
-            暂无工作区，点右上角「+ 添加」登记本地仓库或克隆远程仓库
+            暂无工作区，点右上角「+ 添加」登记本地仓库、克隆远程仓库，或新建本地仓库（git init）
           </div>
         ) : (
           <div className="space-y-1">
@@ -713,12 +757,13 @@ export const GitWorkspaceCard: React.FC = () => {
             onSubmit={handleAddSubmit}
             className="rounded-lg border border-zinc-200 bg-zinc-50/50 p-2.5 space-y-2 animate-fade-in-up"
           >
-            {/* 模式 tabs：本地路径 / 远程仓库 */}
+            {/* 模式 tabs：本地路径 / 远程仓库 / 新建仓库 */}
             <div className="flex gap-1">
               {(
                 [
                   ['local', '本地路径'],
                   ['remote', '远程仓库'],
+                  ['init', '新建仓库'],
                 ] as const
               ).map(([mode, label]) => (
                 <button
@@ -748,6 +793,20 @@ export const GitWorkspaceCard: React.FC = () => {
                 placeholder="D:/Work/01_Projects/..."
                 title="本地 git 仓库根目录"
               />
+            ) : wsMode === 'init' ? (
+              <div className="space-y-1.5">
+                <input
+                  autoFocus
+                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                  value={wsInitDir}
+                  onChange={(e) => setWsInitDir(e.target.value)}
+                  placeholder="D:/Work/04_Temp/新仓库目录"
+                  title="新建仓库目录（git init；目录不存在会自动创建）"
+                />
+                <div className="text-[11px] text-zinc-400">
+                  在目标目录执行 git init 创建新仓库，创建后自动登记进工作区列表（不做账号绑定/远端推拉）
+                </div>
+              </div>
             ) : (
               <div className="space-y-1.5">
                 <input
@@ -776,7 +835,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 disabled={operating}
                 className="px-2.5 py-1 rounded text-xs bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {operating ? '执行中…' : wsMode === 'local' ? '添加' : '克隆'}
+                {operating ? '执行中…' : wsMode === 'local' ? '添加' : wsMode === 'init' ? '创建' : '克隆'}
               </button>
               <button
                 type="button"

@@ -817,6 +817,14 @@ export interface TrajectoryTool {
   ts?: number;
 }
 
+/** 单次目标变更（GoalChange；operation=create/update/clear）。 */
+export interface GoalChange {
+  operation: string;
+  objective: string;
+  phase?: string;
+  at: number;
+}
+
 /** 单条阶段执行记录（JSONL 行，schema 与网关 trajectory.mjs 对齐）。 */
 export interface TrajectoryRecord {
   stage: string;
@@ -830,8 +838,26 @@ export interface TrajectoryRecord {
   stepCount?: number;
   events?: string[];
   tools?: TrajectoryTool[];
-  cost?: { tokens: number; inputTokens: number; outputTokens: number };
+  cost?: {
+    tokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    /** reasoning 专用 token（网关轨迹聚合新增；无 → 0） */
+    reasoningTokens?: number;
+    /** 本次执行是否产生 reasoning 输出（无 → undefined） */
+    hasReasoning?: boolean;
+  };
   reason?: string | null;
+  /** 使用的模型信息（每条记录独立；无 → null） */
+  model?: { provider: string; name: string; maxTokens?: number } | null;
+  /** 本次执行期间的目标（goal）变更序列（无 → 不渲染） */
+  goals?: GoalChange[];
+  /** 执行结束时的待办快照（无 → 不渲染） */
+  todos?: { content: string; status: string }[];
+  /** 用户人工输入（暂停/澄清等；at=毫秒时间戳） */
+  userInputs?: { at: number; preview: string }[];
+  /** reasoning 增量（片段）计数（无 → 0） */
+  reasoningDeltaCount?: number;
   /** Phase 3：回滚协议 —— 该条被标记 rolled_back 时由网关合并进记录 */
   rollbackId?: string | null;
   rolled_back?: boolean;
@@ -849,6 +875,14 @@ export interface TrajectoryGateStatus {
   toolResults: number;
   tokens: number;
   reason: string | null;
+  /** 最近一次执行的模型信息（展示透传；无 → null） */
+  model?: { provider: string; name: string; maxTokens?: number } | null;
+  /** reasoning 摘要（展示透传；与网关 trajectoryStatus 对齐） */
+  reasoning?: {
+    tokens: number;
+    hasReasoning: boolean;
+    deltaCount: number;
+  };
 }
 
 /** GET /api/trajectory?stage= 响应（轨迹面板视图）。 */
@@ -1417,8 +1451,18 @@ export interface GitWorkspaceList {
 /** POST /api/git/operate 请求体 */
 export interface GitOperateParams {
   root: string;
-  action: 'clone' | 'fetch' | 'pull' | 'push' | 'checkout' | 'branch';
+  action: 'clone' | 'fetch' | 'pull' | 'push' | 'checkout' | 'branch' | 'init';
   args?: Record<string, string>;
+}
+
+/** 文件改动统计（pull 等写操作返回；无净改动时缺省 null） */
+export interface GitOpStats {
+  /** 改动文件数 */
+  files: number;
+  /** 新增行数 */
+  added: number;
+  /** 删除行数 */
+  removed: number;
 }
 
 /** POST /api/git/operate 响应 */
@@ -1429,6 +1473,8 @@ export interface GitOperateResult {
   stdout?: string;
   branches?: string[];
   head?: string | null;
+  /** pull 的提交文件改动统计（无新提交 / git 不可用 / 失败 → null） */
+  stats?: GitOpStats | null;
   error?: string;
   message?: string;
 }

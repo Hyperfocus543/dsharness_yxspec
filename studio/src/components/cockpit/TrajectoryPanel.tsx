@@ -53,6 +53,49 @@ function shortHash(h: string | null | undefined): string {
   return h.length > 12 ? `${h.slice(0, 8)}…${h.slice(-4)}` : h;
 }
 
+/** 模型信息（TrajectoryRecord.model / TrajectoryGateStatus.model 同形态）。 */
+type ModelInfo = { provider: string; name: string; maxTokens?: number } | null | undefined;
+
+/** 模型名短显：取 `/` 后最后一段（deepseek/deepseek-chat → deepseek-chat；无 → —） */
+function shortModelName(name: string | null | undefined): string {
+  if (!name) return '—';
+  const seg = name.split('/').filter((s) => s.length > 0);
+  return seg.length > 0 ? seg[seg.length - 1] : name;
+}
+
+/** 模型展示名：name + 可选 provider 前缀（如 deepseek/xxx）；无 → — */
+function modelDisplayName(m: ModelInfo): string {
+  if (!m?.name) return '—';
+  if (m.provider && !m.name.includes(m.provider)) return `${m.provider}/${m.name}`;
+  return m.name;
+}
+
+/** 目标变更 operation → 展示字形（create=+, update=~, clear=x；其他=·） */
+function goalOpGlyph(op: string | undefined): string {
+  return op === 'create' ? '+' : op === 'update' ? '~' : op === 'clear' ? 'x' : '·';
+}
+
+/** 目标变更 operation → 字形颜色（create=绿 / update=琥珀 / clear=绯 / 其他=灰） */
+function goalOpCls(op: string | undefined): string {
+  return op === 'create' ? 'text-sage-600' : op === 'update' ? 'text-amber-600' : op === 'clear' ? 'text-red-500' : 'text-zinc-400';
+}
+
+/** 待办 status → 状态点颜色（completed=绿 / in_progress=琥珀 / 其他=灰） */
+function todoDotCls(status: string | undefined): string {
+  return status === 'completed' ? 'bg-sage-500' : status === 'in_progress' ? 'bg-amber-500' : 'bg-zinc-400';
+}
+
+/** 该条记录是否有「详情」内容（目标/待办/用户输入/reasoning 任一存在 → 渲染折叠钮）。 */
+function recordHasDetails(r: TrajectoryRecord): boolean {
+  if (Array.isArray(r.goals) && r.goals.length > 0) return true;
+  if (Array.isArray(r.todos) && r.todos.length > 0) return true;
+  if (Array.isArray(r.userInputs) && r.userInputs.length > 0) return true;
+  if ((r.reasoningDeltaCount ?? 0) > 0) return true;
+  if ((r.cost?.reasoningTokens ?? 0) > 0) return true;
+  if (r.cost?.hasReasoning === true) return true;
+  return false;
+}
+
 /** 门控三态徽标样式（verified 绿 / unverified 黄 / blocked 红） */
 const GATE_BADGE: Record<string, { cls: string; label: string; icon: React.ElementType }> = {
   verified: { cls: 'bg-sage-100 text-sage-700 border-sage-200', label: '已验证', icon: I.checkCircle },
@@ -90,6 +133,8 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
   const [gitTraces, setGitTraces] = React.useState<GitStageTrace[] | null>(null);
   // hover 展开 commit diff 的行 key（至多一个浮层，与工作区管控卡同交互）
   const [hoverSeq, setHoverSeq] = React.useState<number | null>(null);
+  // 详情可折叠区展开的行 seq（每行底部「详情 ▾/▴」；至多一行展开，默认收起）
+  const [detailSeq, setDetailSeq] = React.useState<number | null>(null);
 
   const reload = React.useCallback(() => {
     setLoading(true);
@@ -314,12 +359,13 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
         <div className="border border-zinc-200 bg-amber-50 rounded-lg px-2.5 py-1.5 text-xs text-amber-700">{rollbackErr}</div>
       )}
 
-      {/* 摘要条：执行次数 / 最近状态 / token / 耗时 */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {/* 摘要条：执行次数 / 最近状态 / token / 耗时 / 模型 */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
         <SummaryTile label="执行次数" value={String(view.totalRuns ?? 0)} />
         <SummaryTile label="最近状态" value={gate ? (REC_STATUS[gate.status]?.label ?? gate.status) : '—'} valueCls={gate ? REC_STATUS[gate.status]?.cls : undefined} />
         <SummaryTile label="最近 Token" value={gate ? String(gate.tokens ?? 0) : '—'} />
         <SummaryTile label="工具调用" value={gate ? String(gate.toolCalls ?? 0) : '—'} />
+        <SummaryTile label="模型" value={modelDisplayName(gate?.model)} />
       </div>
 
       {/* 瀑布：执行记录（新→旧） */}
@@ -346,6 +392,9 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
               // diff 基线：该阶段留痕中比当前 seq 更早的最近一条 commit（纯函数聚合，可单测）
               const gBase = gitTraceBase(gitTraces, r.seq);
               const showGit = !!gCommit;
+              // 详情折叠区：目标/待办/用户输入/reasoning 任一有内容才渲染（整段无字段 → 不出现）
+              const hasDetails = recordHasDetails(r);
+              const detailOpen = detailSeq === r.seq;
               return (
                 <div
                   key={`${r.seq}-${r.startedAt}`}
@@ -365,6 +414,24 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
                     <span className="text-zinc-400 shrink-0">{fmtMs(durMs)}</span>
                     <span className="text-zinc-400 shrink-0 tabular-nums">{r.cost?.tokens ?? 0} tok</span>
                     <span className="text-zinc-400 shrink-0 tabular-nums">T{r.turnCount ?? 0}·S{r.stepCount ?? 0}</span>
+                    {/* 模型徽标：该次执行使用的模型名（短显 zinc mono；无 → 不渲染） */}
+                    {r.model?.name && (
+                      <span
+                        className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px]"
+                        title={modelDisplayName(r.model)}
+                      >
+                        {shortModelName(r.model.name)}
+                      </span>
+                    )}
+                    {/* reasoning 徽标：该次执行有 reasoning 输出（emerald「思考」；无 → 不渲染） */}
+                    {r.cost?.hasReasoning === true && (
+                      <span
+                        className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+                        title={`reasoning ${r.cost?.reasoningTokens ?? 0} tok · ${r.reasoningDeltaCount ?? 0} 片`}
+                      >
+                        思考
+                      </span>
+                    )}
                     <span className="text-zinc-400 shrink-0 tabular-nums" title={`工具调用 ${toolCalls} 次，成功 ${toolOks} 次`}>
                       ×{toolCalls}✓{toolOks}
                     </span>
@@ -412,6 +479,69 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
                           {t.error && <span className="text-red-400 truncate">({t.error})</span>}
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {/* 详情可折叠区（目标变更 / 待办快照 / 用户输入 / reasoning 摘要）：
+                      有任一字段才渲染折叠钮，无字段整段不出现；展开默认收起 */}
+                  {hasDetails && (
+                    <div className="mt-1.5">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+                        onClick={() => setDetailSeq(detailOpen ? null : r.seq)}
+                        aria-expanded={detailOpen}
+                      >
+                        {detailOpen ? '详情 ▴' : '详情 ▾'}
+                      </button>
+                      {detailOpen && (
+                        <div className="mt-1.5 pl-3 border-l-2 border-zinc-100 space-y-1">
+                          {Array.isArray(r.goals) && r.goals.length > 0 && (
+                            <div className="space-y-0.5">
+                              <div className="text-[10px] text-zinc-400 font-medium">目标变更</div>
+                              {r.goals.map((g, i) => (
+                                <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono">
+                                  <span className={`shrink-0 font-bold ${goalOpCls(g.operation)}`}>{goalOpGlyph(g.operation)}</span>
+                                  <span className="truncate text-zinc-600" title={g.objective}>
+                                    {g.objective}
+                                  </span>
+                                  {g.phase && <span className="shrink-0 text-zinc-400">（{g.phase}）</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {Array.isArray(r.todos) && r.todos.length > 0 && (
+                            <div className="space-y-0.5">
+                              <div className="text-[10px] text-zinc-400 font-medium">待办快照</div>
+                              {r.todos.map((t, i) => (
+                                <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                                  <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${todoDotCls(t.status)}`} />
+                                  <span className="truncate text-zinc-600" title={t.content}>
+                                    {t.content}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {Array.isArray(r.userInputs) && r.userInputs.length > 0 && (
+                            <div className="space-y-0.5">
+                              <div className="text-[10px] text-zinc-400 font-medium">用户输入</div>
+                              {r.userInputs.map((u, i) => (
+                                <div key={i} className="text-[11px] text-zinc-500 font-mono truncate" title={u.preview}>
+                                  {u.preview}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {((r.reasoningDeltaCount ?? 0) > 0 || (r.cost?.reasoningTokens ?? 0) > 0) && (
+                            <div className="flex items-center gap-1.5 text-[11px]">
+                              <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              <span className="font-mono text-emerald-700">
+                                reasoning {r.reasoningDeltaCount ?? 0} 片 · {(r.cost?.reasoningTokens ?? 0).toLocaleString()} tok
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   {/* 轨迹×git diff 预览：hover commit 徽标 → 该 commit 相对上一留痕 commit 的改动 */}

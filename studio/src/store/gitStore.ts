@@ -37,7 +37,7 @@ interface GitStore {
   addWorkspace: (root: string) => Promise<void>;
   /** 移除工作区；若删的是 active，active 按后端 activeId 回落 */
   removeWorkspace: (id: string) => Promise<void>;
-  /** 执行 git 写操作（clone/fetch/pull/push/checkout/branch）；失败抛错由调用方处理 */
+  /** 执行 git 写操作（clone/fetch/pull/push/checkout/branch/init）；失败抛错由调用方处理 */
   gitOperate: (opts: ipc.GitOperateParams) => Promise<ipc.GitOperateResult | null>;
   /** 当前已查询的阶段轨迹；未查询/失败为 null */
   commits: GitStageTrace[] | null;

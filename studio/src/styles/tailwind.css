@@ -2,6 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 全局字号梯级上调（项目拍板：不做逐处语义精调）：
+   组件大量使用 text-xs(12px) / text-[11px] / text-[10px]（合计约 400 处），
+   实际视觉字号偏小。在 @tailwind utilities 之后用 @layer utilities 覆盖同名工具类，
+   层序靠后优先，整体上调 1.5px/档：
+     text-[10px]  10px  → 11.5px
+     text-[11px]  11px  → 12.5px
+     text-xs      12px  → 13.5px
+   不动 text-sm(14px)/text-base(16px) 及以上、不动组件代码。
+   注意：任意值类名须转义（.text-\[10px\]）才能匹配 Tailwind 生成的类。 */
+@layer utilities {
+  .text-\[10px\] {
+    font-size: 11.5px;
+  }
+  .text-\[11px\] {
+    font-size: 12.5px;
+  }
+  .text-xs {
+    font-size: 13.5px;
+  }
+}
+
 body {
   /* Claude 暖白视觉：Parchment 暖羊皮纸底，暖系统字体栈 */
   font-family:

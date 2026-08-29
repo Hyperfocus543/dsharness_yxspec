@@ -15,13 +15,18 @@
 //        'text', text:'<prompt>'}], source:{kind:'user'}, role:'user'}] }  ← 阶段边界判定源
 //      - turn/start  { turn: 1 }
 //      - step/start  { turn, step } / step/end { turn, step }
-//      - user/message{ content: [...] }（含 runtime context / skills 系统注入）
+//      - user/message{ content: [...] }（含 runtime context / skills 系统注入；
+//        聚合只取非系统注入的 text 块摘要 → userInputs，最多 3 条）
 //      - session/title { title, messageSeqs }（噪声，聚合忽略）
 //      - request/header { header: { config: { provider, model, maxTokens } } }
+//        ← 模型信息源（last-write-wins → rec.model）
 //      - request/context { provider, model, contextWindow }
-//      - assistant/chunk { turn, step, chunk }（噪声）
+//      - assistant/chunk { turn, step, chunk: StreamChunk }，
+//        chunk.type==='reasoning-delta' { index, text } ← reasoning 思考流（高频，
+//        只计数 rec.reasoningDeltaCount，不落 text 防爆量）
 //      - assistant/message { turn, step, message, usage:{ inputTokens,
-//        outputTokens, cacheReadTokens, cacheWriteTokens } }  ← token 用量源
+//        outputTokens, cacheReadTokens, cacheWriteTokens }, reasoningTokens?,
+//        interrupted? }  ← token 用量源（reasoningTokens 为模型思考 token 计数）
 //      - tool/call    { turn, step, callId, name, arguments }（arguments 可能
 //        是 JSON 字符串）
 //      - tool/result  { turn, step, message: { source:{callId}, content:[{
@@ -72,10 +77,13 @@ const TRACKED = new Set([
   'step/start',
   'step/end',
   'assistant/message',
+  'assistant/chunk',
   'tool/call',
   'tool/result',
+  'request/header',
   'goal/change',
   'todo/write',
+  'user/message',
 ])
 
 // 阶段命令 → token 权威表（复用网关 stages.mjs；harness 外运行/加载失败 → 空表，
@@ -133,13 +141,25 @@ function nextSeqFor(root, stage) {
   }
 }
 
+/** todo/write whole-list 快照 → 归一化列表（last-write-wins 覆盖；content 截断 80 防爆）。
+ *  status 缺省 'unknown'；非数组/空 → []（防御性）。export 供单测（index.test.mjs）。 */
+export function normalizeTodos(todos) {
+  return (Array.isArray(todos) ? todos : []).map((t) => ({
+    content: String(t?.content ?? '').slice(0, 80),
+    status: t?.status ?? 'unknown',
+  }))
+}
+
 /** 轨迹记录 → JSONL 行（schema 与 lib/trajectory.mjs 对齐）。
  *  reason → status 映射（2026-08-27 实跑修正）：
  *    error/max-tokens → failed（模型/流程失败，产物可能残缺）
  *    aborted/interrupted/blocked/stage-switch → blocked（未按预期完成，打回）
  *    completed → passed
- *    null（尚未 turn/end）→ unverified */
-function toRecord(rec) {
+ *    null（尚未 turn/end）→ unverified
+ *  model/goals/todos/userInputs/reasoning 等为可选增强字段：旧记录（无这些
+ *  字段）读取时取默认值（null/[]/0/false），向后兼容不崩。
+ *  export 供 node --test 单测（index.test.mjs）。 */
+export function toRecord(rec) {
   const status =
     rec.reason === 'error' || rec.reason === 'max-tokens' ? 'failed'
       : rec.reason === 'aborted' || rec.reason === 'interrupted' || rec.reason === 'blocked' || rec.reason === 'stage-switch' ? 'blocked'
@@ -162,8 +182,15 @@ function toRecord(rec) {
       outputTokens: rec.tokens.output,
       cacheReadTokens: rec.tokens.cacheRead,
       cacheWriteTokens: rec.tokens.cacheWrite,
+      reasoningTokens: rec.tokens.reasoning ?? 0,
+      hasReasoning: rec.hasReasoning === true,
     },
     reason: rec.reason ?? null,
+    model: rec.model ?? null,
+    goals: Array.isArray(rec.goals) ? rec.goals.slice(0, 10) : [],
+    todos: Array.isArray(rec.todos) ? rec.todos : [],
+    userInputs: Array.isArray(rec.userInputs) ? rec.userInputs.slice(0, 3) : [],
+    reasoningDeltaCount: rec.reasoningDeltaCount ?? 0,
   }
 }
 
@@ -211,8 +238,14 @@ export function apply(ctx, input = {}) {
       stepCount: 0,
       eventTypes: new Set(),
       tools: [],
-      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
       reason: null,
+      model: null,
+      goals: [],
+      todos: [],
+      userInputs: [],
+      reasoningDeltaCount: 0,
+      hasReasoning: false,
     }
     sessions.set(sessionId, rec)
     return rec
@@ -278,6 +311,53 @@ export function apply(ctx, input = {}) {
         rec.tokens.output += u.outputTokens ?? 0
         rec.tokens.cacheRead += u.cacheReadTokens ?? 0
         rec.tokens.cacheWrite += u.cacheWriteTokens ?? 0
+      }
+      const rt = event.data?.reasoningTokens
+      if (typeof rt === 'number' && rt > 0) {
+        rec.tokens.reasoning += rt
+        rec.hasReasoning = true
+      }
+    } else if (event.type === 'request/header') {
+      // 模型信息：完整 header 快照，last-write-wins 存最近一次；无 config 跳过。
+      const cfg = event.data?.header?.config
+      if (cfg && typeof cfg === 'object') {
+        rec.model = {
+          provider: cfg.provider ?? null,
+          name: cfg.model ?? null,
+          maxTokens: cfg.maxTokens ?? null,
+        }
+      }
+    } else if (event.type === 'assistant/chunk') {
+      // reasoning 思考流（流式高频）：只计数不落 text，防爆量。
+      if (event.data?.chunk?.type === 'reasoning-delta') {
+        rec.reasoningDeltaCount++
+        rec.hasReasoning = true
+      }
+    } else if (event.type === 'goal/change') {
+      const g = event.data?.goal
+      rec.goals.push({
+        operation: event.data?.operation ?? null,
+        objective: g?.objective ?? null,
+        phase: g?.phase ?? null,
+        at: Date.now(),
+      })
+      if (rec.goals.length > 10) rec.goals.shift() // 上限 10，超出丢最旧
+    } else if (event.type === 'todo/write') {
+      // whole-list 快照 last-write-wins 覆盖
+      rec.todos = normalizeTodos(event.data?.todos)
+    } else if (event.type === 'user/message') {
+      // 只取用户输入（非系统注入）文本摘要：跳过 source.kind==='system' 且无 role 的块
+      const blocks = Array.isArray(event.data?.content) ? event.data.content : []
+      const texts = []
+      for (const b of blocks) {
+        if (!b || typeof b !== 'object') continue
+        if (b.source?.kind === 'system' && !b.role) continue
+        if (b.type === 'text' && typeof b.text === 'string') texts.push(b.text)
+      }
+      const preview = texts.join('\n').slice(0, 120)
+      if (preview.trim()) {
+        rec.userInputs.push({ at: Date.now(), preview })
+        if (rec.userInputs.length > 3) rec.userInputs.shift() // 最多 3 条，丢最旧
       }
     } else if (event.type === 'turn/end') {
       rec.eventTypes.add(event.type)

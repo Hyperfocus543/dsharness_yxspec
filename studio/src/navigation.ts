@@ -14,7 +14,8 @@ export type FunctionCard =
   | 'plugins'
   | 'settings'
   | 'git-workspace'
-  | 'self-iteration';
+  | 'self-iteration'
+  | 'trajectory';
 
 export interface FunctionCardDef {
   id: FunctionCard;
@@ -30,4 +31,5 @@ export const FUNCTION_CARDS: FunctionCardDef[] = [
   { id: 'settings', label: '设置', icon: I.gear, hint: '模型管理 · 网关' },
   { id: 'git-workspace', label: 'Git 工作区', icon: I.branch, hint: '工作区状态 · 阶段留痕' },
   { id: 'self-iteration', label: '自迭代评分', icon: I.chartBar, hint: '自迭代轮次打分 · 收敛判定' },
+  { id: 'trajectory', label: '轨迹', icon: I.timer, hint: '执行记录 · 门控 · 回滚' },
 ];

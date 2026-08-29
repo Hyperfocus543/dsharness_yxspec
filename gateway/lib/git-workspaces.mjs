@@ -7,7 +7,8 @@
 //   3. removeWorkspace({id})   — 移除手动登记的工作区（default/auto 拒绝）
 //   4. setActiveWorkspace({id})— 切换 activeId
 //   5. gitOperate({root,action,args}) — git 写操作白名单（clone/fetch/pull/push/
-//      checkout/branch -a），每个 action 的 root 必须是已登记工作区或 defaultRoot
+//      checkout/branch -a/init），每个 action 的 root 必须是已登记工作区或 defaultRoot
+//      （clone/init 例外：root 只是「目标父目录」锚点，本身无需已登记）
 //
 // 与 git.mjs 的分工：git.mjs 只读 git + 追加审计 JSONL（绝不写操作）；本模块
 // 是「受白名单约束的 git 写操作层」。写操作一律走 execFile（无 shell，数组透传
@@ -26,6 +27,8 @@
 //   - 任何 git 失败 → { ok:false, error, message }（不抛异常，失败也记审计）
 //   - clone 的 url / checkout 的 branch 不做 shell 拼接（execFile 数组透传），
 //     但 url 仍过 isSafeGitUrl 白名单、dir 过 isSafeTargetDir，双保险防误用。
+//   - clone/init 的 dir（目标目录）同过 isSafeTargetDir（Windows 绝对路径、非盘符
+//     根、不含 ..），init 用前先 mkdirSync 确保目录存在，成功后自动 addWorkspace 登记。
 // =============================================================================
 import { execFile } from 'node:child_process'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -316,12 +319,41 @@ export async function setActiveWorkspace({ id } = {}) {
 }
 
 /**
+ * 解析 `git diff --numstat` 输出 → 文件改动统计（纯函数，供 pull/fetch 结果展示）。
+ * 每行 `加行\t删行\t路径`：新增行 +N / 删除行 -M / 文件数取总行数。
+ * 二进制文件行 `-\t-\tpath`（加删列各为 `-`）→ 计入文件数但不算行数。
+ * 注：加/删为 0 的路径段不会出现（git 只输出有净改动的文件）。
+ * @param {string} out
+ * @returns {{files:number, added:number, removed:number} | null}
+ */
+export function parseNumstat(out) {
+  if (typeof out !== 'string' || !out.trim()) return null
+  let files = 0
+  let added = 0
+  let removed = 0
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    const [a, d, ...pathParts] = line.split('\t')
+    if (!pathParts.length || !pathParts.join('\t').trim()) continue
+    files++
+    const addN = Number(a)
+    const delN = Number(d)
+    if (Number.isFinite(addN) && Number.isFinite(delN)) {
+      if (addN > 0) added += addN
+      if (delN > 0) removed += delN
+    }
+  }
+  if (files === 0) return null
+  return { files, added, removed }
+}
+
+/**
  * git 写操作白名单（受 URL 白名单 + 已登记工作区约束）。
  * @param {{root: string, action: string, args?: object}} param0
  */
 export async function gitOperate({ root, action, args = {} } = {}) {
   // 1) action 白名单校验（未知 action 直接拒绝，不触碰 git）
-  const KNOWN = ['clone', 'fetch', 'pull', 'push', 'checkout', 'branch']
+  const KNOWN = ['clone', 'fetch', 'pull', 'push', 'checkout', 'branch', 'init']
   if (!KNOWN.includes(action)) {
     return { ok: false, error: 'unknown-action', message: `不支持的操作：${action}` }
   }
@@ -337,7 +369,7 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     reg.defaultRoot = gr ? gr.root : null
   }
   let realRoot = null
-  if (action !== 'clone') {
+  if (action !== 'clone' && action !== 'init') {
     if (typeof root !== 'string' || !root.trim()) {
       return { ok: false, error: 'bad-request', message: 'root 不能为空' }
     }
@@ -352,8 +384,9 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (!v.root) return { ok: false, error: v.error, message: v.message }
     realRoot = v.root
   } else {
-    // clone 的 root 只是「目标父目录」锚点（git clone 的 cwd），本身无需已登记
-    // （头注释红线声明）；但仍是用户输入 → 同样过绝对路径/`..` 校验，防弱化。
+    // clone/init 的 root 只是「目标父目录」锚点（git clone 的 cwd / init 的 parent），
+    // 本身无需已登记（头注释红线声明）；但仍是用户输入 → 同样过绝对路径/`..`
+    // 校验，防弱化。
     const rootNorm = typeof root === 'string' ? root.trim().replace(/\\/g, '/') : ''
     if (!isWindowsAbsolute(rootNorm)) {
       return { ok: false, error: 'bad-request', message: 'root 必须为绝对路径（Windows 盘符开头）' }
@@ -363,10 +396,11 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     }
     realRoot = rootNorm
   }
-  // 非 clone 才要求已登记工作区；clone 目标目录由 isSafeTargetDir 单独立界
-  // （url 过 isSafeGitUrl + dir 过 isSafeTargetDir，双保险），锚点仅需绝对路径。
+  // 非 clone/init 才要求已登记工作区；clone/init 的目标目录由 isSafeTargetDir 单独立界
+  // （clone 还有 url 过 isSafeGitUrl 双保险），锚点仅需绝对路径。
   const isRegistered =
     action === 'clone' ||
+    action === 'init' ||
     reg.workspaces.some((w) => w.root === realRoot) ||
     (reg.defaultRoot && reg.defaultRoot === realRoot)
   if (!isRegistered) {
@@ -389,6 +423,22 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     const added = await addWorkspace({ root: dir })
     return { ok: true, root: dir, cloneDir: dir, registered: added.ok ? added.workspace ?? added.already : false }
   }
+  // 3b) init 特有校验（dir 目标目录），init 的 root 只是「目标父目录」锚点。
+  //     语义同 clone：本地在空目录里 git init 建新仓库 → 自动登记进工作区列表。
+  if (action === 'init') {
+    const dir = typeof args.dir === 'string' ? args.dir.trim().replace(/\\/g, '/') : ''
+    if (!isSafeTargetDir(dir)) {
+      return { ok: false, error: 'bad-request', message: 'init 目标目录非法（需绝对路径、非盘符根、不含 ..）' }
+    }
+    // 先确保目录存在（git init 在目录内创建 .git；空目录也允许——git init 自身会补）
+    mkdirSync(dir, { recursive: true })
+    const g = await runGit(['init'], { cwd: dir })
+    recordGitOp({ root: dir, action: 'init', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
+    if (!g.ok) return { ok: false, error: g.error, message: 'git init 执行失败' }
+    // init 后即 git 仓库 → 自动登记进工作区列表（verifyGitRepo 通过）
+    const added = await addWorkspace({ root: dir })
+    return { ok: true, root: dir, initDir: dir, registered: added.ok ? added.workspace ?? added.already : false }
+  }
   // 4) checkout 特有校验（branch 非空、无空格）
   if (action === 'checkout') {
     const branch = typeof args.branch === 'string' ? args.branch.trim() : ''
@@ -407,10 +457,25 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     return { ok: true, stdout: g.stdout }
   }
   if (action === 'pull') {
+    // pull 结果统计：操作前记 HEAD 短哈希，成功后 diff 旧/新 HEAD 得文件改动统计
+    // （--ff-only 语义下新 HEAD 是旧 HEAD 的后代，diff 单向即完整增量）。
+    // rev-parse 失败（如无 HEAD）不阻断 pull 本身，仅 stats 降级为 null。
+    const before = await runGit(['rev-parse', '--short', 'HEAD'], { cwd: realRoot })
     const g = await runGit(['pull', '--ff-only'], { cwd: realRoot })
     recordGitOp({ root: realRoot, action: 'pull', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git pull 执行失败' }
-    return { ok: true, stdout: g.stdout, head: null }
+    let stats = null
+    if (before.ok && before.stdout.trim()) {
+      const after = await runGit(['rev-parse', '--short', 'HEAD'], { cwd: realRoot })
+      const from = before.stdout.trim()
+      const to = after.ok && after.stdout.trim() ? after.stdout.trim() : null
+      // from === to → 无新提交（已是最新）：返回 null，前端不展示「0 文件」的误导统计
+      if (to && to !== from) {
+        const numstat = await runGit(['diff', '--numstat', from, to], { cwd: realRoot })
+        if (numstat.ok) stats = parseNumstat(numstat.stdout)
+      }
+    }
+    return { ok: true, stdout: g.stdout, head: null, stats }
   }
   if (action === 'push') {
     const g = await runGit(['push'], { cwd: realRoot })
