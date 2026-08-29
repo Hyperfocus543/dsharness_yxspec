@@ -76,7 +76,7 @@ export function renderFunctionCard(card: FunctionCard, ctx: FunctionCardCtx) {
     case 'git-workspace':
       return <GitWorkspaceCard />;
     case 'self-iteration':
-      return <SelfIterationCard />;
+      return <SelfIterationCard defaultStage={ctx.currentStage ?? undefined} />;
     default:
       return null;
   }

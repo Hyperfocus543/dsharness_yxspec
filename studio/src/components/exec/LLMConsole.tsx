@@ -92,9 +92,21 @@ export const LLMConsole: React.FC = () => {
   const onSlashSelect = (item: SlashItem) => {
     setSlashOpen(false);
     if (item.kind === 'command') {
-      setPrompt(item.command);
-      // 选中后立即触发（对标 Claude Code 回车触发命令）
-      send(item.command);
+      if (item.token === 'self-iterate') {
+        // 自迭代命令必须带阶段才建 run（网关 parseSelfIterate 裸命令不建）→ 注入当前阶段
+        if (!currentStage) {
+          pushToast('warn', '当前阶段未知，无法快捷启动自迭代，请先在自迭代卡内选择阶段');
+          return;
+        }
+        const cmd = item.command + currentStage; // '/yxspec:self-iterate <当前阶段 token>'
+        setPrompt(cmd);
+        send(cmd);
+      } else {
+        // 现有逻辑不变
+        setPrompt(item.command);
+        // 选中后立即触发（对标 Claude Code 回车触发命令）
+        send(item.command);
+      }
     } else {
       // 功能开关：选中即切换。always（审计账本）不可关，锁定项提示不可用。
       if (item.always) {

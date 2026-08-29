@@ -34,6 +34,10 @@ import {
   worstBadgeLabel,
   type StageRunSummary,
 } from '../../utils/selfIterationSummary';
+import { useStageDispatch } from '../../hooks/useStageDispatch';
+import { useToastStore } from '../../store/toastStore';
+import { buildSelfIterateCommand } from '../../utils/selfIterateCommand';
+import { STAGE_ORDER } from '../../data/stage-mapping';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
 const VERDICT_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
@@ -381,11 +385,24 @@ const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
   );
 };
 
-export const SelfIterationCard: React.FC = () => {
+export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ defaultStage }) => {
   const [data, setData] = React.useState<SelfIterationOverview | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // 启动新迭代：派活通道 + 全局 toast + 表单状态（必须在任何条件 return 之前无条件调用）
+  const { dispatch, cancel, sending } = useStageDispatch();
+  const pushToast = useToastStore((s) => s.push);
+  const [stageSel, setStageSel] = React.useState('');
+  const [maxIterSel, setMaxIterSel] = React.useState('3');
+  const [goalSel, setGoalSel] = React.useState('');
+  const [resumeSel, setResumeSel] = React.useState(false);
+  // 阶段候选：排除废弃 swe_detail 与 PC 变体 swe_coding_verify_pc（与 SlashCommandMenu 同口径）
+  const stageOptions = React.useMemo(
+    () => STAGE_ORDER.filter((t) => t !== 'swe_detail' && t !== 'swe_coding_verify_pc'),
+    [],
+  );
 
   const load = React.useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoading(true);
@@ -429,6 +446,33 @@ export const SelfIterationCard: React.FC = () => {
     await load({ quiet: true });
     setRefreshing(false);
   };
+
+  // 启动新迭代：拼命令 → 空阶段 warn → 派活 → 派活完自动刷新卡内数据（新轮次留痕/新 run 摘要）
+  const onStart = async () => {
+    if (sending) return;
+    const cmd = buildSelfIterateCommand({
+      stage: stageSel.trim(),
+      maxIter: maxIterSel === '' ? undefined : Number(maxIterSel),
+      goal: goalSel.trim(),
+      resume: resumeSel,
+    });
+    if (!cmd) { pushToast('warn', '请先选择阶段'); return; }
+    const result = await dispatch(cmd);
+    if (result) await load({ quiet: true });
+  };
+
+  // 跨阶段 run 汇总（纯前端聚合）：收敛/退化/进行中计数 + 每阶段最佳分/最差轮。
+  // 数据源 = 本卡已拉取的 SelfIterationOverview，零新接口；空数据 → 空数组，不渲染。
+  // 必须在所有条件 return 之前调用（hooks 顺序恒定，防 React 报 "more hooks than previous render"）。
+  const summaries = React.useMemo(() => summarizeStages(data), [data]);
+  const summaryStats = React.useMemo(
+    () => ({
+      converged: convergedCount(summaries),
+      running: runningCount(summaries),
+      degraded: degradedCount(summaries),
+    }),
+    [summaries],
+  );
 
   if (loading) {
     return (
@@ -474,18 +518,6 @@ export const SelfIterationCard: React.FC = () => {
   const { state, stages } = data;
   const empty = stages.length === 0;
 
-  // 跨阶段 run 汇总（纯前端聚合）：收敛/退化/进行中计数 + 每阶段最佳分/最差轮。
-  // 数据源 = 本卡已拉取的 SelfIterationOverview，零新接口；空数据 → 空数组，不渲染。
-  const summaries = React.useMemo(() => summarizeStages(data), [data]);
-  const summaryStats = React.useMemo(
-    () => ({
-      converged: convergedCount(summaries),
-      running: runningCount(summaries),
-      degraded: degradedCount(summaries),
-    }),
-    [summaries],
-  );
-
   return (
     <div className="p-4 space-y-4">
       {/* 标题行 + 刷新 */}
@@ -511,6 +543,86 @@ export const SelfIterationCard: React.FC = () => {
           <Icon name={I.refresh} size={11} />
           {refreshing ? '刷新中…' : '刷新'}
         </button>
+      </div>
+
+      {/* 启动新迭代：选阶段/轮数/收敛目标/断点 → 一键派活 /yxspec:self-iterate（网关插件） */}
+      <div className="rounded-lg border border-zinc-200 bg-white p-3 space-y-2">
+        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+          <Icon name={I.play} size={13} />
+          启动新迭代
+          <span className="ml-auto text-[10px] text-zinc-300">默认 3 轮 · 收敛目标可选</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <label className="flex flex-col gap-1 text-[10px] text-zinc-400">
+            阶段
+            <select
+              value={stageSel}
+              onChange={(e) => setStageSel(e.target.value)}
+              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+            >
+              <option value="" disabled hidden>选择阶段</option>
+              {stageOptions.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] text-zinc-400">
+            轮数
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={maxIterSel}
+              onChange={(e) => setMaxIterSel(e.target.value.replace(/[^0-9]/g, ''))}
+              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] text-zinc-400">
+            收敛目标（可选）
+            <input
+              type="text"
+              placeholder="如 Total>=80 且门禁全绿"
+              value={goalSel}
+              onChange={(e) => setGoalSel(e.target.value)}
+              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+            />
+          </label>
+          <label
+            className="flex items-end pb-1.5 gap-1.5 text-xs text-zinc-500 cursor-pointer"
+            title="--resume：从上一会话断点续跑"
+          >
+            <input
+              type="checkbox"
+              checked={resumeSel}
+              onChange={(e) => setResumeSel(e.target.checked)}
+              className="accent-emerald-600"
+            />
+            断点恢复
+          </label>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={sending}
+            onClick={onStart}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60"
+            title={stageSel ? `派活 /yxspec:self-iterate ${stageSel}` : '请先选择阶段'}
+          >
+            <Icon name={sending ? I.clock : I.play} size={11} />
+            {sending ? '启动中…' : '启动'}
+          </button>
+          {sending && (
+            <button
+              type="button"
+              onClick={cancel}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98]"
+              title="终止本轮派活（网关 /api/agent/abort）"
+            >
+              <Icon name={I.stop} size={11} />
+              取消
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 当前 run 摘要（有 run-state 才展示） */}
@@ -597,7 +709,7 @@ export const SelfIterationCard: React.FC = () => {
           <div className="text-xs text-zinc-400 py-6 text-center border border-dashed border-zinc-200 rounded-lg space-y-1">
             <div>尚未执行过自迭代（无留痕记录）</div>
             <div className="text-[11px]">
-              派活 /yxspec:self-iterate 命令后，每轮打分与判定会写入 runtime-data/trajectory/self_iteration/。
+              在上方选择阶段并启动新迭代，每轮打分与判定会写入 runtime-data/trajectory/self_iteration/。
             </div>
           </div>
         ) : (

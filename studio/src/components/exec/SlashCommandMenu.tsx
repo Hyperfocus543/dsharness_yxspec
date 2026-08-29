@@ -6,6 +6,8 @@
 //     回车 = 切换开关，实时反映 enabled 状态（☑/☐）
 // 输入 `/` 弹全部，继续输入过滤（命令名 / 功能名 / ASPICE），Esc 关闭。
 // 阶段命令排除废弃节点（swe_detail）与 PC 变体（swe_coding_verify_pc）。
+// 末尾追加一条「自迭代」网关插件级命令（非阶段）：选中后由 LLMConsole
+// 注入当前阶段 token 组成 /yxspec:self-iterate <stage> 再派活（裸命令不建 run）。
 // =============================================================================
 
 import React from 'react';
@@ -34,19 +36,30 @@ export type SlashItem =
 // 活跃阶段命令（排除废弃/变体）
 const EXCLUDED = new Set(['swe_detail', 'swe_coding_verify_pc']);
 
-export const SLASH_COMMANDS: Extract<SlashItem, { kind: 'command' }>[] = STAGE_ORDER.filter(
-  (t) => !EXCLUDED.has(t),
-).map((t) => {
-  const m = STAGE_TABLE[t];
-  return {
-    kind: 'command',
-    token: t,
-    command: m.command,
-    command_name: m.command_name,
-    aspice: m.aspice,
-    group: m.group,
-  };
-});
+export const SLASH_COMMANDS: Extract<SlashItem, { kind: 'command' }>[] = [
+  ...STAGE_ORDER.filter((t) => !EXCLUDED.has(t)).map(
+    (t): Extract<SlashItem, { kind: 'command' }> => {
+      const m = STAGE_TABLE[t];
+      return {
+        kind: 'command',
+        token: t,
+        command: m.command,
+        command_name: m.command_name,
+        aspice: m.aspice,
+        group: m.group,
+      };
+    },
+  ),
+  // 自迭代（非阶段命令，网关插件级）：选中后由 LLMConsole 注入当前阶段派活
+  {
+    kind: 'command' as const,
+    token: 'self-iterate',
+    command: '/yxspec:self-iterate ',
+    command_name: '自迭代',
+    aspice: 'ACQ.4',
+    group: '自迭代',
+  },
+];
 
 /** 功能商店条目转 Slash 项（含开关状态快照）。纯 UI 插件（uiOnly）不进命令菜单。 */
 export function featuresToSlashItems(features: FeatureItem[]): Extract<SlashItem, { kind: 'feature' }>[] {
