@@ -35,7 +35,7 @@ import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
 import { getStatus, getStageRecords, getFileDiff, recordRollback } from './lib/git.mjs'
-import { listWorkspaces, addWorkspace, removeWorkspace, setActiveWorkspace, gitOperate, listAuditLog } from './lib/git-workspaces.mjs'
+import { listWorkspaces, addWorkspace, removeWorkspace, setActiveWorkspace, gitOperate, listAuditLog, listCloneProgress } from './lib/git-workspaces.mjs'
 import { selfIterationOverview } from './lib/self-iteration.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
@@ -791,6 +791,17 @@ const server = createServer(async (req, res) => {
     // 写操作审计留痕：GET /api/git/audit?limit=N
     // 读 git-workspace-audit.jsonl（写操作 clone/fetch/pull/push/checkout/init 时
     // recordGitOp 追加），时间倒序展示；缺文件 → 空数组（前端渲染空态）。
+    // clone 进度轮询：GET /api/git/clone-progress?dir=<dir>
+    // 读内存进度注册表（spawn 版 clone 逐行解析 stderr 写入），前端「克隆中」轮询
+    // 渲染百分比条；dir 缺省 → 返回全量（新→旧）。无注册表/网关重启 → 空数组（前端降级）。
+    if (req.method === 'GET' && path === '/api/git/clone-progress') {
+      const dir = url.searchParams.get('dir')
+      return json(res, 200, {
+        ok: true,
+        entries: listCloneProgress(dir ? { dir } : {}),
+      })
+    }
+
     if (req.method === 'GET' && path === '/api/git/audit') {
       return json(res, 200, listAuditLog({ limit: Number(url.searchParams.get('limit') ?? 20) }))
     }

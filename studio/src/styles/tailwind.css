@@ -73,6 +73,28 @@ button:not(:disabled):focus-visible,
   }
 }
 
+/* 克隆进度条不定长流动段（连接远程/服务器无统计阶段：无确定百分比，用流动段示意仍在跑）。
+   左右来回滑移（translateX -100%→300%，段宽 1/3，视觉上连续循环穿过容器），
+   只动 transform 不触发布局；prefers-reduced-motion 下退化为静止段（仍可见颜色，不误导成卡死）。 */
+@keyframes slide-x {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.animate-slide {
+  animation: slide-x 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-slide {
+    animation: none;
+  }
+}
+
 /* 执行终端底部浮层滑入/滑出（ui-animation：panel reveal，move 曲线 240ms）。
    收起态 translateY(100%) 移出主区 + visibility hidden（不再占位、不可聚焦）；
    展开态回到原位。动画只动 transform/visibility，不触发布局重排。

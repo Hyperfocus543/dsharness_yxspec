@@ -18,7 +18,7 @@ import { EmptyState, GitDiffPreview, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
-import { getGitDiff, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
+import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 
@@ -366,6 +366,92 @@ const AuditRow: React.FC<{ e: GitAuditEntry }> = ({ e }) => {
         </span>
       )}
       <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOfMs(e.at)}</span>
+    </div>
+  );
+};
+
+/** clone 进度条（区块 B「远程仓库」克隆中渲染）。
+ *  数据源 = 网关 /api/git/clone-progress（spawn 版 clone 逐行解析 stderr 写入的内存注册表）。
+ *  能力：
+ *    · running → 实时百分比条（Receiving objects / Resolving deltas 阶段文案），
+ *      pct 为 null（starting / 服务器无统计）→ 不定长流动条 + 「连接远程…」
+ *    · done / failed → 终态（克隆完成的瞬时置绿，随后按钮态即切换）
+ *    · 老网关无此端点 / 网关未起 / 无注册表（entries 空）→ 返回 null，
+ *      克隆表单退回纯「执行中…（已执行 Ns）」秒表，不阻塞既有流程 */
+const CloneProgressBar: React.FC<{ dir: string }> = ({ dir }) => {
+  const [prog, setProg] = React.useState<CloneProgressRecord | null>(null);
+  const [unavailable, setUnavailable] = React.useState(false);
+  React.useEffect(() => {
+    let cancelled = false;
+    // 轮询统一按网关 key 口径：trim + 反斜杠→正斜杠（与 gitOperate 的 args.dir 归一一致，
+    // 否则用户输入 `D:\Work\x` 时精确匹配恒落空）。dir 匹配到才开始展示（避免误显示
+    // 上一次克隆的陈旧「已完成」）。老网关无端点 → unavailable，静默降级为纯秒表。
+    const timer = setInterval(async () => {
+      const r = await fetchCloneProgress(dir);
+      if (cancelled) return;
+      if (r?.entries?.length) {
+        setProg(r.entries[0]);
+        setUnavailable(false);
+      } else if (!r) {
+        setUnavailable(true);
+      }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [dir]);
+
+  // 网关无端点/未起（unavailable）或始终无进度数据 → 静默降级，不占表单空间
+  if (unavailable || !prog) return null;
+  const done = prog.status === 'done';
+  const failed = prog.status === 'failed';
+  const pct = prog.pct;
+  // 阶段文案：receiving=收到对象 / deltas=解析增量 / starting=连接远程（不定长流动）
+  const stageText =
+    prog.stage === 'receiving' ? '接收对象' : prog.stage === 'deltas' ? '解析增量' : '连接远程…';
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="text-zinc-500 inline-flex items-center gap-1">
+          {failed ? (
+            <span className="text-red-600 inline-flex items-center gap-1">
+              <Icon name={I.warn} size={11} weight="fill" />
+              克隆失败
+            </span>
+          ) : (
+            <>
+              <span className="text-zinc-400">{stageText}</span>
+              <span className="text-zinc-300">·</span>
+              <span className="text-zinc-600 font-mono tabular-nums">{pct != null ? `${pct}%` : '—'}</span>
+            </>
+          )}
+        </span>
+        {done && (
+          <span className="text-sage-700 inline-flex items-center gap-1 font-medium">
+            <Icon name={I.check} size={11} weight="fill" />
+            克隆完成
+          </span>
+        )}
+      </div>
+      {/* 百分比确定时实心进度条；无 pct（starting/无统计）→ 不定长流动条 */}
+      <div className="h-1.5 w-full rounded-full bg-zinc-100 overflow-hidden" role="progressbar" aria-label="克隆进度" aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
+        {pct != null ? (
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${
+              failed ? 'bg-red-400' : done ? 'bg-sage-500' : 'bg-emerald-500'
+            }`}
+            style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
+          />
+        ) : (
+          <div className={`h-full w-1/3 rounded-full animate-slide ${failed ? 'bg-red-300' : 'bg-emerald-300'}`} />
+        )}
+      </div>
+      {failed && prog.error && (
+        <div className="text-[11px] text-red-600 truncate" title={prog.error}>
+          {prog.error}
+        </div>
+      )}
     </div>
   );
 };
@@ -1036,6 +1122,10 @@ export const GitWorkspaceCard: React.FC = () => {
                   placeholder="D:/Work/04_Temp/"
                   title="克隆目标目录（默认当前活动工作区根目录）"
                 />
+                {/* 克隆进度条：operating 且目标目录已填时渲染（不打断输入；无进度数据静默降级） */}
+                {operating && wsDir.trim() && (
+                  <CloneProgressBar dir={wsDir.trim().replace(/\\/g, '/').replace(/[\\/]+$/, '')} />
+                )}
               </div>
             )}
 

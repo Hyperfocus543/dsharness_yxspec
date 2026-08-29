@@ -1627,6 +1627,49 @@ export interface GitAuditResult {
   entries: GitAuditEntry[];
 }
 
+/** 单条 clone 进度快照（网关 /api/git/clone-progress；纯内存注册表，clone 结束仍保留）。 */
+export interface CloneProgressRecord {
+  /** 目标目录（= 注册表 key，前端克隆时已知，精确匹配轮询） */
+  dir: string;
+  /** running | done | failed（克隆中 / 完成 / 失败） */
+  status: 'running' | 'done' | 'failed';
+  /** starting | receiving | deltas | done（对象接收 / 增量解析阶段） */
+  stage: 'starting' | 'receiving' | 'deltas' | 'done';
+  /** 进度百分比 0~100；无统计（starting/服务器不报）→ null */
+  pct: number | null;
+  /** 启动时间（毫秒时间戳） */
+  startedAt: number;
+  /** 失败原因（status=failed 时；无 → null） */
+  error: string | null;
+}
+
+/** GET /api/git/clone-progress 响应。 */
+export interface CloneProgressResult {
+  ok: boolean;
+  entries: CloneProgressRecord[];
+}
+
+/**
+ * 拉取 clone 进度快照（网关内存注册表，clone 期间轮询渲染百分比条）。
+ * - dir 指定 → 精确匹配该目录的进度（前端克隆时已知目标目录，轮询不串台）；
+ *   dir 缺省 → 全量（新→旧，前端首次轮询不知道 key 时兜底）。
+ * - 老网关无此端点 / 网关未起 / 无注册表 → null（前端降级为纯秒表，不阻塞克隆）。
+ */
+export async function fetchCloneProgress(dir?: string): Promise<CloneProgressResult | null> {
+  try {
+    const q = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+    const res = await fetch(`${GATEWAY_BASE}/api/git/clone-progress${q}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as CloneProgressResult | null;
+    if (!data || !Array.isArray(data.entries)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 拉取 git 写操作审计留痕（时间倒序）；失败返回 null（老网关无此端点 / 网关未起）。
  * @param limit 条数上限（网关钳到 1~200；缺省 20）

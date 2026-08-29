@@ -30,7 +30,7 @@
 //   - clone/init 的 dir（目标目录）同过 isSafeTargetDir（Windows 绝对路径、非盘符
 //     根、不含 ..），init 用前先 mkdirSync 确保目录存在，成功后自动 addWorkspace 登记。
 // =============================================================================
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -421,6 +421,144 @@ const AUDIT_ACTION_LABEL = {
   init: '新建仓库',
 }
 
+// =============================================================================
+// clone 进度反馈（Git 工作区管控卡「远程仓库」克隆的 live 进度条）
+// 目的：大仓库 clone（30s~2min）期间前端只有盲等秒表，无法区分「还在跑」与
+// 「卡死」——把 git clone 的 stderr 进度行（Receiving objects: NN%）透传成
+// 可轮询的进度快照，前端 clone 表单实时渲染百分比。
+// 实现：spawn（非 execFile）跑 `git clone --progress`，逐行解析 stderr（clone 进度
+// 走 stderr；stdout 仅终态钩子）。进度注册表是纯内存 Map（clone 是短生命周期操作，
+// 网关重启即失效可接受，前端捕获 404/空则静默降级为纯秒表）。只追加新条目，
+// 不删除旧条目——浏览器/前端轮询时序可能与任务完成竞态，旧的已完成条目留着兜底。
+// 红线：clone 进度只是「反馈增强」，不改变任何 git 语义与返回契约。
+//   - 失败/超时 → ok:false（与 runGit 路径同契约，前端既有错误分支处理）
+//   - 进度解析失败（无 Receiving 行，如服务器无统计）→ 条目仍在，只状态机驱动
+//   - 内存注册表在并发 clone 下 key 冲突 → 后到者覆盖前者的条目（单网关串行跑 clone，
+//     key 含 dir 已基本唯一；即使冲突也只是进度快照被覆盖，clone 本身互不影响）
+// =============================================================================
+
+/** 正在进行的 clone：key(=dir) → child；网关重启即随进程消失（clone 短生命周期，无需持久化）。 */
+const cloneSpawns = new Map()
+
+/** clone 进度快照注册表（append-only）：key → 进度对象（前端轮询 /api/git/clone-progress）。 */
+const cloneProgress = new Map()
+
+/** chunk 边界粘滞尾（stderr 数据块可能切半行，粘住下一块再整行解析）。 */
+let stderrTail = ''
+
+/** 进度轮询条数上限（防泄漏兜底；正常 clone 只会写 1 条/次） */
+const CLONE_PROGRESS_MAX = 50
+
+/** 进度快照累积字段上限（防止极端损坏行撑爆内存；只截断展示数据不截断解析） */
+const CLONE_LINE_MAX = 500
+
+/**
+ * 解析单行 git clone --progress 的 stderr 进度行（纯函数，可单测）。
+ * 兼容三种 Git 形态：
+ *   `Receiving objects:  42% (1234/2938), 5.12 MiB | 3.45 MiB/s`   → 收到对象（%）
+ *   `Resolving deltas:  33% (3/9)`                                 → 解析增量（%）
+ *   `Receiving objects: 100% (2938/2938), 20.0 MiB | 5.0 MiB/s`    → 完成（状态机归终态）
+ * 非进度行（remote: ... / Counting objects / 空行）→ null。
+ * 合法百分比 0~100（解析 <0 或 >100 的损坏行 → 拒绝，避免状态机误判完成）。
+ * @param {string} line
+ * @returns {{kind:'receiving'|'deltas', pct:number} | null}
+ */
+export function parseCloneProgressLine(line) {
+  if (typeof line !== 'string' || !line.trim()) return null
+  const m = /^(Receiving objects|Resolving deltas):\s+(\d{1,3})%\s*\(\d+\/\d+\)/.exec(line.trim())
+  if (!m) return null
+  const pct = Number(m[2])
+  if (!Number.isInteger(pct) || pct < 0 || pct > 100) return null
+  return { kind: m[1] === 'Receiving objects' ? 'receiving' : 'deltas', pct }
+}
+
+/**
+ * spawn 版 `git clone --progress`：逐行解析 stderr 进度写入注册表。
+ * 语义与 runGit 版完全一致（ok:true / ok:false + error），只是顺带采集进度。
+ * @param {string[]} args `['clone', '--progress', url, dir]`（白名单校验已在 gitOperate 完成）
+ * @param {{cwd: string, key: string}} opts cwd=已创建的目录；key=进度注册表键（gitOperate 传 dir）
+ * @returns {Promise<{ok:boolean, stdout:string, stderr:string, error?:string}>}
+ */
+export function cloneWithProgress(args, { cwd, key }) {
+  return new Promise((resolve_) => {
+    let stdout = ''
+    let stderr = ''
+    const prog = {
+      dir: key,
+      status: 'running',
+      stage: 'starting',
+      pct: null,
+      startedAt: Date.now(),
+      error: null,
+    }
+    cloneProgress.set(key, prog)
+    const child = spawn('git', args, { cwd, encoding: 'utf8', windowsHide: true })
+    cloneSpawns.set(key, child)
+    const touch = (patch) => {
+      const cur = cloneProgress.get(key)
+      if (cur) cloneProgress.set(key, { ...cur, ...patch })
+    }
+    child.stdout?.on('data', (d) => { stdout += String(d ?? '') })
+    child.stderr?.on('data', (d) => {
+      const chunk = String(d ?? '')
+      stderr += chunk
+      // 逐行解析：进度行以 \r 原地刷新（非 TTY 也如此），chunk 边界可能切半行、
+      // 也可能整段无 \n 只有 \r → 同时按 \n 与 \r 切行，粘滞尾再拼下一块。
+      // 行超长截断防损坏行撑爆内存（只截断展示数据，不截断解析）。
+      const lines = (stderrTail + chunk).split(/\r?\n|\r/)
+      stderrTail = lines.pop() ?? ''
+      for (const raw of lines) {
+        if (stderr.length > CLONE_LINE_MAX) stderr = stderr.slice(-CLONE_LINE_MAX)
+        const ln = raw.trim()
+        const p = parseCloneProgressLine(ln)
+        if (p) {
+          if (p.kind === 'receiving') touch({ status: 'running', stage: 'receiving', pct: p.pct })
+          else if (p.kind === 'deltas') touch({ status: 'running', stage: 'deltas', pct: p.pct })
+        }
+      }
+    })
+    child.on('error', (err) => {
+      // spawn 失败（ENOENT：git 未装）→ 终态；进度条目同步标记，前端轮询拿得到原因
+      const msg = err?.code === 'ENOENT' ? 'git-not-installed' : String(err?.message ?? err)
+      touch({ status: 'failed', error: msg })
+      cloneSpawns.delete(key)
+      resolve_({ ok: false, stdout: '', stderr: '', error: msg, code: err?.code ?? null })
+    })
+    child.on('close', (code) => {
+      cloneSpawns.delete(key)
+      if (code === 0) {
+        touch({ status: 'done', stage: 'done', pct: 100 })
+        resolve_({ ok: true, stdout: stdout ?? '', stderr: stderr ?? '' })
+      } else {
+        const msg = (stderr ?? '').trim() || `git clone 退出码 ${code}`
+        touch({ status: 'failed', error: msg })
+        resolve_({ ok: false, stdout: stdout ?? '', stderr: stderr ?? '', error: msg })
+      }
+    })
+  })
+}
+
+/**
+ * 读取 clone 进度快照（GET /api/git/clone-progress 数据源；轮询式）。
+ * - dir 缺省 → 返回全量（新→旧，上限 CLONE_PROGRESS_MAX）——前端「克隆中」首次
+ *   轮询时不知道自己 clone 的 key，先拿最新一条（唯一在跑的克隆就是它）
+ * - dir 指定 → 精确匹配；不存在 → []（前端静默降级为纯秒表）
+ * - 快照只含可序列化字段（不含 spawn 句柄，不能跨进程序列化）
+ * @param {{dir?: string}} [opts]
+ * @returns {object[]} { dir, status, stage, pct, startedAt, error }
+ */
+export function listCloneProgress({ dir } = {}) {
+  if (dir) {
+    const p = cloneProgress.get(dir)
+    return p ? [{ ...p }] : []
+  }
+  const out = []
+  for (const [, p] of cloneProgress) out.push({ ...p })
+  return out
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+    .slice(0, CLONE_PROGRESS_MAX)
+}
+
 /** 审计文件路径：恒按当前生效 env 解析（与 defaultRoot 同口径——磁盘/模块常量的
  *  陈旧快照不阻断；改 YXSPEC_GIT_AUDIT 后读写两侧立刻指向新文件，测试/换目录即生效）。
  *  缺省回退模块默认路径。 */
@@ -594,7 +732,10 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (targetDirState(dir).nonEmpty) {
       return { ok: false, error: 'bad-request', message: 'clone 目标目录已存在且非空（git 无法克隆到非空目录），请更换目标目录' }
     }
-    const g = await runGit(['clone', url, dir], { cwd: dir })
+    // clone 进度反馈：spawn 版（--progress + stderr 逐行解析 → 内存进度注册表）。
+    // 契约与 runGit 版一致（成功 ok:true / 失败 ok:false + error），进度只作增强；
+    // 前端「克隆中」轮询 /api/git/clone-progress 渲染百分比条（老网关/无注册表 → 纯秒表降级）。
+    const g = await cloneWithProgress(['clone', '--progress', url, dir], { cwd: dir, key: dir })
     recordGitOp({ root: dir, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git clone 执行失败' }
     // clone 成功后自动登记新仓库进工作区列表

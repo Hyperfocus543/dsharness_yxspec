@@ -12,13 +12,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -449,6 +450,87 @@ test('listAuditLog：读审计文件返回时间倒序（新→旧），limit �
   } finally {
     if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
     else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('parseCloneProgressLine：Receiving objects / Resolving deltas 百分比', () => {
+  // 收到对象：常见带速率后缀形态
+  assert.deepEqual(parseCloneProgressLine('Receiving objects:  42% (1234/2938), 5.12 MiB | 3.45 MiB/s'), { kind: 'receiving', pct: 42 })
+  // 解析增量
+  assert.deepEqual(parseCloneProgressLine('Resolving deltas:  33% (3/9)'), { kind: 'deltas', pct: 33 })
+  // 完成态（Receiving 100%）
+  assert.deepEqual(parseCloneProgressLine('Receiving objects: 100% (2938/2938), 20.0 MiB | 5.0 MiB/s'), { kind: 'receiving', pct: 100 })
+  // 行首空白容忍
+  assert.deepEqual(parseCloneProgressLine('   Resolving deltas:  0% (0/1)'), { kind: 'deltas', pct: 0 })
+  // 尾随 \r（git 进度行用 \r 原地刷新，chunk 切在行尾）
+  assert.deepEqual(parseCloneProgressLine('Receiving objects:  5% (100/2000)\r'), { kind: 'receiving', pct: 5 })
+})
+
+test('parseCloneProgressLine：非进度行 / 损坏行 / 非字符串 → null', () => {
+  // git 克隆的非进度 stderr 行
+  for (const line of [
+    '',
+    'Cloning into \'D:/Work/x\'...',
+    'remote: Enumerating objects: 100, done.',
+    'remote: Counting objects: 100% (100/100), done.',
+    'remote: Compressing objects: 100% (50/50), done.',
+    'remote: Total 2938 (delta 9), reused 2938 (delta 9), pack-reused 2938',
+    'Receiving objects: done.',
+  ]) {
+    assert.equal(parseCloneProgressLine(line), null, `应 null: ${JSON.stringify(line)}`)
+  }
+  // 非字符串（损坏 chunk）
+  assert.equal(parseCloneProgressLine(null), null)
+  assert.equal(parseCloneProgressLine(undefined), null)
+  assert.equal(parseCloneProgressLine(42), null)
+})
+
+test('parseCloneProgressLine：非法百分比（<0 / >100 / 非数字）→ null，不误判完成', () => {
+  assert.equal(parseCloneProgressLine('Receiving objects: 101% (100/100)'), null)
+  assert.equal(parseCloneProgressLine('Receiving objects: -1% (0/100)'), null)
+  assert.equal(parseCloneProgressLine('Receiving objects: abc% (0/100)'), null)
+  assert.equal(parseCloneProgressLine('Receiving objects: 12.5% (0/100)'), null) // 非整数
+})
+
+test('listCloneProgress：无注册表 → 空数组；dir 精确匹配；返回快照不含 spawn 句柄', () => {
+  // 全新模块状态（node --test 每次独立加载）→ 空数组
+  assert.deepEqual(listCloneProgress(), [])
+  assert.deepEqual(listCloneProgress({ dir: 'D:/Work/x' }), [])
+  // 空 dir 等同全量（不抛）
+  assert.deepEqual(listCloneProgress({ dir: '' }), [])
+})
+
+test('cloneWithProgress：spawn 版 clone 成功 → 进度注册表写终态（done/100），dir 精确可取', async () => {
+  // 用本地 git 仓库验证 spawn 版生命周期（本地 clone 不走 pack 传输 → 无 Receiving
+  // 进度行，但注册表仍应有 starting→done 状态机终态；HTTP/SSH 下进度行由
+  // parseCloneProgressLine 单测覆盖）。isSafeGitUrl 拦截本地路径，故不绕 gitOperate，
+  // 直接调 cloneWithProgress 验证采集链路本身。
+  const dir = mkdtempSync(join(tmpdir(), 'gw-clone-progress-'))
+  const remote = join(dir, 'remote.git')
+  const work = join(dir, 'w')
+  try {
+    execFileSync('git', ['init', '-q', '--bare', remote], { cwd: dir })
+    execFileSync('git', ['clone', '-q', remote, work], { cwd: dir })
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: work })
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: work })
+    writeFileSync(join(work, 'a.txt'), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: work })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: work })
+    execFileSync('git', ['push', '-q', 'origin', 'HEAD'], { cwd: work })
+
+    const target = join(dir, 'target').replace(/\\/g, '/')
+    const g = await cloneWithProgress(['clone', '--progress', remote, target], { cwd: dir, key: target })
+    assert.equal(g.ok, true, `clone 应成功: ${JSON.stringify(g)}`)
+    // 注册表写入了该 key 的终态快照（dir 精确可取）
+    const entries = listCloneProgress({ dir: target })
+    assert.equal(entries.length, 1, '应恰好 1 条')
+    assert.equal(entries[0].status, 'done', `状态应为 done，实际 ${entries[0].status}`)
+    assert.equal(entries[0].pct, 100, `pct 应为 100，实际 ${entries[0].pct}`)
+    assert.ok(Number.isFinite(entries[0].startedAt), 'startedAt 应为时间戳')
+    // 全量兜底（无 dir）也应能取到
+    assert.ok(listCloneProgress().some((e) => e.dir === target), '全量列表应含该条')
+  } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
