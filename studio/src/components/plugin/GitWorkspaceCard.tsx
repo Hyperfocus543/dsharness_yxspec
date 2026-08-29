@@ -21,6 +21,7 @@ import type { StageToken } from '../../data/types';
 import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
+import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -612,6 +613,17 @@ export const GitWorkspaceCard: React.FC = () => {
   // 触发 status 按新 root 重拉），点「移除」只进入确认态，点「确认」才真正移除
   // —— 与 push / 回滚留档的确认范式一致，防误点。
   const [confirmRemoveId, setConfirmRemoveId] = React.useState<string | null>(null);
+  // 操作留痕「仅失败」聚焦：只显示失败的写操作（fetch/pull/push/checkout/clone/init
+  // 里 ok===false 的条目），成功操作常把失败淹没 —— 与全局轨迹时间轴「仅失败」开关
+  // 同模式：纯前端过滤态，不重拉接口；计数徽标显示当前失败子集 / 可过滤总数。
+  const [onlyAuditFailed, setOnlyAuditFailed] = React.useState(false);
+  // 操作留痕过滤派生（与 TrajectoryTimeline 的 failureTotal/rows 同口径）：
+  // 计数恒按全量算，过滤只作用展示行 —— 数据源不重拉，接口零新增。
+  const auditFailTotal = React.useMemo(() => auditFailureCount(audit), [audit]);
+  const visibleAudit = React.useMemo(
+    () => filterAuditEntries(audit, { onlyFailed: onlyAuditFailed }),
+    [audit, onlyAuditFailed],
+  );
 
   // 活动工作区切换 → 分支缓存属于旧 root：清空并收起分支面板，
   // 否则在 A 展开过的分支列表会在切到 B 后原样展示，选中 checkout 会串根执行到 B。
@@ -1489,20 +1501,50 @@ export const GitWorkspaceCard: React.FC = () => {
       {/* git 写操作留痕：clone/fetch/pull/push/checkout/init 的审计列表（时间倒序）。
           数据源 = 网关 git-workspace-audit.jsonl（写操作自动追加，append-only）。
           目的：写操作不再只有瞬时 toast —— 谁在哪个仓库、哪一刻做了什么 git 操作、
-          成败如何，都可在卡片里回看（失败操作尤其要能查）。 */}
+          成败如何，都可在卡片里回看（失败操作尤其要能查）。
+          「仅失败」过滤：成功操作常把失败淹没，勾选后只聚焦失败（排障入口）。 */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <SectionLabel>操作留痕</SectionLabel>
-          <button
-            type="button"
-            onClick={() => loadAudit().catch(() => {})}
-            disabled={auditLoading}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-            title="刷新写操作审计留痕"
-          >
-            <Icon name={I.refresh} size={10} />
-            {auditLoading ? '刷新中…' : '刷新'}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setOnlyAuditFailed((v) => !v)}
+              aria-pressed={onlyAuditFailed}
+              disabled={!audit || audit.length === 0}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
+                onlyAuditFailed
+                  ? 'bg-red-50 border-red-300 text-red-700'
+                  : 'bg-white border-zinc-200 text-zinc-500 hover:border-red-300 hover:text-red-600'
+              }`}
+              title={
+                !audit || audit.length === 0
+                  ? '暂无操作留痕'
+                  : auditFailTotal === 0
+                    ? '当前没有失败操作可聚焦'
+                    : onlyAuditFailed
+                      ? '当前只显示失败的写操作（点击恢复全部）'
+                      : '只看失败的 git 写操作（fetch/pull/push/checkout/clone/init 中 ok=false 的条目）'
+              }
+            >
+              <Icon name={I.warn} size={10} weight={onlyAuditFailed ? 'fill' : undefined} />
+              仅失败
+              <span className={`tabular-nums ${onlyAuditFailed ? 'text-red-600' : 'text-zinc-400'}`}>
+                {onlyAuditFailed ? visibleAudit.length : auditFailTotal}
+                {onlyAuditFailed ? `/${auditFailTotal}` : ''}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => loadAudit().catch(() => {})}
+              disabled={auditLoading}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+              title="刷新写操作审计留痕"
+            >
+              <Icon name={I.refresh} size={10} />
+              {auditLoading ? '刷新中…' : '刷新'}
+            </button>
+          </div>
         </div>
         {auditError && !audit ? (
           <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-red-200 rounded-lg space-y-1.5">
@@ -1520,9 +1562,14 @@ export const GitWorkspaceCard: React.FC = () => {
           <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
             {auditError ? '操作留痕加载失败' : '暂无 git 写操作留痕（fetch/pull/push/checkout/clone/init 后自动记录）'}
           </div>
+        ) : visibleAudit.length === 0 ? (
+          // 仅失败过滤后为空 ≠ 无留痕：给专属空态（原始数据仍在，只是被当前视图滤掉了）
+          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-amber-200 rounded-lg">
+            当前没有失败的写操作（切换「仅失败」查看全部 {audit.length} 条留痕）
+          </div>
         ) : (
           <div className="space-y-1">
-            {audit.map((e, i) => (
+            {visibleAudit.map((e, i) => (
               <AuditRow key={`${e.at ?? 'na'}-${i}`} e={e} />
             ))}
           </div>
