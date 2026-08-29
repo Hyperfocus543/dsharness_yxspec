@@ -378,6 +378,10 @@ export const GitWorkspaceCard: React.FC = () => {
   const [branchError, setBranchError] = React.useState<string | null>(null);
   // push 二次确认（区块 C）：点 push 展开红边确认框
   const [pushConfirmOpen, setPushConfirmOpen] = React.useState(false);
+  // 正在执行的 git 操作（fetch/pull/push）：operating 是全局互斥锁，
+  // 单靠它区分不了三个按钮哪个在跑；busyAction 记下本次动作，
+  // 只有它自己显示「执行中…」，其余按钮保持原 label 但同样禁用。
+  const [busyAction, setBusyAction] = React.useState<'fetch' | 'pull' | 'push' | null>(null);
 
   // 活动工作区切换 → 分支缓存属于旧 root：清空并收起分支面板，
   // 否则在 A 展开过的分支列表会在切到 B 后原样展示，选中 checkout 会串根执行到 B。
@@ -534,6 +538,7 @@ export const GitWorkspaceCard: React.FC = () => {
   const doGitOperate = async (action: 'fetch' | 'pull' | 'push') => {
     if (!activeWorkspace) return;
     const label = action === 'fetch' ? '拉取远端' : action === 'pull' ? '同步远端' : '推送本地提交';
+    setBusyAction(action);
     try {
       const res = await useGitStore.getState().gitOperate({ root: activeWorkspace.root, action });
       // pull 成功后若网关返回了提交文件统计（旧→新 HEAD diff），拼进成功 toast：
@@ -553,6 +558,8 @@ export const GitWorkspaceCard: React.FC = () => {
       await refreshStatus().catch(() => {});
     } catch (e: any) {
       pushToast('error', `${label}失败：${e?.message || e}`);
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -888,8 +895,8 @@ export const GitWorkspaceCard: React.FC = () => {
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                 title="从远端拉取更新（不合并）"
               >
-                <Icon name={I.download} size={11} />
-                {operating ? '执行中…' : 'fetch'}
+                <Icon name={I.download} size={11} className={busyAction === 'fetch' ? 'animate-spin' : undefined} />
+                {busyAction === 'fetch' ? '拉取中…' : 'fetch'}
               </button>
               <button
                 type="button"
@@ -898,8 +905,8 @@ export const GitWorkspaceCard: React.FC = () => {
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                 title="拉取并合并远端更新"
               >
-                <Icon name={I.swap} size={11} />
-                {operating ? '执行中…' : 'pull'}
+                <Icon name={busyAction === 'pull' ? I.clock : I.swap} size={11} />
+                {busyAction === 'pull' ? '同步中…' : 'pull'}
               </button>
               <button
                 type="button"
@@ -909,7 +916,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 title="推送本地提交到远端"
               >
                 <Icon name={I.upload} size={11} />
-                {operating ? '执行中…' : 'push'}
+                {busyAction === 'push' ? '推送中…' : 'push'}
               </button>
               <div className="relative inline-flex items-center">
                 <Icon name={I.branch} size={11} className="text-zinc-400 absolute left-1.5 pointer-events-none" />
@@ -971,7 +978,7 @@ export const GitWorkspaceCard: React.FC = () => {
                   disabled={operating}
                   className="px-2.5 py-1 rounded text-xs bg-red-600 text-white hover:bg-red-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {operating ? '执行中…' : '确认 push'}
+                  {busyAction === 'push' ? '推送中…' : '确认 push'}
                 </button>
                 <button
                   type="button"
