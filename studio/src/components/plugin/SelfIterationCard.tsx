@@ -4,6 +4,8 @@
 //   run-state.json + runtime-data/trajectory/self_iteration/*.jsonl）。
 // 能力：
 //   · 顶部：当前 run 摘要（阶段/轮次/基线/目标/收敛状态）+ 刷新
+//   · 启动表单默认阶段预填：表单为空时优先取当前 run 阶段（run-state.stage），
+//     其次取驾驶舱当前阶段（defaultStage prop；废弃/变体阶段排除），手动改过后不再覆盖
 //   · 轮次瀑布：每阶段一条评分线（总分 + 等级 + 弱项 + 门禁），带 verdict 判定
 //     （continue 琥珀 / converge 绿 / degrade 红），score 与 round 分色标识
 //   · 评分 × git 检查点：每轮评分行对齐该评分时刻的阶段执行 commit + tag
@@ -412,6 +414,8 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     () => STAGE_ORDER.filter((t) => t !== 'swe_detail' && t !== 'swe_coding_verify_pc'),
     [],
   );
+  // 启动表单「阶段」是否已被用户改过：手动选择优先，预填只在仍为空时生效
+  const stageTouchedRef = React.useRef(false);
 
   const load = React.useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoading(true);
@@ -456,6 +460,21 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     setRefreshing(false);
   };
 
+  // 启动表单默认阶段预填：仅当表单仍为空（未手动选过）才填 ——
+  // 优先当前 run 阶段（run-state.stage，正在自迭代的阶段最该继续），
+  // 其次驾驶舱当前阶段（defaultStage prop，配合「启动新迭代」入口联动）。
+  // 候选须在 stageOptions 内（废弃 swe_detail / PC 变体跳过），填不进则保持空。
+  // 依赖只含候选集与手动改标记：defaultStage 变化不重填（避免覆盖用户选择），
+  // data 首拉完成后补填一次（初始 data=null 时 run 阶段未知，表单留空等数据）。
+  React.useEffect(() => {
+    if (stageTouchedRef.current || stageSel) return;
+    const candidate = data?.state?.stage || defaultStage || '';
+    if (candidate && (stageOptions as readonly string[]).includes(candidate)) {
+      setStageSel(candidate);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stageOptions, data, defaultStage]);
+
   // 启动新迭代：拼命令 → 空阶段 warn → 派活 → 派活完自动刷新卡内数据（新轮次留痕/新 run 摘要）
   const onStart = async () => {
     if (sending) return;
@@ -466,7 +485,9 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
       mode: modeSel,
       resume: resumeSel,
     });
-    if (!cmd) { pushToast('warn', '请先选择阶段'); return; }
+    // 表单仍为空：预填未生效（无 run 阶段也无驾驶舱当前阶段，或候选被排除）→
+    // 明确提示用户选择，不自动跳过「启动前选阶段」这一步
+    if (!cmd) { pushToast('warn', '请先选择阶段（未检测到可预填的当前阶段）'); return; }
     const result = await dispatch(cmd);
     if (result) await load({ quiet: true });
   };
@@ -560,7 +581,10 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
           <Icon name={I.play} size={13} />
           启动新迭代
-          <span className="ml-auto text-[10px] text-zinc-300">默认 3 轮 · 收敛目标可选 · 产物/框架</span>
+          <span className="ml-auto text-[10px] text-zinc-300">
+            默认 3 轮 · 收敛目标可选 · 产物/框架
+            {stageSel && <span className="ml-1 text-zinc-400">· 阶段已预填</span>}
+          </span>
         </div>
         {/* 评估模式：产物（默认，评阶段产物）/ 框架（评框架效率，复用 --eval-framework 对比）。
             选中态 emerald，照 StageCockpit ViewTabs 分段样式（bg-zinc-100 底 + 选中 bg-white shadow） */}
@@ -603,7 +627,10 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
             阶段
             <select
               value={stageSel}
-              onChange={(e) => setStageSel(e.target.value)}
+              onChange={(e) => {
+                stageTouchedRef.current = true;
+                setStageSel(e.target.value);
+              }}
               className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
             >
               <option value="" disabled hidden>选择阶段</option>
