@@ -394,6 +394,19 @@ export const GitWorkspaceCard: React.FC = () => {
   // 单靠它区分不了三个按钮哪个在跑；busyAction 记下本次动作，
   // 只有它自己显示「执行中…」，其余按钮保持原 label 但同样禁用。
   const [busyAction, setBusyAction] = React.useState<'fetch' | 'pull' | 'push' | null>(null);
+  // git 写操作执行时长反馈：clone/init/fetch/pull/push 这类长操作（大仓库克隆/拉取
+  // 常 30s~2min）期间递增秒数，替代静态「执行中…」——用户能区分「还在跑」和「卡死」。
+  // 复用 operating 全局互斥锁（clone/init 也走 store.gitOperate → operating=true，
+  // 无需 busyAction 覆盖）；与自迭代派活「已执行 Ns」同款交互。
+  const [opElapsed, setOpElapsed] = React.useState(0);
+  React.useEffect(() => {
+    if (!operating) return;
+    setOpElapsed(0); // 新操作开始 → 秒数归零重计
+    const t = setInterval(() => setOpElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [operating]);
+  // 秒数 > 0 才拼接（亚秒操作不显示），格式与自迭代派活一致：`（已执行 Ns）`
+  const opSuffix = operating && opElapsed > 0 ? `（已执行 ${opElapsed}s）` : '';
   // 移除工作区的行内二次确认：移除是登记表变更（若删的是活动工作区会翻转 active、
   // 触发 status 按新 root 重拉），点「移除」只进入确认态，点「确认」才真正移除
   // —— 与 push / 回滚留档的确认范式一致，防误点。
@@ -912,7 +925,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 disabled={operating}
                 className="px-2.5 py-1 rounded text-xs bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {operating ? '执行中…' : wsMode === 'local' ? '添加' : wsMode === 'init' ? '创建' : '克隆'}
+                {operating ? `执行中…${opSuffix}` : wsMode === 'local' ? '添加' : wsMode === 'init' ? '创建' : '克隆'}
               </button>
               <button
                 type="button"
@@ -949,7 +962,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 title="从远端拉取更新（不合并）"
               >
                 <Icon name={I.download} size={11} className={busyAction === 'fetch' ? 'animate-spin' : undefined} />
-                {busyAction === 'fetch' ? '拉取中…' : 'fetch'}
+                {busyAction === 'fetch' ? `拉取中…${opSuffix}` : 'fetch'}
               </button>
               <button
                 type="button"
@@ -959,7 +972,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 title="拉取并合并远端更新"
               >
                 <Icon name={busyAction === 'pull' ? I.clock : I.swap} size={11} />
-                {busyAction === 'pull' ? '同步中…' : 'pull'}
+                {busyAction === 'pull' ? `同步中…${opSuffix}` : 'pull'}
               </button>
               <button
                 type="button"
@@ -969,7 +982,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 title="推送本地提交到远端"
               >
                 <Icon name={I.upload} size={11} />
-                {busyAction === 'push' ? '推送中…' : 'push'}
+                {busyAction === 'push' ? `推送中…${opSuffix}` : 'push'}
               </button>
               <div className="relative inline-flex items-center">
                 <Icon name={I.branch} size={11} className="text-zinc-400 absolute left-1.5 pointer-events-none" />
