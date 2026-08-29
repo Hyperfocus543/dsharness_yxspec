@@ -561,3 +561,38 @@ test('defaultRoot 恒按当前生效根解析：磁盘陈旧快照不阻断写�
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// 回归：gitOperate clone 曾把原始 dir（可能带尾斜杠，如 `D:/Work/x/`）当进度注册表
+// key；前端轮询 /api/git/clone-progress 前按 `replace(/[\\/]+$/, '')` 剥尾 → 精确匹配
+// 恒落空，克隆进度条静默降级为纯秒表。修复后 gitOperate 以剥尾的 dir 为 key。
+// 本测试验证「尾斜杠 dir + 剥尾 key」链路：clone 用带尾 dir 正常执行，前端口径 key 精确可取。
+test('cloneWithProgress：key 用剥尾分隔符的 dir（前端轮询口径），带尾斜杠目标精确可取', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-clone-trailing-'))
+  const remote = join(dir, 'remote.git')
+  const work = join(dir, 'w')
+  try {
+    execFileSync('git', ['init', '-q', '--bare', remote], { cwd: dir })
+    execFileSync('git', ['clone', '-q', remote, work], { cwd: dir })
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: work })
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: work })
+    writeFileSync(join(work, 'a.txt'), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: work })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: work })
+    execFileSync('git', ['push', '-q', 'origin', 'HEAD'], { cwd: work })
+
+    // 用户输入目标目录带尾斜杠（`D:/Work/x/` 常见形态）
+    const target = (join(dir, 'target') + '/').replace(/\\/g, '/')
+    const stripped = target.replace(/[\\/]+$/, '')
+    // 与修复后 gitOperate 同口径：clone 命令用原始 dir（带尾斜杠），key 用剥尾 form
+    const g = await cloneWithProgress(['clone', '--progress', remote, target], { cwd: dir, key: stripped })
+    assert.equal(g.ok, true, `clone 应成功: ${JSON.stringify(g)}`)
+    // 前端轮询口径（剥尾 key）精确可取；原始带尾 key 不匹配（不进注册表）
+    const entries = listCloneProgress({ dir: stripped })
+    assert.equal(entries.length, 1, '剥尾 key 应恰好 1 条')
+    assert.equal(entries[0].status, 'done', `状态应为 done，实际 ${entries[0].status}`)
+    assert.equal(entries[0].pct, 100, `pct 应为 100，实际 ${entries[0].pct}`)
+    assert.equal(listCloneProgress({ dir: target }).length, 0, '带尾 key 不应匹配（注册表用剥尾 key）')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

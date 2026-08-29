@@ -735,7 +735,11 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     // clone 进度反馈：spawn 版（--progress + stderr 逐行解析 → 内存进度注册表）。
     // 契约与 runGit 版一致（成功 ok:true / 失败 ok:false + error），进度只作增强；
     // 前端「克隆中」轮询 /api/git/clone-progress 渲染百分比条（老网关/无注册表 → 纯秒表降级）。
-    const g = await cloneWithProgress(['clone', '--progress', url, dir], { cwd: dir, key: dir })
+    // 进度注册表 key 用剥尾分隔符的 dir（与前端轮询的归一 key 逐字一致——CloneProgressBar
+    // 请求前 `.replace(/[\\/]+$/, '')`；若用带尾斜杠的原始 dir，用户输入 `D:/x/` 时精确
+    // 匹配恒落空，进度条静默降级为纯秒表）。返回的 root/cloneDir 已走 stripTrailingSep，
+    // 同一 key 语义下注册表记录与激活根一致。
+    const g = await cloneWithProgress(['clone', '--progress', url, dir], { cwd: dir, key: stripTrailingSep(dir) })
     recordGitOp({ root: dir, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git clone 执行失败' }
     // clone 成功后自动登记新仓库进工作区列表
