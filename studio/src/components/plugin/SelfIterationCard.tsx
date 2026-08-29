@@ -410,7 +410,9 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   const [refreshing, setRefreshing] = React.useState(false);
 
   // 启动新迭代：派活通道 + 全局 toast + 表单状态（必须在任何条件 return 之前无条件调用）
-  const { dispatch, cancel, sending, cancelling } = useStageDispatch();
+  // elapsedSec：派活后台任务已执行秒数（与 NextCommand/BatchQueue/StageNode 同源），
+  // 「启动中…」期间随秒实时递增，避免 3-5 分钟迭代只看到静态文案、无进度信号。
+  const { dispatch, cancel, sending, cancelling, elapsedSec } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
   const [stageSel, setStageSel] = React.useState('');
   const [maxIterSel, setMaxIterSel] = React.useState('3');
@@ -740,16 +742,25 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
             {sending ? '启动中…' : '启动'}
           </button>
           {sending && (
-            <button
-              type="button"
-              onClick={cancel}
-              disabled={cancelling}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-              title={cancelling ? '正在终止本轮派活（网关 /api/agent/abort）…' : '终止本轮派活（网关 /api/agent/abort）'}
-            >
-              <Icon name={cancelling ? I.clock : I.stop} size={11} className={cancelling ? 'animate-spin' : undefined} />
-              {cancelling ? '取消中…' : '取消'}
-            </button>
+            <>
+              <span
+                className="text-xs text-zinc-500 font-mono tabular-nums"
+                aria-live="polite"
+                title="本轮派活已执行时长（后台任务运行中）"
+              >
+                已执行 {elapsedSec}s
+              </span>
+              <button
+                type="button"
+                onClick={cancel}
+                disabled={cancelling}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                title={cancelling ? '正在终止本轮派活（网关 /api/agent/abort）…' : '终止本轮派活（网关 /api/agent/abort）'}
+              >
+                <Icon name={cancelling ? I.clock : I.stop} size={11} className={cancelling ? 'animate-spin' : undefined} />
+                {cancelling ? '取消中…' : '取消'}
+              </button>
+            </>
           )}
         </div>
       </div>
