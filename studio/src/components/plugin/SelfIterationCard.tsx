@@ -410,7 +410,7 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   const [refreshing, setRefreshing] = React.useState(false);
 
   // 启动新迭代：派活通道 + 全局 toast + 表单状态（必须在任何条件 return 之前无条件调用）
-  const { dispatch, cancel, sending } = useStageDispatch();
+  const { dispatch, cancel, sending, cancelling } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
   const [stageSel, setStageSel] = React.useState('');
   const [maxIterSel, setMaxIterSel] = React.useState('3');
@@ -743,11 +743,12 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
             <button
               type="button"
               onClick={cancel}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98]"
-              title="终止本轮派活（网关 /api/agent/abort）"
+              disabled={cancelling}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+              title={cancelling ? '正在终止本轮派活（网关 /api/agent/abort）…' : '终止本轮派活（网关 /api/agent/abort）'}
             >
-              <Icon name={I.stop} size={11} />
-              取消
+              <Icon name={cancelling ? I.clock : I.stop} size={11} className={cancelling ? 'animate-spin' : undefined} />
+              {cancelling ? '取消中…' : '取消'}
             </button>
           )}
         </div>
