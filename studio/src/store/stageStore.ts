@@ -44,6 +44,8 @@ interface StageStore {
   loadResume: (projectPath: string) => Promise<void>;
   /** 执行成本统计：拉取网关 /api/cost；失败静默置 null（不阻塞驾驶舱）*/
   loadCost: () => Promise<void>;
+  /** 成本静默刷新：拿到新数据才更新，失败/网络抖动保持现有视图连续（turn/end 联动用）*/
+  loadCostSilent: () => Promise<void>;
   /** 订阅网关实时事件；收到 goal 事件时自动点亮阶段轨道 */
   connectEvents: (projectPath: string) => Promise<void>;
   /** 取消订阅并释放 EventSource */
@@ -335,6 +337,19 @@ export const useStageStore = create<StageStore>((set, get) => ({
     }
   },
 
+  loadCostSilent: async () => {
+    // 成本静默刷新（turn/end 联动）：拿到新数据才更新，失败静默保持现有视图连续。
+    // 与 loadCost 的区别：不把 costData 置 null —— 网络抖动/网关瞬时失败时，
+    // 角标与成本面板继续展示上一次已加载的数据，不让 UI 闪成「暂无成本数据」空态。
+    // 与 SelfIterationCard 运行中轮询同模式（内联 fetch，拿到数据才 setData）。
+    try {
+      const data = await ipc.fetchCost();
+      if (data) set({ costData: data });
+    } catch (e) {
+      console.warn('[stageStore] loadCostSilent 失败（保持现有成本数据）:', e);
+    }
+  },
+
   connectEvents: async (projectPath: string) => {
     // 若已订阅则先断开旧的，避免重复订阅重复回调
     get().disconnectEvents();
@@ -497,6 +512,12 @@ export const useStageStore = create<StageStore>((set, get) => ({
           // 在 pushAssistant 时用 consumeToolTrace() 取走并绑定到消息（避免重复追加）
           pendingToolName = null;
           set({ toolStatus: null, lastUpdate: now() });
+          // 成本联动 · turn 结算自刷新：turn/end 意味着本轮已写入审计账本（cost.mjs
+          // 按 turn/start→turn/end 结算），此刻静默重拉 /api/cost —— 常驻「本周成本」
+          // 角标与成本面板不再停留在项目打开时的旧数字。turn/end 频度低（每个阶段
+          // 3-5 分钟一次），重拉成本审计账本（读 JSONL 聚合）开销可忽略；失败静默
+          // 保持现有数据（loadCostSilent），不打断 SSE 事件流。
+          void get().loadCostSilent();
           break;
         }
         default:
