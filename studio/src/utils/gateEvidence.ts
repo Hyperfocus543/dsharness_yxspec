@@ -10,10 +10,17 @@
 //   · 三态 verified → sage / unverified → amber / blocked → red
 //   · reason 映射为人类可读判定文案（未知 reason 透传原文）
 // 未参与轨迹门控（策略不符 / 无三态）→ null，卡片不渲染（静默降级）。
+//
+// v2 门控证据详情（门控徽标 tooltip 增强）：
+//   /api/trajectory-gate 全量 payload 里本就有产物命中/文件数、轨迹 turn/end、
+//   工具成败/调用计数、token 用量 —— 旧 tooltip 只展示抽象三态，把已拉到的
+//   具体证据丢掉了。gateDetail() 把这些字段派生为 GateEvidenceDetail，
+//   StageNode 徽标 hover 时拼进 tooltip（零新请求），让「迹·通过/打回」有据可查。
 // UI 基线：design-taste skill — 纯数据，色/文案由调用方组件负责。
 // =============================================================================
 
 import type { StageStatus } from '../data/types';
+import type { TrajectoryGate } from './ipc';
 
 /** 轨迹门控三态 → 徽标色系（sage 通过 / amber 未验证 / red 打回）。 */
 export type GateEvidenceTone = 'sage' | 'amber' | 'red';
@@ -75,4 +82,81 @@ export function gateEvidenceTooltip(ev: GateEvidence): string {
   ]
     .filter((l): l is string => Boolean(l))
     .join('\n');
+}
+
+// =============================================================================
+// 门控证据详情（v2 · 门控徽标 tooltip 增强）
+// 数据源 = GET /api/trajectory-gate 全量 payload（stageStore 已拉取并存
+//   trajectoryGates，字段契约见 utils/ipc.ts TrajectoryGate / TrajectoryGateStatus）。
+// 把「产物命中 + 轨迹三态」的具体证据拼成可读行，替代原抽象三态文案。
+// 口径与 TrajectoryPanel / GateOverview 严格一致：artifact.files 为产物文件清单、
+// trajectory.hasTurnEnd / toolOk / toolCalls / toolResults / tokens 为轨迹证据计数。
+// =============================================================================
+
+/** 单阶段门控证据详情（可读行由 gateDetailLines 拼装）。 */
+export interface GateEvidenceDetail {
+  /** 产物门：是否命中 + 命中文件数（无产物 glob 阶段 → files 空数组，pass 恒 true） */
+  artifact: { passed: boolean; files: string[] };
+  /** 轨迹证据（null = 无轨迹 / artifact 策略不参与；字段详见 ipc TrajectoryGateStatus） */
+  trajectory: {
+    hasTurnEnd: boolean;
+    toolOk: boolean;
+    toolCalls: number;
+    toolResults: number;
+    tokens: number;
+  } | null;
+}
+
+/** 从 /api/trajectory-gate 全量 payload 派生门控证据详情（无该阶段数据 → null）。 */
+export function gateDetail(gate: TrajectoryGate | null | undefined): GateEvidenceDetail | null {
+  if (!gate || typeof gate !== 'object') return null;
+  const art = gate.artifact ?? null;
+  const traj = gate.trajectory ?? null;
+  return {
+    artifact: {
+      passed: art?.passed === true,
+      files: Array.isArray(art?.files) ? art.files : [],
+    },
+    trajectory: traj
+      ? {
+          hasTurnEnd: traj.hasTurnEnd === true,
+          toolOk: traj.toolOk === true,
+          toolCalls: Number.isFinite(traj.toolCalls) ? traj.toolCalls : 0,
+          toolResults: Number.isFinite(traj.toolResults) ? traj.toolResults : 0,
+          tokens: Number.isFinite(traj.tokens) ? traj.tokens : 0,
+        }
+      : null,
+  };
+}
+
+/** 产物命中 → 人类可读行（命中：文件数 + 文件名样例；未命中：缺失；无产物 glob → 视为过）。 */
+function artifactLine(d: GateEvidenceDetail): string {
+  const files = d.artifact.files;
+  if (d.artifact.passed) {
+    if (files.length === 0) return '产物：命中（无文件产物阶段，视为通过）';
+    const preview = files.length > 3 ? `${files.slice(0, 3).join('、')} 等 ${files.length} 项` : files.join('、');
+    return `产物：命中 ${files.length} 项 · ${preview}`;
+  }
+  return `产物：缺失（应命中 ${files.length} 项 glob 产物）`;
+}
+
+/** 轨迹证据 → 人类可读行（有轨迹：turn/end + 工具成败计数 + token；无轨迹 → 未执行）。 */
+function trajectoryLine(d: GateEvidenceDetail): string {
+  const t = d.trajectory;
+  if (!t) return '轨迹：无记录（该阶段从未执行 / 未参与轨迹门控）';
+  const te = t.hasTurnEnd ? '有 turn/end' : '无 turn/end';
+  const tool = t.toolOk ? '有成功工具结果' : '无成功工具结果';
+  return `轨迹：${te} · ${tool} · 工具 ${t.toolCalls}/${t.toolResults} · ${t.tokens.toLocaleString('zh-CN')} tok`;
+}
+
+/**
+ * 门控证据详情可读行（v2 tooltip 证据段）。
+ * 只列「有信息量」的行：产物命中给文件数/样例（空产物阶段降级为「视为通过」），
+ * 轨迹缺失/未参与给「无记录」，避免空行占位。返回数组，由调用方拼进 tooltip。
+ */
+export function gateDetailLines(d: GateEvidenceDetail): string[] {
+  return [
+    artifactLine(d),
+    trajectoryLine(d),
+  ];
 }

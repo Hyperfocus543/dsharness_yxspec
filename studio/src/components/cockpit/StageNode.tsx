@@ -5,12 +5,20 @@
 import React from 'react';
 import type { StageMapping, StageStatus } from '../../data/types';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
+import { useStageStore } from '../../store/stageStore';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
 import { StageGateBar } from './StageGateBar';
 import { TrajectoryPanel } from './TrajectoryPanel';
 import type { StageIterBadge } from '../../utils/stageIterBadge';
-import { gateEvidence, gateEvidenceTooltip, type GateEvidence } from '../../utils/gateEvidence';
+import {
+  gateEvidence,
+  gateEvidenceTooltip,
+  gateDetail,
+  gateDetailLines,
+  type GateEvidence,
+  type GateEvidenceDetail,
+} from '../../utils/gateEvidence';
 
 // 状态色 — Claude 暖系语义：completed/done 用 sage 暖绿（柔和），blocked/rejected 暖绯
 // emerald(赤陶) 只留当前态/交互（ring、派活按钮、当前标签）
@@ -78,18 +86,26 @@ const IterBadge: React.FC<{ b: StageIterBadge }> = ({ b }) => {
 /** 轨迹门控徽标（全景卡 × 轨迹门控联动）：策略 artifact+trajectory 且有三态才渲染。
  *  色随轨迹证据：通过 sage 绿 / 未验证 amber / 打回 red；tooltip 给门控证据详情。
  *  数据源 = stageStore 已合并进 StageStatus 的 gate_policy/gate_trajectory/gate_reason
- *  （GET /api/trajectory-gate 全量，与门控视图同数据源），零新请求。 */
-const GateEvidenceBadge: React.FC<{ ev: GateEvidence }> = ({ ev }) => {
+ *  （GET /api/trajectory-gate 全量，与门控视图同数据源），零新请求。
+ *  v2 tooltip 详情：detail 透传 /api/trajectory-gate 全量 payload 的 artifact/trajectory
+ *  证据行（产物命中/文件数、轨迹 turn/end、工具成败计数、token），替代原抽象三态文本。 */
+const GateEvidenceBadge: React.FC<{ ev: GateEvidence; detail?: GateEvidenceDetail | null }> = ({ ev, detail }) => {
   const toneCls =
     ev.tone === 'sage'
       ? 'bg-sage-100 text-sage-700 border-sage-300'
       : ev.tone === 'red'
         ? 'bg-red-100 text-red-700 border-red-300'
         : 'bg-amber-100 text-amber-700 border-amber-300';
+  const evidenceLines = detail ? gateDetailLines(detail) : [];
+  const tooltip = [
+    '轨迹门控（hover 查看证据）',
+    gateEvidenceTooltip(ev),
+    ...(evidenceLines.length > 0 ? ['', '—— 门控证据 ——', ...evidenceLines] : []),
+  ].join('\n');
   return (
     <span
       className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[10px] font-semibold cursor-help"
-      title={`轨迹门控（hover 查看证据）\n${gateEvidenceTooltip(ev)}`}
+      title={tooltip}
     >
       <Icon name={I.tag} size={9} weight="fill" />
       {ev.label}
@@ -128,6 +144,11 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
   // 轨迹门控徽标（全景卡 × 轨迹门控联动）：策略 artifact+trajectory 且有三态才给，
   // 数据源 = status 已合并的轨迹门控字段，零新请求（详见 gateEvidence.ts）。
   const gateEv = React.useMemo(() => gateEvidence(status), [status]);
+  // 门控证据详情（v2 tooltip）：stageStore 已把 /api/trajectory-gate 全量 payload
+  // 存进 trajectoryGates（与徽标同数据源、零新请求）——徽标 hover 时展示产物命中/
+  // 文件数 + 轨迹 turn/end + 工具成败计数 + token 的具体证据，替代原抽象三态文本。
+  const gateDetailData = useStageStore((s) => s.trajectoryGates[token]);
+  const gateDetailMemo = React.useMemo(() => gateDetail(gateDetailData), [gateDetailData]);
 
   // 卡片右上角悬浮"一键派活"：点击派活当前阶段，阻止冒泡避免误触卡片 onClick
   const handlePlayClick = (e: React.MouseEvent) => {
@@ -196,7 +217,7 @@ export const StageNode: React.FC<StageNodeProps> = ({ token, mapping, status, is
           {/* 自迭代徽标：该阶段跑过自迭代（有分轮）才渲染，色随收敛/退化/迭代中 */}
           {iterBadge && <IterBadge b={iterBadge} />}
           {/* 轨迹门控徽标：策略 artifact+trajectory 且有三态才渲染（hover 看门控证据） */}
-          {gateEv && <GateEvidenceBadge ev={gateEv} />}
+          {gateEv && <GateEvidenceBadge ev={gateEv} detail={gateDetailMemo} />}
           <span className={iconTone}>
             <Icon name={IconComp} size={16} />
           </span>

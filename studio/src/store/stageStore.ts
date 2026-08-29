@@ -20,6 +20,12 @@ interface StageStore {
   dshState: DshState | null;
   /** 断点续跑：网关 /api/resume 恢复信息（网关重启/休眠后前端据此显示「已恢复到 X 阶段」+ 一键续跑）*/
   resumeInfo: ResumeInfo | null;
+  /** 轨迹门控全量汇总（GET /api/trajectory-gate 不带 stage 的原始 payload；零新请求）：
+   *  token → { stage, gate_policy, artifact, trajectory, status, passed, reason }。
+   *  徽标只取 status/reason 就够，但「门控 tooltip 详情」（产物命中/文件数、轨迹
+   *  turn/end、工具成败计数、token）需要 artifact/trajectory 两个原始字段——单独存
+   *  一份，避免塞进 StageStatus 造成体积膨胀；无数据 → 空对象（静默降级）。 */
+  trajectoryGates: Record<string, ipc.TrajectoryGate>;
   /** 执行成本统计：网关 /api/cost 聚合结果（null = 未加载/网关不可达）*/
   costData: ipc.CostData | null;
   /** 事件级流式：agent 最近一次工具动作（tool/call 或 tool/result），实时渲染"正在做…" */
@@ -193,6 +199,7 @@ export const useStageStore = create<StageStore>((set, get) => ({
   eventsConnected: false,
   dshState: null,
   resumeInfo: null,
+  trajectoryGates: {},
   costData: null,
   toolStatus: null,
   toolTrace: [],
@@ -261,9 +268,13 @@ export const useStageStore = create<StageStore>((set, get) => ({
         const gates = data?.gates ?? null;
         if (gates && typeof gates === 'object') {
           const trajPatch: Partial<Record<StageToken, StageStatus>> = {};
+          // 全量 payload 一并留存（门控 tooltip 详情数据源：产物命中/文件数、
+          // 轨迹 turn/end、工具成败计数、token —— 徽标三态之外的信息都在这里）
+          const gatesMap: Record<string, ipc.TrajectoryGate> = {};
           for (const [token, g] of Object.entries(gates) as [string, any][]) {
             const t = token as StageToken;
             if (!STAGE_ORDER.includes(t)) continue;
+            if (g && typeof g === 'object') gatesMap[token] = g as ipc.TrajectoryGate;
             const st = g?.status;
             if (st === 'verified' || st === 'unverified' || st === 'blocked') {
               trajPatch[t] = {
@@ -274,9 +285,11 @@ export const useStageStore = create<StageStore>((set, get) => ({
               } as StageStatus;
             }
           }
-          if (Object.keys(trajPatch).length > 0) {
-            set((s) => ({ stages: { ...s.stages, ...trajPatch }, lastUpdate: now() }));
-          }
+          set((s) => ({
+            trajectoryGates: gatesMap,
+            stages: Object.keys(trajPatch).length > 0 ? { ...s.stages, ...trajPatch } : s.stages,
+            lastUpdate: now(),
+          }));
         }
       }
     } catch (e) {
