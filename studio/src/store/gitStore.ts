@@ -145,7 +145,8 @@ export const useGitStore = create<GitStore>((set, get) => ({
     }
     set({ commitsLoading: true, commitsError: false });
     try {
-      const data = await ipc.getGitCommits(stage);
+      // 多工作区：留痕按活动工作区 root 拉（缺省 activeWorkspace 为 null 时网关回退默认根）。
+      const data = await ipc.getGitCommits(stage, get().activeWorkspace?.root);
       if (data) {
         set({ commits: data, commitsLoading: false, commitsError: false });
       } else {

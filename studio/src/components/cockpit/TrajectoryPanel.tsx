@@ -14,6 +14,7 @@
 import React from 'react';
 import { EmptyState, GitDiffPreview, Icon } from '../ui';
 import { I } from '../ui/icons';
+import { useGitStore } from '../../store/gitStore';
 import {
   fetchTrajectory,
   markTrajectoryRollback,
@@ -135,6 +136,8 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
   const [hoverSeq, setHoverSeq] = React.useState<number | null>(null);
   // 详情可折叠区展开的行 seq（每行底部「详情 ▾/▴」；至多一行展开，默认收起）
   const [detailSeq, setDetailSeq] = React.useState<number | null>(null);
+  // 活动工作区 root：阶段留痕 commit + commit diff 都按活动 root 拉（多工作区不串根）
+  const activeRoot = useGitStore((s) => s.activeWorkspace?.root ?? null);
 
   const reload = React.useCallback(() => {
     setLoading(true);
@@ -163,7 +166,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
         if (!cancelled) setLoading(false);
       });
     // 并行拉取该阶段 git 留痕（轨迹×git 增强；失败静默降级，不阻塞轨迹面板）
-    getGitCommits(stage)
+    getGitCommits(stage, activeRoot)
       .then((traces) => {
         if (!cancelled && traces) setGitTraces(traces);
       })
@@ -171,7 +174,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
     return () => {
       cancelled = true;
     };
-  }, [stage, limit]);
+  }, [stage, limit, activeRoot]);
 
   // Phase 3：导出 OTel GenAI spans → 下载 JSON（Langfuse/LangSmith 可消费）
   const handleExportOtel = React.useCallback(async () => {
@@ -545,7 +548,7 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
                     </div>
                   )}
                   {/* 轨迹×git diff 预览：hover commit 徽标 → 该 commit 相对上一留痕 commit 的改动 */}
-                  <GitDiffPreview base={gBase} target={gCommit} open={showGit && hoverSeq === r.seq} />
+                  <GitDiffPreview base={gBase} target={gCommit} open={showGit && hoverSeq === r.seq} root={activeRoot} />
                 </div>
               );
             })}

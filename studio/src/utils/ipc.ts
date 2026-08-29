@@ -1348,17 +1348,19 @@ export interface GitDiffResult {
  * 拉取单个脏文件的 diff 预览；失败/无基线返回 null（前端静默降级）。
  * @param path 仓库内相对路径（与 GitDirtyFile.path 一致）
  * @param staged 预览暂存区改动（true）还是工作区改动（false，缺省）
- * @param opts 可选 { from, to } —— commit 范围模式（阶段留痕 diff：展示 from...to 增量改动）
+ * @param opts 可选 { from, to } —— commit 范围模式（阶段留痕 diff：展示 from...to 增量改动）；
+ *   root —— 目标工作区根（多工作区下 diff/commits 必须按活动 root 拉，否则恒 diff 默认根）
  */
 export async function getGitDiff(
   path: string,
   staged = false,
-  opts?: { from?: string | null; to?: string | null },
+  opts?: { from?: string | null; to?: string | null; root?: string | null },
 ): Promise<GitDiffResult | null> {
   try {
     const q = new URLSearchParams({ path, staged: staged ? '1' : '0' });
     if (opts?.from) q.set('from', opts.from);
     if (opts?.to) q.set('to', opts.to);
+    if (opts?.root) q.set('root', opts.root);
     const res = await fetch(`${GATEWAY_BASE}/api/git/diff?${q.toString()}`, {
       headers: { Accept: 'application/json' },
     });
@@ -1369,13 +1371,17 @@ export async function getGitDiff(
   }
 }
 
-/** GET /api/git/commits?stage=：拉某阶段的 commit/tag 留痕轨迹；失败返回 null。 */
-export async function getGitCommits(stage: string): Promise<GitStageTrace[] | null> {
+/**
+ * GET /api/git/commits?stage=：拉某阶段的 commit/tag 留痕轨迹；失败返回 null。
+ * @param root 目标工作区根（可选；多工作区下按活动 root 拉，缺省走网关默认根）
+ */
+export async function getGitCommits(stage: string, root?: string | null): Promise<GitStageTrace[] | null> {
   try {
-    const res = await fetch(
-      `${GATEWAY_BASE}/api/git/commits?stage=${encodeURIComponent(stage)}`,
-      { headers: { Accept: 'application/json' } },
-    );
+    const q = new URLSearchParams({ stage });
+    if (root) q.set('root', root);
+    const res = await fetch(`${GATEWAY_BASE}/api/git/commits?${q.toString()}`, {
+      headers: { Accept: 'application/json' },
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as
       | GitStageTrace[]

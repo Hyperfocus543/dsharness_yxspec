@@ -34,7 +34,9 @@ export const GitDiffPreview: React.FC<{
   target?: string | null;
   /** 是否展开（由宿主 hover/点击状态控制） */
   open: boolean;
-}> = ({ base = null, target = null, open }) => {
+  /** 目标工作区根（多工作区下 diff 按活动 root 拉；缺省走网关默认根） */
+  root?: string | null;
+}> = ({ base = null, target = null, open, root = null }) => {
   const [data, setData] = React.useState<GitDiffResult | null>(null);
   const [loading, setLoading] = React.useState(false);
 
@@ -47,7 +49,7 @@ export const GitDiffPreview: React.FC<{
     setLoading(true);
     // range 模式：path 传空（网关 commit 范围模式不读路径），from/to 指定 diff 范围。
     // usable 已保证 base/target 均有值：`from...to` 三-dot 增量 diff。
-    getGitDiff('', false, { from: base, to: target })
+    getGitDiff('', false, { from: base, to: target, root })
       .then((d) => {
         if (!cancelled) setData(d);
       })
@@ -60,7 +62,7 @@ export const GitDiffPreview: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [usable, base, target]);
+  }, [usable, base, target, root]);
 
   if (!open) return null;
   if (!target) {

@@ -20,6 +20,7 @@
 import React from 'react';
 import { EmptyState, GitDiffPreview, Icon } from '../ui';
 import { I } from '../ui/icons';
+import { useGitStore } from '../../store/gitStore';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
 import { traceBaseAt } from '../../utils/gitTrace';
 import { TrajectoryPanel } from './TrajectoryPanel';
@@ -111,7 +112,9 @@ const GitBadge: React.FC<{
   rows: TrajectoryAllEntry[];
   open: boolean;
   onHover: (open: boolean) => void;
-}> = ({ rec, gitAvailable, rows, open, onHover }) => {
+  /** 目标工作区根（多工作区下 diff 按活动 root 拉） */
+  root?: string | null;
+}> = ({ rec, gitAvailable, rows, open, onHover, root = null }) => {
   // 数据源 gitAvailable=false（非仓库/未装 git）或该条无 commit → 整组不渲染
   if (!gitAvailable || !rec.commit) return null;
   // diff 基线：相邻更早执行时刻的最新 commit（纯函数派生；无 → GitDiffPreview 首条降级提示）
@@ -138,7 +141,7 @@ const GitBadge: React.FC<{
           {rec.tag}
         </span>
       )}
-      <GitDiffPreview base={diffBase} target={rec.commit || null} open={open} />
+      <GitDiffPreview base={diffBase} target={rec.commit || null} open={open} root={root} />
     </>
   );
 };
@@ -150,7 +153,9 @@ const TimelineRow: React.FC<{
   gitAvailable?: boolean;
   /** 全量轨迹流（时间降序，diff 基线派生数据源） */
   rows: TrajectoryAllEntry[];
-}> = ({ rec, onOpen, gitAvailable, rows }) => {
+  /** 目标工作区根（多工作区下 diff 按活动 root 拉） */
+  root?: string | null;
+}> = ({ rec, onOpen, gitAvailable, rows, root = null }) => {
   // 轨迹 × git diff 预览：hover commit 徽标展开（至多一个浮层，与轨迹瀑布同交互）
   const [gitOpen, setGitOpen] = React.useState(false);
   const st = rowStyle(rec.rolled_back ? 'blocked' : rec.status);
@@ -180,7 +185,7 @@ const TimelineRow: React.FC<{
         ×{toolCalls}✓{toolOks}
       </span>
       {/* 轨迹 × git：该次执行时刻的最新 commit + tag（hover 查看相对相邻更早执行的改动） */}
-      <GitBadge rec={rec} gitAvailable={gitAvailable} rows={rows} open={gitOpen} onHover={setGitOpen} />
+      <GitBadge rec={rec} gitAvailable={gitAvailable} rows={rows} open={gitOpen} onHover={setGitOpen} root={root} />
       {rec.reason && (
         <span className="text-[11px] text-zinc-400 font-mono truncate max-w-[160px]" title={rec.reason}>
           {rec.reason}
@@ -200,6 +205,8 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   const [onlyFailed, setOnlyFailed] = React.useState(false);
   // 展开的阶段详情（点击行内阶段徽标 → 打开单阶段面板）
   const [openStage, setOpenStage] = React.useState<string | null>(null);
+  // 活动工作区 root：commit diff 按活动 root 拉（多工作区不串根）
+  const activeRoot = useGitStore((s) => s.activeWorkspace?.root ?? null);
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -363,6 +370,7 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
               rec={r}
               rows={data.rows}
               gitAvailable={data?.gitAvailable}
+              root={activeRoot}
               onOpen={(t) => {
                 setOpenStage(openStage === t ? null : t);
                 onOpenStage?.(t);

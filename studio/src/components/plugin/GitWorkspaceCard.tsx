@@ -71,7 +71,9 @@ const CommitRow: React.FC<{
   at: string | null;
   /** 该提交相对上一条提交的 diff 基线（首条 → null，降级提示） */
   base?: string | null;
-}> = ({ hash, message, at, base = null }) => {
+  /** 目标工作区根（diff 按活动 root 拉；缺省走网关默认根） */
+  root?: string | null;
+}> = ({ hash, message, at, base = null, root = null }) => {
   const [diffOpen, setDiffOpen] = React.useState(false);
   return (
     <div
@@ -90,7 +92,7 @@ const CommitRow: React.FC<{
         {message || '（无提交说明）'}
       </span>
       <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOf(at)}</span>
-      <GitDiffPreview base={base} target={hash} open={diffOpen} />
+      <GitDiffPreview base={base} target={hash} open={diffOpen} root={root} />
     </div>
   );
 };
@@ -105,7 +107,9 @@ const TraceRow: React.FC<{
   prevCommit?: string | null;
   /** git 是否可用（决定回滚按钮禁用与提示语：git 不可用时 commit 恒 null） */
   gitOk?: boolean;
-}> = ({ rec, stage, confirming, onRollback, prevCommit, gitOk }) => {
+  /** 目标工作区根（diff 按活动 root 拉；缺省走网关默认根） */
+  root?: string | null;
+}> = ({ rec, stage, confirming, onRollback, prevCommit, gitOk, root = null }) => {
   // 已回滚（后端置 rolled_back，不回改 status）：优先显示「已回滚」红标，并禁用回滚按钮
   const rolledBack = rec.rolled_back === true;
   const statusLabel = rolledBack ? '已回滚' : TRACE_STATUS_LABEL[rec.status] || rec.status || '—';
@@ -173,14 +177,14 @@ const TraceRow: React.FC<{
           回滚
         </button>
       )}
-      <GitDiffPreview base={prevCommit ?? null} target={rec.commit || null} open={diffOpen && !confirming} />
+      <GitDiffPreview base={prevCommit ?? null} target={rec.commit || null} open={diffOpen && !confirming} root={root} />
     </div>
   );
 };
 
 /** 脏文件行内 diff 预览浮层（hover 时拉取 /api/git/diff 展示）。
  *  只读展示（含 +N/-M 统计）；untracked/无基线/网关不可用 → 降级提示，不阻塞行交互。 */
-const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean }> = ({ file, open }) => {
+const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean; root?: string | null }> = ({ file, open, root }) => {
   const [data, setData] = React.useState<GitDiffResult | null>(null);
   const [loading, setLoading] = React.useState(false);
 
@@ -189,8 +193,9 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean }> = ({ fil
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    // staged 行预览暂存区改动（--cached），其余预览工作区改动
-    getGitDiff(file.path, file.staged)
+    // staged 行预览暂存区改动（--cached），其余预览工作区改动；
+    // root = 活动工作区（多工作区下 diff 必须按活动 root 拉，否则恒 diff 默认根）
+    getGitDiff(file.path, file.staged, { root })
       .then((d) => {
         if (!cancelled) setData(d);
       })
@@ -203,7 +208,7 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean }> = ({ fil
     return () => {
       cancelled = true;
     };
-  }, [open, file.path, file.staged]);
+  }, [open, file.path, file.staged, root]);
 
   if (!open) return null;
 
@@ -274,6 +279,8 @@ export const GitWorkspaceCard: React.FC = () => {
   const workspaceError = useGitStore((s) => s.workspaceError);
   const operating = useGitStore((s) => s.operating);
   const refreshWorkspaces = useGitStore((s) => s.refreshWorkspaces);
+  // 活动工作区 root：脏文件/留痕 diff、阶段留痕 commit 都按它拉（多工作区不串根）
+  const activeRoot = activeWorkspace?.root ?? null;
 
   // 阶段留痕：当前选中 stage（默认第一个有命令的阶段）+ 确认中的回滚目标
   const stageTokens = Object.keys(STAGE_TABLE) as StageToken[];
@@ -318,8 +325,9 @@ export const GitWorkspaceCard: React.FC = () => {
 
   React.useEffect(() => {
     loadCommits(traceStage).catch(() => {});
+    // 活动工作区切换 → 按新 root 重拉留痕（阶段↔commit/tag 是 per-root 的）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [traceStage, loadCommits]);
+  }, [traceStage, loadCommits, activeRoot]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
   // hover 查看 diff 的脏文件路径（仅一个；移出即收起，避免多浮层重叠）。
@@ -1102,6 +1110,7 @@ export const GitWorkspaceCard: React.FC = () => {
                   <DirtyDiffPreview
                     file={f}
                     open={openFile === f.path || (hoverEnabled && openFile === null && hoverFileRef.current === f.path)}
+                    root={activeRoot}
                   />
                 </div>
               );
@@ -1132,6 +1141,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 message={c.message}
                 at={c.at}
                 base={commitBaseByHash.get(c.hash) ?? null}
+                root={activeRoot}
               />
             ))}
           </div>
@@ -1236,6 +1246,7 @@ export const GitWorkspaceCard: React.FC = () => {
                     }}
                     prevCommit={gitTraceBase(commits, rec.seq)}
                     gitOk={gitOk}
+                    root={activeRoot}
                   />
                 ))}
             </div>

@@ -36,6 +36,7 @@ import {
 } from '../../utils/selfIterationSummary';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
+import { useGitStore } from '../../store/gitStore';
 import { buildSelfIterateCommand } from '../../utils/selfIterateCommand';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
@@ -202,7 +203,9 @@ const StageTraceBadge: React.FC<{
   base: string | null;
   open: boolean;
   onHover: (open: boolean) => void;
-}> = ({ trace, base, open, onHover }) => {
+  /** 目标工作区根（diff 按活动 root 拉） */
+  root?: string | null;
+}> = ({ trace, base, open, onHover, root = null }) => {
   if (!trace?.commit) return null;
   return (
     <>
@@ -226,7 +229,7 @@ const StageTraceBadge: React.FC<{
           {trace.tag}
         </span>
       )}
-      <GitDiffPreview base={base} target={trace.commit || null} open={open} />
+      <GitDiffPreview base={base} target={trace.commit || null} open={open} root={root} />
     </>
   );
 };
@@ -238,7 +241,9 @@ const RoundRow: React.FC<{
   trace?: GitStageTrace | null;
   /** diff 基线：比该检查点更早的最近一次执行 commit（无 → null，GitDiffPreview 首条降级提示） */
   traceBase?: string | null;
-}> = ({ r, trace = null, traceBase = null }) => {
+  /** 目标工作区根（diff 按活动 root 拉） */
+  root?: string | null;
+}> = ({ r, trace = null, traceBase = null, root = null }) => {
   const v = verdictStyle(r.verdict);
   // 评分 × git：hover 展开该 commit 相对上一阶段执行的改动（至多一个浮层，与轨迹瀑布同交互）
   const [gitOpen, setGitOpen] = React.useState(false);
@@ -281,7 +286,7 @@ const RoundRow: React.FC<{
       )}
       <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOf(r.at)}</span>
       {/* 评分 × git：该轮评分时刻的 commit + tag（hover 看相对上一阶段执行的改动） */}
-      <StageTraceBadge trace={trace} base={traceBase} open={gitOpen} onHover={setGitOpen} />
+      <StageTraceBadge trace={trace} base={traceBase} open={gitOpen} onHover={setGitOpen} root={root} />
     </div>
   );
 };
@@ -324,10 +329,12 @@ const StageRunBadge: React.FC<{ s: StageRunSummary }> = ({ s }) => {
 const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
   // 该阶段 git 留痕（阶段↔commit↔tag；git 不可用/无留痕 → null，行内不渲染）
   const [gitTraces, setGitTraces] = React.useState<GitStageTrace[] | null>(null);
+  // 活动工作区 root：留痕 + commit diff 按活动 root 拉（多工作区不串根）
+  const activeRoot = useGitStore((s) => s.activeWorkspace?.root ?? null);
   React.useEffect(() => {
     let cancelled = false;
     setGitTraces(null); // 切阶段（key 变化重挂）时清空，避免旧阶段留痕错位
-    getGitCommits(s.token)
+    getGitCommits(s.token, activeRoot)
       .then((traces) => {
         if (!cancelled && traces) setGitTraces(traces);
       })
@@ -335,7 +342,7 @@ const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
     return () => {
       cancelled = true;
     };
-  }, [s.token]);
+  }, [s.token, activeRoot]);
 
   // 每轮评分 → 对齐的阶段执行检查点 + diff 基线（纯前端派生；无 → null 不渲染）。
   // base = 比该检查点更早的最近一次执行 commit（gitTraceBase 同口径：相邻执行 = 一个 diff 单元）。
@@ -377,6 +384,7 @@ const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
               r={r}
               trace={g?.trace ?? null}
               traceBase={g?.base ?? null}
+              root={activeRoot}
             />
           );
         })}
