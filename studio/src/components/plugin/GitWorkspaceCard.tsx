@@ -582,6 +582,9 @@ export const GitWorkspaceCard: React.FC = () => {
   }, [traceStage, loadCommits, activeRoot]);
 
   const dirtyCount = status?.dirtyFiles?.length ?? 0;
+  // 工作区脏文件改动汇总（git diff HEAD --numstat 聚合：+N/-M 行数 + 文件数）。
+  // 与头部「N 处改动」同源；老网关/无 HEAD/无净改动 → null，section 头部 chip 不渲染。
+  const dirtyStats = status?.dirtyStats ?? null;
   // 悬停预览 diff 的文件路径（仅一个；state 驱动渲染，与 CommitRow/TraceRow 的
   // hover 预览同交互——ref 不触发重渲染，悬停永远不出现预览，是已修的死角）。
   // 固定展开 diff 的文件路径（点击 diff 按钮或空格/回车切换；最多一个浮层）。
@@ -1498,7 +1501,25 @@ export const GitWorkspaceCard: React.FC = () => {
 
       {/* 脏文件列表 */}
       <div className="space-y-1.5">
-        <SectionLabel>工作区状态</SectionLabel>
+        <SectionLabel>
+          <span className="inline-flex items-center gap-1.5">
+            工作区状态
+            {/* 脏文件改动汇总：git diff HEAD --numstat 聚合（+N/-M 行数 + 文件数）。
+                与头部「N 处改动」同源、一眼看出「改了多少」——不逐个 hover 就知道工作区
+                改动量级；无 HEAD（首次提交前）/无净改动/老网关无此字段 → 不渲染。
+                样式与操作留痕 pull 统计 chip 同口径（+emerald / -red / zinc 文件数）。 */}
+            {dirtyStats && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-[10px] font-mono tabular-nums"
+                title={`${dirtyStats.files} 个文件改动：+${dirtyStats.added} / -${dirtyStats.removed}（git diff HEAD --numstat 聚合）`}
+              >
+                <span className="text-zinc-400">{dirtyStats.files} 文件</span>
+                <span className="text-emerald-700">+{dirtyStats.added}</span>
+                <span className="text-red-600">-{dirtyStats.removed}</span>
+              </span>
+            )}
+          </span>
+        </SectionLabel>
         {dirtyCount === 0 ? (
           gitOk ? (
             <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">

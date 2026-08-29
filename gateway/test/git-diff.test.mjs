@@ -29,7 +29,7 @@ const assert = (name, cond, extra = '') => {
   }
 }
 
-const { getFileDiff } = await import(
+const { getFileDiff, getStatus, parseNumstat } = await import(
   pathToFileURL(join(process.cwd(), 'lib', 'git.mjs')).href
 )
 
@@ -81,6 +81,42 @@ try {
     assert('ok=true', r.ok === true, JSON.stringify(r))
     assert('status=range', r.status === 'range', JSON.stringify(r.status))
     assert('stats ≥1 added（新行加入）', (r.stats?.added ?? 0) >= 1, JSON.stringify(r.stats))
+  }
+
+  console.log('== 5) parseNumstat（git diff --numstat 输出 → 改动汇总）==')
+  {
+    assert('空串 → null', parseNumstat('') === null)
+    assert('仅空白 → null', parseNumstat('  \n\t\n') === null)
+    assert(
+      '常规三行统计',
+      JSON.stringify(parseNumstat('1\t0\ta.md\n0\t2\tb.md\n3\t4\tc.md\n')) ===
+        JSON.stringify({ files: 3, added: 4, removed: 6 }),
+      JSON.stringify(parseNumstat('1\t0\ta.md\n0\t2\tb.md\n3\t4\tc.md\n')),
+    )
+    assert(
+      '二进制行（- -）计入文件数不算行数',
+      JSON.stringify(parseNumstat('-\t-\timg.bin\n2\t1\td.md\n')) ===
+        JSON.stringify({ files: 2, added: 2, removed: 1 }),
+      JSON.stringify(parseNumstat('-\t-\timg.bin\n2\t1\td.md\n')),
+    )
+    assert(
+      '含空格路径（tab 分隔 → 路径可含空格）',
+      JSON.stringify(parseNumstat('1\t0\tmy file.txt\n')) ===
+        JSON.stringify({ files: 1, added: 1, removed: 0 }),
+      JSON.stringify(parseNumstat('1\t0\tmy file.txt\n')),
+    )
+  }
+
+  console.log('== 6) getStatus dirtyStats（工作区改动汇总）==')
+  {
+    // 工作区改动：big.txt 加 1 行（相对 second 提交）；dirtyStats 应含该文件统计
+    writeFileSync(join(TMP, 'big.txt'), 'one more line\nworktree change\n')
+    const st = await getStatus()
+    assert('gitAvailable=true', st.gitAvailable === true, JSON.stringify(st.error))
+    assert('dirtyFiles 命中 big.txt', st.dirtyFiles.some((f) => f.path === 'big.txt'), JSON.stringify(st.dirtyFiles))
+    assert('dirtyStats.files ≥1', (st.dirtyStats?.files ?? 0) >= 1, JSON.stringify(st.dirtyStats))
+    assert('dirtyStats.added ≥1（工作区加行）', (st.dirtyStats?.added ?? 0) >= 1, JSON.stringify(st.dirtyStats))
+    assert('dirtyStats.removed ≥0', (st.dirtyStats?.removed ?? -1) >= 0, JSON.stringify(st.dirtyStats))
   }
 } finally {
   rmSync(TMP, { recursive: true, force: true })

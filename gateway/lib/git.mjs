@@ -129,6 +129,37 @@ function porcelainStatus(xy) {
 }
 
 /**
+ * 解析 `git diff --numstat` 输出 → 文件改动统计（纯函数，供工作区脏文件汇总）。
+ * 每行 `加行\t删行\t路径`：新增行 +N / 删除行 -M / 文件数取总行数。
+ * 二进制文件行 `-\t-\tpath`（加删列各为 `-`）→ 计入文件数但不算行数。
+ * 加/删为 0 的路径段不会出现（git 只输出有净改动的文件）。
+ * 与 git-workspaces.mjs 的 parseNumstat 同款实现（该处未导出，此处置于本模块
+ * 避免跨模块依赖；口径一致：{ files, added, removed }）。
+ * @param {string} out
+ * @returns {{files:number, added:number, removed:number} | null}
+ */
+export function parseNumstat(out) {
+  if (typeof out !== 'string' || !out.trim()) return null
+  let files = 0
+  let added = 0
+  let removed = 0
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    const [a, d, ...pathParts] = line.split('\t')
+    if (!pathParts.length || !pathParts.join('\t').trim()) continue
+    files++
+    const addN = Number(a)
+    const delN = Number(d)
+    if (Number.isFinite(addN) && Number.isFinite(delN)) {
+      if (addN > 0) added += addN
+      if (delN > 0) removed += delN
+    }
+  }
+  if (files === 0) return null
+  return { files, added, removed }
+}
+
+/**
  * 解析 git 仓库根（候选优先级见文件头）。
  * 可选 root 参数：显式指定要查看的工作区 —— 只校验该路径，
  * `git -C <root> rev-parse --show-toplevel` 成功 → { root: <真实根>, source: 'explicit' }；
@@ -227,6 +258,9 @@ export async function getStatus(root) {
     detached: false,
     head: null,
     dirtyFiles: [],
+    // 工作区脏文件改动汇总（git diff HEAD --numstat 聚合：+N/-M 行数与文件数）。
+    // 有净改动才给 { files, added, removed }；无 HEAD/无改动/采集失败 → null（前端不渲染）。
+    dirtyStats: null,
     ahead: 0,
     behind: 0,
     recentCommits: [],
@@ -242,7 +276,7 @@ export async function getStatus(root) {
   }
   base.root = gr.root
   const cwd = gr.root
-  const [statusR, headR, logR, tagR] = await Promise.all([
+  const [statusR, headR, logR, tagR, numstatR] = await Promise.all([
     // -c core.quotepath=false：含非 ASCII（中文）的文件路径以原始 UTF-8 输出，
     // 而不是 `"docs/\345\271\263..."` 这类 octal 转义（前端直接可读/可直接拼接路径）。
     runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-b'], { cwd }),
@@ -253,6 +287,10 @@ export async function getStatus(root) {
     // tag 清单：refname:short + 指向 commit（普通=objectname / 注解=peeled），
     // 按创建时间倒序（普通/注解/远端 tag 均显示，最多 20 个）
     runGit(['for-each-ref', 'refs/tags', '--sort=-creatordate', '--format=%(refname:short)%09%(objectname)%09%(*objectname)'], { cwd }),
+    // 脏文件改动汇总（git diff HEAD --numstat）：新增/删除行数聚合。
+    // 与 dirtyFiles 并列采集（同一 Promise.all 批次，不额外串行）；
+    // 首次提交前无 HEAD → 该命令失败，dirtyStats 保持 null（前端不展示，语义正确）。
+    runGit(['diff', 'HEAD', '--numstat'], { cwd }),
   ])
   if (!statusR.ok) {
     base.error =
@@ -298,6 +336,11 @@ export async function getStatus(root) {
       staged: xy[0] !== ' ' && xy[0] !== '?',
     })
   }
+  // 脏文件改动汇总：git diff HEAD --numstat 聚合（新增/删除行数 + 文件数）。
+  // 只在 git 可用且 HEAD 存在（首次提交前该命令失败）时给值；无净改动 → null，
+  // 前端据此不渲染「0 文件」误导统计。与 dirtyFiles 同源（同一工作区同一时刻），
+  // 前端头部计数与「+N/-M」chip 一眼对应。
+  base.dirtyStats = numstatR.ok ? parseNumstat(numstatR.stdout) : null
   base.head = headR.ok && headR.stdout.trim() ? headR.stdout.trim() : null
   if (logR.ok) {
     for (const line of logR.stdout.split('\n')) {

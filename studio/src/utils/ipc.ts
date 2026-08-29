@@ -1259,6 +1259,16 @@ export interface GitDirtyFile {
   staged: boolean;
 }
 
+/** 工作区脏文件改动汇总（git diff HEAD --numstat 聚合；有净改动才给值）。 */
+export interface GitDirtyStats {
+  /** 有净改动的文件数 */
+  files: number;
+  /** 新增行数合计 */
+  added: number;
+  /** 删除行数合计 */
+  removed: number;
+}
+
 /** 单条 commit 摘要（工作区管控卡「最近提交」数据源）。 */
 export interface GitRecentCommit {
   hash: string;
@@ -1276,6 +1286,9 @@ export interface GitStatus {
   detached?: boolean;
   head: string | null;
   dirtyFiles: GitDirtyFile[];
+  /** 工作区脏文件改动汇总（git diff HEAD --numstat：+N/-M 行数与文件数）。
+   *  有净改动才给值；无 HEAD/无改动/采集失败 → null（前端不渲染「0 文件」误导统计） */
+  dirtyStats?: GitDirtyStats | null;
   ahead: number;
   behind: number;
   error?: string | null;
