@@ -29,6 +29,7 @@ import type {
   GitStageTrace,
 } from '../../utils/ipc';
 import { gitTraceBase, gitTraceBySeq } from '../../utils/gitTrace';
+import { gateDetailLines, trajectoryViewDetail } from '../../utils/gateEvidence';
 
 /** 毫秒 → 人类可读耗时（与项目时间约定一致：h m / m s / s） */
 function fmtMs(ms: number | null | undefined): string {
@@ -284,7 +285,10 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {view.gate_policy === 'artifact+trajectory' && badge && (
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium border ${badge.cls}`} title={`门控：${view.gate_policy}`}>
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium border ${badge.cls}`}
+              title={trajectoryGateTooltip(view)}
+            >
               <Icon name={badge.icon} size={12} weight="fill" />
               {badge.label}
             </span>
@@ -558,6 +562,24 @@ export const TrajectoryPanel: React.FC<{ stage: string; limit?: number }> = ({ s
     </div>
   );
 };
+
+/** 轨迹面板门控徽标 tooltip：策略 + 产物命中 + 轨迹三态 + 门控证据详情行。
+ *  与 StageNode / GateOverview 徽标同口径（复用 gateEvidence.gateDetailLines 证据段，
+ *  数据源 = /api/trajectory 视图自身字段，零新请求）。 */
+function trajectoryGateTooltip(view: TrajectoryView): string {
+  const g = view.status;
+  const detail = trajectoryViewDetail(view);
+  return [
+    `门控策略：${view.gate_policy}`,
+    view.exists ? `产物：已命中 ${view.artifacts.length} 项` : '产物：缺失',
+    `轨迹证据：${g ? (GATE_BADGE[g.status]?.label ?? g.status) : '未参与/无数据'}`,
+    g?.reason ? `判定：${ROLLBACK_REASON_TEXT[g.reason] ?? g.reason}` : null,
+    detail ? ['', '—— 门控证据 ——', ...gateDetailLines(detail)] : null,
+  ]
+    .flat()
+    .filter((l): l is string => Boolean(l))
+    .join('\n');
+}
 
 const SummaryTile: React.FC<{ label: string; value: string; valueCls?: string }> = ({ label, value, valueCls }) => (
   <div className="rounded-lg border border-zinc-200 bg-white px-2.5 py-2">

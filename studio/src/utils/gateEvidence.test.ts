@@ -6,7 +6,13 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { gateEvidence, gateEvidenceTooltip, gateDetail, gateDetailLines } from './gateEvidence';
+import {
+  gateEvidence,
+  gateEvidenceTooltip,
+  gateDetail,
+  gateDetailLines,
+  trajectoryViewDetail,
+} from './gateEvidence';
 import type { StageStatus } from '../data/types';
 import type { TrajectoryGate } from './ipc';
 
@@ -207,5 +213,74 @@ describe('gateDetailLines（门控证据详情可读行）', () => {
     expect(line).toContain('等 5 项');
     expect(line).toContain('a.md');
     expect(line).toContain('c.md');
+  });
+});
+
+// —— 轨迹面板门控证据详情（trajectoryViewDetail）夹具：与网关 /api/trajectory 视图同形 ——
+function trajView(partial: any) {
+  return {
+    stage: 'swe_unit_verify',
+    label: '单元验证',
+    aspice: 'SWE.4',
+    command: '/yxspec:swe_unit_verify',
+    gate_policy: 'artifact+trajectory',
+    exists: true,
+    artifacts: [{ path: 'project/specs/ts-ut/ts-ut-001.md', kind: 'ts-ut' }],
+    totalRuns: 5,
+    latest: null,
+    status: {
+      status: 'verified',
+      hasTurnEnd: true,
+      toolOk: true,
+      toolCalls: 3,
+      toolResults: 2,
+      tokens: 1200,
+      reason: null,
+    },
+    rows: [],
+    ...partial,
+  };
+}
+
+describe('trajectoryViewDetail（轨迹面板门控证据详情派生）', () => {
+  it('无数据（null / undefined / 非对象）→ null（静默降级）', () => {
+    expect(trajectoryViewDetail(null)).toBeNull();
+    expect(trajectoryViewDetail(undefined)).toBeNull();
+  });
+
+  it('artifact+trajectory 视图 → 产物/轨迹证据都带', () => {
+    const d = trajectoryViewDetail(trajView({}))!;
+    expect(d).not.toBeNull();
+    expect(d.artifact.passed).toBe(true);
+    expect(d.artifact.files).toEqual(['project/specs/ts-ut/ts-ut-001.md']);
+    expect(d.trajectory).toEqual({
+      hasTurnEnd: true,
+      toolOk: true,
+      toolCalls: 3,
+      toolResults: 2,
+      tokens: 1200,
+    });
+  });
+
+  it('产物缺失（exists=false）+ 无轨迹 → artifact 未命中、trajectory null（不抛）', () => {
+    const d = trajectoryViewDetail(trajView({ exists: false, status: null }))!;
+    expect(d.artifact.passed).toBe(false);
+    expect(d.trajectory).toBeNull();
+  });
+
+  it('无产物 glob 阶段（exists=true + artifacts 空）→ 视为通过（与 gateDetail 同口径）', () => {
+    const d = trajectoryViewDetail(trajView({ exists: true, artifacts: [] }))!;
+    const lines = gateDetailLines(d!);
+    expect(lines[0]).toContain('命中');
+    expect(lines[0]).toContain('视为通过');
+  });
+
+  it('非数字计数 → 归一为 0（不渲染 NaN）', () => {
+    const d = trajectoryViewDetail(
+      trajView({ status: { hasTurnEnd: true, toolOk: true, toolCalls: 'x' as any, toolResults: null as any, tokens: undefined as any } }),
+    )!;
+    expect(d.trajectory!.toolCalls).toBe(0);
+    expect(d.trajectory!.toolResults).toBe(0);
+    expect(d.trajectory!.tokens).toBe(0);
   });
 });

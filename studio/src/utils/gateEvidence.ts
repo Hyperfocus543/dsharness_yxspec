@@ -160,3 +160,57 @@ export function gateDetailLines(d: GateEvidenceDetail): string[] {
     trajectoryLine(d),
   ];
 }
+
+// =============================================================================
+// 轨迹面板门控证据详情（TrajectoryPanel 门控徽标 tooltip 增强）
+// 数据源 = GET /api/trajectory 视图自身字段（与 gateDetail 的 /api/trajectory-gate
+//   payload 同语义，零新请求）：
+//   · view.exists  = 阶段产物 glob 是否命中（stageGlobHit 同源，等价 artifact.passed）
+//   · view.artifacts = 产物文件清单（已按 glob 扫描，等价 artifact.files）
+//   · view.status = 轨迹证据三态 + turn/end + 工具成败计数 + token（trajectoryStatus 同源）
+// 产物命中行与 gateDetail 口径对齐：无产物 glob 阶段（artifacts 空且 exists=true）
+//   → 「视为通过」；exists=false → 「缺失（应命中 N 项 glob 产物）」。
+// =============================================================================
+
+/** 轨迹面板门控证据详情（无轨迹面板形态数据 / 无可用字段 → null，静默降级）。 */
+export function trajectoryViewDetail(
+  view: TrajectoryViewLike | null | undefined,
+): GateEvidenceDetail | null {
+  if (!view || typeof view !== 'object') return null;
+  const traj = view.status ?? null;
+  // 归一化辅助：仅 typeof === 'number' 才算数（可选字段缺省/非法 → 0，不渲染 NaN）
+  const n = (v: number | null | undefined): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    artifact: {
+      // exists = stageGlobHit（任一 spec glob 命中）；无产物 glob 阶段恒 true，
+      // 与 gateDetail 的 artifact.passed 语义对齐（缺省按缺失兜底，不误报命中）
+      passed: view.exists === true,
+      files: Array.isArray(view.artifacts) ? view.artifacts.map((a) => a.path) : [],
+    },
+    trajectory: traj
+      ? {
+          hasTurnEnd: traj.hasTurnEnd === true,
+          toolOk: traj.toolOk === true,
+          toolCalls: n(traj.toolCalls),
+          toolResults: n(traj.toolResults),
+          tokens: n(traj.tokens),
+        }
+      : null,
+  };
+}
+
+/** 轨迹面板视图的弱形态（只取本适配器需要的字段；结构等价 ipc.TrajectoryView）。 */
+export interface TrajectoryViewLike {
+  /** 阶段产物 glob 是否命中（无产物 glob 阶段恒 true） */
+  exists?: boolean;
+  /** 产物文件清单（已按 glob 扫描；缺省 → 空数组） */
+  artifacts?: Array<{ path: string; kind?: string }>;
+  /** 轨迹证据三态 + 计数（trajectoryStatus 同源；无 → null） */
+  status?: {
+    hasTurnEnd?: boolean;
+    toolOk?: boolean;
+    toolCalls?: number;
+    toolResults?: number;
+    tokens?: number;
+  } | null;
+}
