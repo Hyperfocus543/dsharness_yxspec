@@ -390,9 +390,20 @@ function gitSubUnsafe(sub, segment) {
     return true;
   }
   if (sub === 'remote') {
-    // 只读：无参（列出）、-v/--verbose、show；其余（add/remove/rm/set-url/...）拒绝
-    const first = (gitArgsAfter('remote', segment).split(/\s+/)[0] || '').replace(/^[\s"'`]+/, '');
-    return !(first === '' || first === '-v' || first === '--verbose' || first === 'show');
+    // 只读：纯列出（无子命令，如 `git remote` / `git remote -v`）与 `show <name>`
+    // （展示远端信息）。其余子命令（add/remove/rm/set-url/rename/prune/update/...）
+    // 都是写操作 → 拒绝。
+    // 关键：`-v`/`--verbose` 是 remote 的「列出详情」flag，**不是**子命令——
+    // `git remote -v add origin <url>` 仍会执行 add（实测 git 把 -v 当 flag，真正的
+    // 子命令是紧随其后的 add），此前把 -v 当子命令白名单 → 写操作漏过守卫。
+    // 扫描 token 找「首个非 flag token」作为真正子命令；只有 flag → 纯列出（只读）。
+    const after = gitArgsAfter('remote', segment);
+    const toks = after.split(/\s+/).filter(Boolean);
+    for (const t of toks) {
+      if (t.startsWith('-')) continue;
+      return t !== 'show';
+    }
+    return false;
   }
   return true; // 非只读白名单内的 git 子命令，默认拒绝
 }

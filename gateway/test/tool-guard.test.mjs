@@ -49,6 +49,7 @@ for (const cmd of [
   'git tag',
   'git tag -l "v1.*"',
   'git remote -v',
+  'git remote --verbose',
   'git remote show origin',
   'git status && git log -1',
   // 2026-08-29 追加：`=` 连写带值 flag 的引号值（含空格）整体当 token——此前
@@ -95,6 +96,14 @@ for (const cmd of [
   'git tag v1.0',
   'git tag -d v1.0',
   'git remote add origin http://x',
+  // 2026-08-30 追加：`-v`/`--verbose` 是 remote 的「列出」flag，不是子命令——
+  // `git remote -v add origin <url>` 仍执行 add（实测 git 把 -v 当 flag），
+  // 此前把 -v 当子命令白名单 → 写操作漏过守卫，现须拒绝。
+  'git remote -v add origin http://x',
+  'git remote --verbose add origin http://x',
+  'git remote -v add upstream https://github.com/x/y.git',
+  'git remote -v rm origin',
+  'git remote -v set-url origin https://x',
   'git merge dev',
   'git cherry-pick abc',
   'git rebase main',
