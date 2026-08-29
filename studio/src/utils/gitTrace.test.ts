@@ -5,8 +5,8 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { gitTraceBase, gitTraceBySeq } from './gitTrace';
-import type { GitStageTrace } from './ipc';
+import { gitTraceBase, gitTraceBySeq, recentCommitDiffs } from './gitTrace';
+import type { GitRecentCommit, GitStageTrace } from './ipc';
 
 function trace(partial: Partial<GitStageTrace>): GitStageTrace {
   return {
@@ -18,6 +18,10 @@ function trace(partial: Partial<GitStageTrace>): GitStageTrace {
     finishedAt: null,
     ...partial,
   };
+}
+
+function recent(partial: Partial<GitRecentCommit>): GitRecentCommit {
+  return { hash: 'abc1234', message: '提交说明', at: '2026-08-29T00:00:00.000Z', ...partial };
 }
 
 describe('gitTraceBase（相邻留痕 diff 基线）', () => {
@@ -77,5 +81,36 @@ describe('gitTraceBySeq（seq → 留痕索引）', () => {
   it('null / 空 → 空 Map（行内不渲染 git 徽标）', () => {
     expect(gitTraceBySeq(null).size).toBe(0);
     expect(gitTraceBySeq([]).size).toBe(0);
+  });
+});
+
+describe('recentCommitDiffs（最近提交 diff 对派生）', () => {
+  it('空 / null → []（无提交不预览）', () => {
+    expect(recentCommitDiffs(null)).toEqual([]);
+    expect(recentCommitDiffs([])).toEqual([]);
+    expect(recentCommitDiffs(undefined)).toEqual([]);
+  });
+
+  it('单条提交 → []（无更早提交可对比，首条降级提示）', () => {
+    expect(recentCommitDiffs([recent({ hash: 'abc1234' })])).toEqual([]);
+  });
+
+  it('相邻两条 → 1 对：旧 commit 为 base，新 commit 为 target', () => {
+    const commits = [recent({ hash: 'bbb2222' }), recent({ hash: 'aaa1111' })];
+    expect(recentCommitDiffs(commits)).toEqual([
+      { base: 'aaa1111', target: 'bbb2222', hash: 'bbb2222', message: '提交说明' },
+    ]);
+  });
+
+  it('多条（新→旧）：每条取后一条较旧 commit 为 base，首条无 base', () => {
+    const commits = [
+      recent({ hash: 'ccc3333', message: '第三条' }),
+      recent({ hash: 'bbb2222', message: '第二条' }),
+      recent({ hash: 'aaa1111', message: '第一条' }),
+    ];
+    const diffs = recentCommitDiffs(commits);
+    expect(diffs).toHaveLength(2);
+    expect(diffs[0]).toMatchObject({ base: 'bbb2222', target: 'ccc3333', hash: 'ccc3333' });
+    expect(diffs[1]).toMatchObject({ base: 'aaa1111', target: 'bbb2222', hash: 'bbb2222' });
   });
 });

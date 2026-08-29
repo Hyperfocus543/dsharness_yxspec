@@ -4,7 +4,7 @@
 //   与轨迹瀑布共用）。本模块只做无 DOM 的派生计算，可单测。
 // =============================================================================
 
-import type { GitStageTrace } from './ipc';
+import type { GitRecentCommit, GitStageTrace } from './ipc';
 
 /**
  * 某条留痕的 diff 对比基线 commit：取「比目标 seq 更早的最近一条留痕」的 commit
@@ -33,4 +33,23 @@ export function gitTraceBySeq(
   const m = new Map<number, GitStageTrace>();
   for (const t of traces ?? []) m.set(t.seq, t);
   return m;
+}
+
+/** 最近提交 diff 对：相邻两条提交组成一个 diff 单元（旧 commit 为 base，新 commit 为 target）。
+ *  数据源 = GitStatus.recentCommits（网关按时间倒序 新→旧；空 → []）。
+ *  与阶段留痕 diff 同口径（gitTraceBase 的"相邻留痕 = 一个 diff 单元"），
+ *  首条（最新）无更早提交可对比 → 不下发，由 GitDiffPreview 的首条降级提示承接。 */
+export function recentCommitDiffs(
+  commits: GitRecentCommit[] | null | undefined,
+): Array<{ base: string | null; target: string; hash: string; message: string }> {
+  const list = commits ?? [];
+  return list.slice(0, -1).map((cur, i) => {
+    const prev = list[i + 1] ?? null;
+    return {
+      base: prev?.hash ?? null,
+      target: cur.hash,
+      hash: cur.hash,
+      message: cur.message,
+    };
+  });
 }

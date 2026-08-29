@@ -19,7 +19,7 @@ import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
 import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace } from '../../utils/ipc';
-import { gitTraceBase } from '../../utils/gitTrace';
+import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -63,25 +63,37 @@ const TRACE_STATUS_LABEL: Record<string, string> = {
   rolled_back: '已回滚',
 };
 
-/** 单条 commit 行：hash（mono）+ message + 相对时间 */
-const CommitRow: React.FC<{ hash: string; message: string; at: string | null }> = ({
-  hash,
-  message,
-  at,
-}) => (
-  <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
-    <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono" title={hash}>
-      {shortHash(hash)}
-    </span>
-    <span className="shrink-0 text-emerald-600">
-      <Icon name={I.clock} size={12} />
-    </span>
-    <span className="text-zinc-600 truncate min-w-0" title={message}>
-      {message || '（无提交说明）'}
-    </span>
-    <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOf(at)}</span>
-  </div>
-);
+/** 单条 commit 行：hash（mono）+ message + 相对时间；hover/点击看该提交相对上一提交的改动。
+ *  与留痕行/轨迹行同交互（hover 浮层预览，至多一个），复用共享 ui/GitDiffPreview。 */
+const CommitRow: React.FC<{
+  hash: string;
+  message: string;
+  at: string | null;
+  /** 该提交相对上一条提交的 diff 基线（首条 → null，降级提示） */
+  base?: string | null;
+}> = ({ hash, message, at, base = null }) => {
+  const [diffOpen, setDiffOpen] = React.useState(false);
+  return (
+    <div
+      className="relative flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
+      onMouseEnter={() => setDiffOpen(true)}
+      onMouseLeave={() => setDiffOpen(false)}
+      title={base ? '悬停查看该提交相对上一提交的改动 diff' : '最新提交无更早提交可对比，无 diff'}
+    >
+      <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono" title={hash}>
+        {shortHash(hash)}
+      </span>
+      <span className="shrink-0 text-emerald-600">
+        <Icon name={I.clock} size={12} />
+      </span>
+      <span className="text-zinc-600 truncate min-w-0" title={message}>
+        {message || '（无提交说明）'}
+      </span>
+      <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOf(at)}</span>
+      <GitDiffPreview base={base} target={hash} open={diffOpen} />
+    </div>
+  );
+};
 
 /** 阶段留痕行：seq + commit + tag + 状态 + 时间 + 回滚按钮 + hover diff 预览 */
 const TraceRow: React.FC<{
@@ -307,6 +319,15 @@ export const GitWorkspaceCard: React.FC = () => {
   const [hoverEnabled, setHoverEnabled] = React.useState(true);
   // 最近 5 条 commit（取带 message 的，倒序排列）；后端字段 recentCommits，旧字段 recent 兜底
   const recent = [...(status?.recentCommits ?? status?.recent ?? [])].slice(0, 5);
+  // 相邻提交 diff 基线（hash → 相对上一提交的 commit）：留痕/轨迹行同口径（相邻 = 一个 diff 单元），
+  // 首条（最新）无更早提交 → 无 base，由 GitDiffPreview 首条降级提示承接。
+  const commitBaseByHash = React.useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of recentCommitDiffs(recent)) {
+      if (d.base) m.set(d.hash, d.base);
+    }
+    return m;
+  }, [recent]);
   const tags = status?.tags ?? [];
   // git 连接态：status 存在时 loadError 必为 false（loadError 会在上方 early-return 成
   // EmptyState，见 403-425 行），因此本分支实际只有两态 —— git 可用（sage 绿）或
@@ -555,7 +576,13 @@ export const GitWorkspaceCard: React.FC = () => {
         ) : (
           <div className="space-y-1">
             {recent.map((c) => (
-              <CommitRow key={c.hash} hash={c.hash} message={c.message} at={c.at} />
+              <CommitRow
+                key={c.hash}
+                hash={c.hash}
+                message={c.message}
+                at={c.at}
+                base={commitBaseByHash.get(c.hash) ?? null}
+              />
             ))}
           </div>
         )}
