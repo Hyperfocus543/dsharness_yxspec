@@ -16,11 +16,13 @@
 // 追加审计 JSONL（照 recordRollback 的 mkdirSync + appendFileSync 范式）。
 //
 // 注册表文件（JSON）：{ version, defaultRoot, activeId, workspaces:[{id,name,root,source}] }
-//   默认 gateway/runtime-js/runtime-data/git-workspaces.json，可用 YXSPEC_GIT_WORKSPACES 覆盖。
+//   默认 gateway/runtime-js/runtime-data/git-workspaces.json，可用 YXSPEC_GIT_WORKSPACES 覆盖
+//   （registryFilePath() 恒按当前生效 env 解析，模块加载后设置也立即生效，测试隔离同款）。
 //   每条 source：'auto'（当前生效根，由 resolveGitRoot 推导，id 恒 'default'）或
 //   'manual'（addWorkspace 手动登记，id 为 ws-<n> 递增）。
 // 审计文件（JSONL）：默认 gateway/runtime-js/runtime-data/git-workspace-audit.jsonl，
-//   可用 YXSPEC_GIT_AUDIT 覆盖。只追加不修改，失败仅 console.log 记录不抛。
+//   可用 YXSPEC_GIT_AUDIT 覆盖（auditFilePath() 同样恒按当前生效 env 解析）。
+//   只追加不修改，失败仅 console.log 记录不抛。
 //
 // 红线：
 //   - git 写操作仅限下方白名单；其余 action → { ok:false, error:'unknown-action' }
@@ -37,15 +39,32 @@ import { fileURLToPath } from 'node:url'
 import { resolveGitRoot } from './git.mjs'
 
 const REGISTRY_VERSION = 1
-const REGISTRY_FILE =
-  process.env.YXSPEC_GIT_WORKSPACES ||
-  join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime-js', 'runtime-data', 'git-workspaces.json')
-const AUDIT_FILE =
-  process.env.YXSPEC_GIT_AUDIT ||
+// 注册表文件缺省路径：gateway/runtime-js/runtime-data/git-workspaces.json
+// 注意：注册表路径**恒按当前生效 env 解析**（registryFilePath()），不在模块加载时冻结——
+// 与 auditFilePath() 同口径（见下）。env YXSPEC_GIT_WORKSPACES 可在模块加载后设置
+// （测试隔离/换目录即生效），否则 readRegistry/writeRegistry 会永远落在模块加载时
+// 捕获的陈旧路径：测试设了 env 却写进真实默认注册表（污染运行时数据），跨进程
+// 换目录也拿不到新文件。
+const DEFAULT_REGISTRY_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime-js', 'runtime-data', 'git-workspaces.json')
+// 审计文件缺省路径：gateway/runtime-js/runtime-data/git-workspace-audit.jsonl
+const DEFAULT_AUDIT_FILE =
   join(dirname(fileURLToPath(import.meta.url)), '..', 'runtime-js', 'runtime-data', 'git-workspace-audit.jsonl')
 const GIT_OP_TIMEOUT_MS = Number(process.env.YXSPEC_GIT_OP_TIMEOUT_MS ?? 120000)
 // 单独一条审计 JSONL 的截断上限（避免恶意/异常 stdout 撑爆审计文件；只截断记录不截断执行）
 const AUDIT_STDOUT_MAX = 4000
+
+/** 注册表文件路径：恒按当前生效 env 解析（改 YXSPEC_GIT_WORKSPACES 后读写两侧立刻指向
+ *  新文件，测试/换目录即生效）。缺省回退模块默认路径。 */
+function registryFilePath() {
+  return process.env.YXSPEC_GIT_WORKSPACES || DEFAULT_REGISTRY_FILE
+}
+
+/** 审计文件路径：恒按当前生效 env 解析（与 registryFilePath 同口径——磁盘/模块常量的
+ *  陈旧快照不阻断；改 YXSPEC_GIT_AUDIT 后读写两侧立刻指向新文件，测试/换目录即生效）。
+ *  缺省回退模块默认路径。 */
+function auditFilePath() {
+  return process.env.YXSPEC_GIT_AUDIT || DEFAULT_AUDIT_FILE
+}
 
 /**
  * 单次 git 调用（execFile，无 shell）。任何失败都返回 ok:false，不抛。
@@ -180,9 +199,10 @@ function recordGitOp({ root, action, args, ok, stdout, error, stats, behind }) {
 
 /** 读注册表 JSON；文件缺失/损坏 → 返回空结构（不抛）。 */
 function readRegistry() {
+  const file = registryFilePath()
   let data = null
   try {
-    data = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'))
+    data = JSON.parse(readFileSync(file, 'utf8'))
   } catch {
     data = null // 文件不存在或 JSON 损坏 → 视为空注册表，落盘时重建
   }
@@ -196,8 +216,9 @@ function readRegistry() {
 
 /** 写回注册表 JSON（覆盖写，注册表是单份 JSON 文档；失败抛给调用方转 ok:false）。 */
 function writeRegistry(reg) {
-  mkdirSync(dirname(REGISTRY_FILE), { recursive: true })
-  writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2) + '\n', 'utf8')
+  const file = registryFilePath()
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, JSON.stringify(reg, null, 2) + '\n', 'utf8')
 }
 
 /** 合并当前生效根（resolveGitRoot）为 defaultRoot 条目，返回新注册表对象。 */
@@ -557,13 +578,6 @@ export function listCloneProgress({ dir } = {}) {
   return out
     .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
     .slice(0, CLONE_PROGRESS_MAX)
-}
-
-/** 审计文件路径：恒按当前生效 env 解析（与 defaultRoot 同口径——磁盘/模块常量的
- *  陈旧快照不阻断；改 YXSPEC_GIT_AUDIT 后读写两侧立刻指向新文件，测试/换目录即生效）。
- *  缺省回退模块默认路径。 */
-function auditFilePath() {
-  return process.env.YXSPEC_GIT_AUDIT || AUDIT_FILE
 }
 
 /**
