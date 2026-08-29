@@ -830,12 +830,12 @@ export const GitWorkspaceCard: React.FC = () => {
                       </button>
                     )
                   )}
-                  {isActive && isAuto && (
+                  {isActive && (
                     <span
-                      className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-mono border border-emerald-200/70"
-                      title="当前工作区（自动透传默认根，不可移除）"
+                      className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] font-medium border border-emerald-200/70"
+                      title={isAuto ? '当前工作区（自动透传默认根，不可移除）' : '当前工作区（点击「设为当前」切换）'}
                     >
-                      当前 · 默认
+                      当前
                     </span>
                   )}
                 </div>
