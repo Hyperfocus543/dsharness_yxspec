@@ -651,9 +651,17 @@ export const GitWorkspaceCard: React.FC = () => {
   };
 
   // 克隆远程仓库：gitOperate clone → 网关自动登记 → 成功后激活新仓库（切 active +
-  // 重拉 status；克隆完立刻能看到新仓库的脏文件/分支/HEAD，多仓库下不再停留在旧 root）
+  // 重拉 status；克隆完立刻能看到新仓库的脏文件/分支/HEAD，多仓库下不再停留在旧 root）。
+  // 目标目录必填：网关 clone 的 dir 是「仓库落盘目录」（git clone <url> <dir>），不是父
+  // 目录——旧实现留空时回落活动工作区根，而工作区根是非空 git 仓库，克隆必被网关以
+  // 「目标目录已存在且非空」打回，表单却宣称「默认当前工作区根」，是必失败的死角。
+  // 改必填 + 前端先校验，给明确内联错误，不再把失败留给网关。
   const doCloneRemote = async () => {
-    const err = !wsUrl || !wsUrl.trim() ? '请输入远程仓库地址' : null;
+    const err = !wsUrl || !wsUrl.trim()
+      ? '请输入远程仓库地址'
+      : !wsDir || !wsDir.trim()
+        ? '请输入克隆目标目录（仓库将创建在该目录下）'
+        : null;
     if (err) {
       setWsFormError(err);
       return;
@@ -661,9 +669,9 @@ export const GitWorkspaceCard: React.FC = () => {
     setWsFormError(null);
     try {
       const res = await useGitStore.getState().gitOperate({
-        root: wsDir.trim() || activeWorkspace?.root || '',
+        root: wsDir.trim(),
         action: 'clone',
-        args: { url: wsUrl.trim(), dir: wsDir.trim() || activeWorkspace?.root || '' },
+        args: { url: wsUrl.trim(), dir: wsDir.trim() },
       });
       await useGitStore.getState().activateAfterAdd(res);
       pushToast('success', '克隆完成，已登记并切换工作区');
@@ -1119,8 +1127,8 @@ export const GitWorkspaceCard: React.FC = () => {
                   className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
                   value={wsDir}
                   onChange={(e) => setWsDir(e.target.value)}
-                  placeholder="D:/Work/04_Temp/"
-                  title="克隆目标目录（默认当前活动工作区根目录）"
+                  placeholder="D:/Work/04_Temp/新仓库名"
+                  title="克隆目标目录（必填）：仓库将创建在该目录下，如 D:/Work/04_Temp/my-repo"
                 />
                 {/* 克隆进度条：operating 且目标目录已填时渲染（不打断输入；无进度数据静默降级） */}
                 {operating && wsDir.trim() && (
