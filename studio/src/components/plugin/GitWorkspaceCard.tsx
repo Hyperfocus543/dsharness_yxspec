@@ -22,6 +22,7 @@ import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAudit
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
+import { retryAuditLabel, retryAuditParams, retryAuditTitle } from '../../utils/gitRetry';
 import { gitWorkspaceName } from '../../utils/gitWorkspaceName';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
@@ -288,8 +289,18 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean; root?: str
  *  完整 root 路径放 tooltip —— 操作行与工作区列表同口径，多仓库下一眼对应。
  *  结果摘要 chip（新网关审计行附带）：pull 的文件改动统计 +N/-M、fetch 的落后
  *  提交摘要（拉到 N 个新提交）—— 让「那次操作到底拉回了什么」在留痕里可回看，
- *  不再只有瞬时 toast；老审计行无此字段 → 不渲染（静默降级，不占行宽）。 */
-const AuditRow: React.FC<{ e: GitAuditEntry; workspaces?: GitWorkspace[] | null }> = ({ e, workspaces = null }) => {
+ *  不再只有瞬时 toast；老审计行无此字段 → 不渲染（静默降级，不占行宽）。
+ *  失败行「重试」按钮：按该条留痕记录的原 root 重跑该 action（fetch/pull/push/
+ *  checkout/init；clone 失败目标目录已非空 → 白名单外不渲染）。多仓库下顶部
+ *  fetch/pull/push 只作用于活动工作区，而失败留痕的 root 可能是任意已登记仓库
+ *  （含非活动）——行内重试按原 root 跑，重试目标无歧义；成功后联动刷新留痕。 */
+const AuditRow: React.FC<{
+  e: GitAuditEntry;
+  workspaces?: GitWorkspace[] | null;
+  /** 单条重试进行中（按 root 互斥，防连点重复执行同仓库） */
+  retrying?: boolean;
+  onRetry?: (e: GitAuditEntry) => void;
+}> = ({ e, workspaces = null, retrying = false, onRetry }) => {
   const argsText = auditArgsText(e.args);
   // pull 文件改动统计（老行/无净改动 → null，不渲染 chip）
   const stats = e.stats ?? null;
@@ -313,6 +324,8 @@ const AuditRow: React.FC<{ e: GitAuditEntry; workspaces?: GitWorkspace[] | null 
   ]
     .filter((l): l is string => Boolean(l))
     .join('\n');
+  // 失败行可原地重试（fetch/pull/push/checkout/init 且 root/关键入参齐全）
+  const retryable = e.ok === false && retryAuditParams(e) !== null;
   const resultCls = e.ok
     ? 'bg-sage-100 text-sage-700 border-sage-200'
     : e.okLabel === '未确认'
@@ -381,6 +394,26 @@ const AuditRow: React.FC<{ e: GitAuditEntry; workspaces?: GitWorkspace[] | null 
         <span className="min-w-0 truncate text-[10px] text-red-500" title={e.error}>
           {e.error}
         </span>
+      )}
+      {/* 失败行「原地重试」：按该条留痕记录的原仓库 root 重跑该 action。
+          多仓库下顶部 fetch/pull/push 只作用于活动工作区，而失败留痕的 root 可能是
+          任意已登记仓库（含非活动）——行内重试按原 root 跑，重试目标无歧义。
+          clone/branch/缺参 → 不渲染（白名单外）；进行中该行显示秒表。 */}
+      {retryable && (
+        <button
+          type="button"
+          onClick={() => onRetry?.(e)}
+          disabled={retrying}
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+          title={retryAuditTitle(e)}
+        >
+          <Icon
+            name={retrying ? I.clock : I.refresh}
+            size={10}
+            className={retrying ? 'animate-spin' : undefined}
+          />
+          {retrying ? '重试中…' : retryAuditLabel(e.action)}
+        </button>
       )}
       <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOfMs(e.at)}</span>
     </div>
@@ -633,6 +666,9 @@ export const GitWorkspaceCard: React.FC = () => {
   // 里 ok===false 的条目），成功操作常把失败淹没 —— 与全局轨迹时间轴「仅失败」开关
   // 同模式：纯前端过滤态，不重拉接口；计数徽标显示当前失败子集 / 可过滤总数。
   const [onlyAuditFailed, setOnlyAuditFailed] = React.useState(false);
+  // 操作留痕「行内重试」进行中的仓库 root：按 root 互斥（同一仓库的失败行只允许
+  // 一条在重试），进行中行显示秒表 + 其余行禁用重试 —— 防连点重复执行同一操作。
+  const [retryingRoot, setRetryingRoot] = React.useState<string | null>(null);
   // 操作留痕过滤派生（与 TrajectoryTimeline 的 failureTotal/rows 同口径）：
   // 计数恒按全量算，过滤只作用展示行 —— 数据源不重拉，接口零新增。
   const auditFailTotal = React.useMemo(() => auditFailureCount(audit), [audit]);
@@ -845,6 +881,29 @@ export const GitWorkspaceCard: React.FC = () => {
       pushToast('error', `${label}失败：${e?.message || e}`);
     } finally {
       setBusyAction(null);
+    }
+  };
+
+  // 操作留痕「行内重试」：按该条留痕记录的原 root 重跑该 action（fetch/pull/push/
+  // checkout/init）。多仓库下顶部按钮只作用于活动工作区，而失败留痕的 root 可能是
+  // 任意已登记仓库（含非活动）——行内重试按原 root 跑，重试目标无歧义。
+  // 复用 operating 全局互斥锁（gitOperate 内置）；retryingRoot 记录本次 root，
+  // 重试进行中该行显示「重试中…」秒表、其余失败行重试按钮禁用（按 root 互斥）。
+  // 成功/失败都联动刷新留痕（本次重试的审计行立即出现；失败原因可回看再试）。
+  const doRetryAudit = async (e: GitAuditEntry) => {
+    const params = retryAuditParams(e);
+    if (!params || operating) return;
+    setRetryingRoot(e.root);
+    const label = e.actionLabel || e.action;
+    try {
+      await useGitStore.getState().gitOperate(params);
+      pushToast('success', `重试${label}成功（${e.root}）`);
+    } catch (err: any) {
+      pushToast('error', `重试${label}失败：${err?.message || err}`);
+    } finally {
+      setRetryingRoot(null);
+      await refreshStatus().catch(() => {});
+      loadAudit().catch(() => {});
     }
   };
 
@@ -1522,7 +1581,9 @@ export const GitWorkspaceCard: React.FC = () => {
           数据源 = 网关 git-workspace-audit.jsonl（写操作自动追加，append-only）。
           目的：写操作不再只有瞬时 toast —— 谁在哪个仓库、哪一刻做了什么 git 操作、
           成败如何，都可在卡片里回看（失败操作尤其要能查）。
-          「仅失败」过滤：成功操作常把失败淹没，勾选后只聚焦失败（排障入口）。 */}
+          「仅失败」过滤：成功操作常把失败淹没，勾选后只聚焦失败（排障入口）。
+          「重试」按钮：失败行按原 root 原地重跑（fetch/pull/push/checkout/init），
+          重试目标 = 该条留痕记录的仓库（多仓库下不依赖活动工作区）。 */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <SectionLabel>操作留痕</SectionLabel>
@@ -1590,7 +1651,13 @@ export const GitWorkspaceCard: React.FC = () => {
         ) : (
           <div className="space-y-1">
             {visibleAudit.map((e, i) => (
-              <AuditRow key={`${e.at ?? 'na'}-${i}`} e={e} workspaces={workspaces} />
+              <AuditRow
+                key={`${e.at ?? 'na'}-${i}`}
+                e={e}
+                workspaces={workspaces}
+                retrying={retryingRoot !== null && retryingRoot === e.root}
+                onRetry={doRetryAudit}
+              />
             ))}
           </div>
         )}
