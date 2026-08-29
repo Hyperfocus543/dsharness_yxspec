@@ -437,8 +437,14 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (!isSafeTargetDir(dir)) {
       return { ok: false, error: 'bad-request', message: 'init 目标目录非法（需绝对路径、非盘符根、不含 ..）' }
     }
-    // 先确保目录存在（git init 在目录内创建 .git；空目录也允许——git init 自身会补）
-    mkdirSync(dir, { recursive: true })
+    // 先确保目录存在（git init 在目录内创建 .git；空目录也允许——git init 自身会补）。
+    // 目标路径被同名文件占用 / 目录不可写时 mkdirSync 抛 EEXIST/EACCES —— 必须兜住，
+    // 否则逃出模块「任何失败返回 ok:false 不抛」的契约，网关全局 catch 会变成裸 500。
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch (e) {
+      return { ok: false, error: 'bad-request', message: `init 目标目录不可用：${String(e?.message ?? e)}` }
+    }
     const g = await runGit(['init'], { cwd: dir })
     recordGitOp({ root: dir, action: 'init', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git init 执行失败' }

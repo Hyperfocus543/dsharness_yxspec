@@ -129,6 +129,18 @@ test('gitOperate init：dir 校验先于 git（非法目录 → bad-request，�
   const missing = await gitOperate({ root: 'D:/Work', action: 'init', args: {} })
   assert.equal(missing.ok, false)
   assert.equal(missing.error, 'bad-request', 'init 缺 dir 应报 bad-request')
+
+  // 目标路径被同名文件占用 → bad-request（mkdirSync 抛 EEXIST 必须兜住，不逃出 ok:false 契约）
+  const occupied = mkdtempSync(join(tmpdir(), 'gw-init-occupied-'))
+  const filePath = join(occupied, 'blocked')
+  writeFileSync(filePath, 'not a dir')
+  try {
+    const r = await gitOperate({ root: 'D:/Work', action: 'init', args: { dir: filePath.replace(/\\/g, '/') } })
+    assert.equal(r.ok, false)
+    assert.equal(r.error, 'bad-request', 'init 目标被文件占用应报 bad-request 而非抛异常')
+  } finally {
+    rmSync(occupied, { recursive: true, force: true })
+  }
 })
 
 test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外），url/dir 校验先于 git', async () => {
