@@ -214,5 +214,42 @@ for (const cmd of [
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
 
+console.log('== 5) 段内命令替换/子 shell 解引用（漏网修复）==')
+// 命令替换（$(…) / `…`）与子 shell（(…)）在子进程真实执行——破坏性 git 藏在
+// 只读 git 调用的命令替换里会整段漏过守卫（外层段首个子命令是只读 status，
+// 旧实现只扫外层一个 git 调用）。须递归解引用后按独立命令判定。
+for (const cmd of [
+  // 只读命令替换 → 解引用后仍只读，放行（不误伤）
+  'git status $(git status)',
+  'git status $(echo hi)',
+  // 破坏性命令替换藏在只读 git 调用后 → 须拒绝（此前整段漏网）
+  'git status $(git push origin main)',
+  'git status `git push`',
+  'git log $(git reset --hard)',
+  'git diff --cached $(git push origin main)',
+  'git -C /repo status $(git push)',
+  // 子 shell 形态
+  'git status (git push origin main)',
+  'git status $(git clean -fd)',
+  'git log `git checkout -f main`',
+]) {
+  const deny = gitGuardDeny(cmd)
+  if (cmd.includes('$(git status)') || cmd.includes('$(echo hi)')) {
+    assert(`放行: ${cmd}`, deny === null, JSON.stringify(deny))
+  } else {
+    assert(`拒绝命令替换: ${cmd}`, deny !== null, JSON.stringify(deny))
+  }
+}
+
+console.log('== 6) 惰性文本引号内命令替换不误伤 ==')
+// 引号包裹区间内的 $(…) 是字面文本（echo 输出），不执行 → 放行
+for (const cmd of [
+  'echo "git status $(git push)"',
+  "echo 'git log `git pull`'",
+  'echo "run (git reset --hard)"',
+]) {
+  assert(`放行惰性文本: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
+}
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 process.exit(fail > 0 ? 1 : 0)

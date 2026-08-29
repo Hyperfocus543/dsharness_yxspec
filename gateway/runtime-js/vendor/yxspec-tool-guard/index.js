@@ -434,15 +434,41 @@ function splitCommandSegments(command) {
   return segs
 }
 
+/** 从段内提取 shell 命令替换/子 shell 的命令文本（`$(…)` / `…` / `(…)`），
+ *  供递归扫描。命令替换（`$(git push)` / `` `git push` ``）在子 shell 里真实执行，
+ *  破坏性 git 命令不能因外层是只读 git 调用就被放过；子 shell `(…)` 同理。
+ *  引号包裹区间的 `$(…)` 是惰性文本（`echo "x $(git push)"` 不执行），不提取——
+ *  引号由 splitCommandSegments 原样留在段文本里，本函数只从非引号区提取。
+ * @param {string} seg 段文本（splitCommandSegments 已把引号区间作为字面内容保留）
+ * @returns {string[]} 要递归扫描的命令文本片段（无 → []）
+ */
+function extractionTexts(seg) {
+  const out = []
+  const re = /\$\(([^)]+)\)|`([^`]+)`|\(([^)]+)\)/g
+  let m
+  while ((m = re.exec(seg))) {
+    const body = m[1] ?? m[2] ?? m[3]
+    // 提取体不能落在引号区间内：引号区间内的 `$(…)`/`(…)` 是文本不执行。
+    const head = seg.slice(0, m.index)
+    if (((head.match(/"/g) || []).length % 2 === 1) || ((head.match(/'/g) || []).length % 2 === 1)) continue
+    if (body && body.trim()) out.push(body)
+  }
+  return out
+}
+
 /** 递归扫描命令文本：shell 执行包装器（sh -c "…" / cmd /c "…" / powershell -Command "…"）
- *  解包后继续扫描（解包内容可能是复合命令/嵌套壳）；普通段直接判 git 子命令。
- *  命中破坏性 git 子命令 → 加入 denied。 */
+ *  解包后继续扫描（解包内容可能是复合命令/嵌套壳）；普通段先按段内命令替换/子 shell
+ *  递归（`git status $(git push)` 的 push 在子 shell 真实执行，不能因外层只读放过），
+ *  再直接判 git 子命令。命中破坏性 git 子命令 → 加入 denied。 */
 function scanGitDeny(text, denied) {
   for (const seg of splitCommandSegments(text)) {
     const unwrapped = unwrapShellExec(seg)
     if (unwrapped) {
       scanGitDeny(unwrapped, denied) // 解包内容按真实命令递归扫描（可含分隔符/嵌套壳）
       continue
+    }
+    for (const inner of extractionTexts(seg)) {
+      scanGitDeny(inner, denied) // 段内命令替换/子 shell：按独立命令递归（破坏性 git 可被检出）
     }
     const sub = gitSubcommandOf(seg)
     if (sub && gitSubUnsafe(sub, seg)) denied.push(sub)
@@ -455,7 +481,10 @@ function gitGuardDeny(command) {
   const denied = [];
   scanGitDeny(command, denied);
   if (denied.length === 0) return null;
-  return `[yxspec-tool-guard] git 命令级拦截：${denied.join('/')} 被禁止。当前工作区受 git 管控，仅允许只读命令（status/diff/log/branch/rev-parse/show/tag -l 等），禁止 push/reset/clean/checkout -f/rm -rf/cherry-pick/rebase/merge/stash drop 等破坏性操作，请改用只读命令`;
+  // 同一破坏性子命令可能同时被外层段与内层命令替换（`$(git push)` 段首形态）扫到，
+  // 去重防文案出现 push/push 重复。
+  const uniq = [...new Set(denied)];
+  return `[yxspec-tool-guard] git 命令级拦截：${uniq.join('/')} 被禁止。当前工作区受 git 管控，仅允许只读命令（status/diff/log/branch/rev-parse/show/tag -l 等），禁止 push/reset/clean/checkout -f/rm -rf/cherry-pick/rebase/merge/stash drop 等破坏性操作，请改用只读命令`;
 }
 
 export const name = 'yxspec-tool-guard';
