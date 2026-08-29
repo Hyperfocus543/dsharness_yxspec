@@ -22,6 +22,7 @@ import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAudit
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
+import { gitWorkspaceName } from '../../utils/gitWorkspaceName';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -282,18 +283,22 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean; root?: str
 
 /** 单条 git 写操作留痕行：结果徽标 + 动作徽标 + 入参/错误 + 相对时间。
  *  成败色标与状态徽标同语义：成功 sage / 失败 red / 未确认 zinc。
- *  root 是操作时记录的仓库根（多工作区下仍展示当时操作的仓库，不随活动切换漂移）。
+ *  root 是操作时记录的仓库根（多工作区下仍展示当时操作的仓库，不随活动切换漂移）；
+ *  展示用可读名（gitWorkspaceName：优先注册表 name，其次根末段目录名），
+ *  完整 root 路径放 tooltip —— 操作行与工作区列表同口径，多仓库下一眼对应。
  *  结果摘要 chip（新网关审计行附带）：pull 的文件改动统计 +N/-M、fetch 的落后
  *  提交摘要（拉到 N 个新提交）—— 让「那次操作到底拉回了什么」在留痕里可回看，
  *  不再只有瞬时 toast；老审计行无此字段 → 不渲染（静默降级，不占行宽）。 */
-const AuditRow: React.FC<{ e: GitAuditEntry }> = ({ e }) => {
+const AuditRow: React.FC<{ e: GitAuditEntry; workspaces?: GitWorkspace[] | null }> = ({ e, workspaces = null }) => {
   const argsText = auditArgsText(e.args);
   // pull 文件改动统计（老行/无净改动 → null，不渲染 chip）
   const stats = e.stats ?? null;
   // fetch 落后提交摘要（老行/无上游 → null，不渲染 chip）
   const behind = e.behind ?? null;
+  // root 可读名（优先注册表 name → 根末段目录名）；完整 root 放 tooltip
+  const rootName = gitWorkspaceName(e.root, workspaces);
   const title = [
-    e.root ? `仓库：${e.root}` : null,
+    e.root ? `仓库：${e.root}（${rootName}）` : null,
     argsText ? `入参：${argsText}` : null,
     stats ? `改动统计：${stats.files} 文件 +${stats.added}/-${stats.removed}` : null,
     behind
@@ -322,6 +327,17 @@ const AuditRow: React.FC<{ e: GitAuditEntry }> = ({ e }) => {
       <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono" title={e.action}>
         {e.actionLabel}
       </span>
+      {/* 操作目标仓库：可读名（优先注册表 name → 根末段目录名），完整 root 在 tooltip。
+          操作行与工作区列表同口径，多仓库下一眼对应「那次操作发生在哪个仓库」。 */}
+      {e.root && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-100/60 text-zinc-600 border border-zinc-200 text-[10px] font-mono truncate max-w-[140px]"
+          title={e.root}
+        >
+          <Icon name={I.branch} size={10} className="shrink-0" />
+          {rootName}
+        </span>
+      )}
       {/* pull 文件改动统计（+N/-M，与 toast 同口径；老审计行无字段 → 不渲染） */}
       {stats && (
         <span
@@ -1182,7 +1198,7 @@ export const GitWorkspaceCard: React.FC = () => {
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-50 text-emerald-700 font-mono border border-emerald-200/70 truncate max-w-56" title={activeWorkspace.root}>
-              {activeWorkspace.name}
+              {gitWorkspaceName(activeWorkspace.root, workspaces)}
             </span>
             <span className="text-[10px] text-zinc-400 truncate max-w-48" title={activeWorkspace.root}>
               {activeWorkspace.root}
@@ -1574,7 +1590,7 @@ export const GitWorkspaceCard: React.FC = () => {
         ) : (
           <div className="space-y-1">
             {visibleAudit.map((e, i) => (
-              <AuditRow key={`${e.at ?? 'na'}-${i}`} e={e} />
+              <AuditRow key={`${e.at ?? 'na'}-${i}`} e={e} workspaces={workspaces} />
             ))}
           </div>
         )}
