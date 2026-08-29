@@ -414,11 +414,14 @@ export const GitWorkspaceCard: React.FC = () => {
 
   // 活动工作区切换 → 分支缓存属于旧 root：清空并收起分支面板，
   // 否则在 A 展开过的分支列表会在切到 B 后原样展示，选中 checkout 会串根执行到 B。
+  // push 二次确认面板同理：在 A 打开过会原地重渲染成 B 的 root，回车确认会静默
+  // 推送到 B——切 root 即一并收起，新仓库重新走确认流程。
   React.useEffect(() => {
     setBranches([]);
     setBranchPanelOpen(false);
     setBranchValue('');
     setBranchError(null);
+    setPushConfirmOpen(false);
   }, [activeWorkspace?.id]);
 
   // 工作区校验（前端只做空串拦截，路径存在性由网关校验）
