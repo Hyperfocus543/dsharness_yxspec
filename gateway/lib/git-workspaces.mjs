@@ -31,7 +31,7 @@
 //     根、不含 ..），init 用前先 mkdirSync 确保目录存在，成功后自动 addWorkspace 登记。
 // =============================================================================
 import { execFile } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveGitRoot } from './git.mjs'
@@ -88,6 +88,32 @@ function isWindowsAbsolute(p) {
  *  故 `[\\/]+` 匹配任意连续分隔符序列，而非单个。 */
 function isWindowsDriveRoot(p) {
   return /^[A-Za-z]:[\\/]+$/.test(p)
+}
+
+/** 剥离路径尾部分隔符（`D:/Work/x/` → `D:/Work/x`；不含分隔符则原样返回）。
+ *  git rev-parse --show-toplevel 输出的真根恒无尾分隔符，而请求方传入的目标目录
+ *  （args.dir）可能带尾斜杠——clone/init 返回的 root 必须与登记后的真实根逐字一致，
+ *  否则前端按 root 精确匹配激活新仓库会落空（详见 clone/init 分支注释）。 */
+function stripTrailingSep(p) {
+  return String(p ?? '').replace(/[\\/]+$/, '')
+}
+
+/** 判断 dir 目录是否已存在且非空。非空目录 git clone 会 fatal
+ *  （"already exists and is not an empty directory"），在 mkdirSync 预创建后转
+ *  确定性 bad-request，避免把 git 的 raw fatal 直接抛给前端。
+ *  @returns {{ exists: boolean, nonEmpty: boolean }} */
+function targetDirState(dir) {
+  try {
+    const st = statSync(dir)
+    if (!st.isDirectory()) return { exists: true, nonEmpty: true }
+    let n = 0
+    for (const _ of readdirSync(dir)) {
+      if (++n > 0) break
+    }
+    return { exists: true, nonEmpty: n > 0 }
+  } catch {
+    return { exists: false, nonEmpty: false }
+  }
 }
 
 /**
@@ -463,12 +489,23 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     } catch (e) {
       return { ok: false, error: 'bad-request', message: `clone 目标目录不可用：${String(e?.message ?? e)}` }
     }
+    // 非空目标目录 git clone 必 fatal（"destination path already exists and is not
+    // an empty directory"）——mkdirSync 预创建后必然命中（预创建的是空目录，非空只能
+    // 是用户输入本就指向已含内容的目录），在 git 调用前转确定性 bad-request，
+    // 不把 git 的 raw fatal 当「git clone 执行失败」抛给前端。
+    if (targetDirState(dir).nonEmpty) {
+      return { ok: false, error: 'bad-request', message: 'clone 目标目录已存在且非空（git 无法克隆到非空目录），请更换目标目录' }
+    }
     const g = await runGit(['clone', url, dir], { cwd: dir })
     recordGitOp({ root: dir, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git clone 执行失败' }
     // clone 成功后自动登记新仓库进工作区列表
     const added = await addWorkspace({ root: dir })
-    return { ok: true, root: dir, cloneDir: dir, registered: added.ok ? added.workspace ?? added.already : false }
+    // 返回的 root/cloneDir 归一为真根（git rev-parse 输出）——与登记条 root 逐字一致，
+    // 否则 dir 带尾分隔符（`D:/x/`）时前端 pickWorkspaceToActivate 按 root 精确匹配
+    // 新仓库会落空（登记条无尾分隔符），激活失败停在旧默认工作区。
+    const realCloneRoot = added.ok ? added.workspace?.root ?? stripTrailingSep(dir) : stripTrailingSep(dir)
+    return { ok: true, root: realCloneRoot, cloneDir: realCloneRoot, registered: added.ok ? added.workspace ?? added.already : false }
   }
   // 3b) init 特有校验（dir 目标目录），init 的 root 只是「目标父目录」锚点。
   //     语义同 clone：本地在空目录里 git init 建新仓库 → 自动登记进工作区列表。
@@ -490,7 +527,10 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (!g.ok) return { ok: false, error: g.error, message: 'git init 执行失败' }
     // init 后即 git 仓库 → 自动登记进工作区列表（verifyGitRepo 通过）
     const added = await addWorkspace({ root: dir })
-    return { ok: true, root: dir, initDir: dir, registered: added.ok ? added.workspace ?? added.already : false }
+    // 返回的 root/initDir 归一为真根（git rev-parse 输出）——与登记条 root 逐字一致，
+    // 否则 dir 带尾分隔符时前端按 root 精确匹配激活新仓库会落空（同 clone 分支）。
+    const realInitRoot = added.ok ? added.workspace?.root ?? stripTrailingSep(dir) : stripTrailingSep(dir)
+    return { ok: true, root: realInitRoot, initDir: realInitRoot, registered: added.ok ? added.workspace ?? added.already : false }
   }
   // 4) checkout 特有校验（branch 非空、无空格、必须是可解析的 git 引用）
   if (action === 'checkout') {
