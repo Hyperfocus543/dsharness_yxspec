@@ -479,11 +479,19 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     const added = await addWorkspace({ root: dir })
     return { ok: true, root: dir, initDir: dir, registered: added.ok ? added.workspace ?? added.already : false }
   }
-  // 4) checkout 特有校验（branch 非空、无空格）
+  // 4) checkout 特有校验（branch 非空、无空格、必须是可解析的 git 引用）
   if (action === 'checkout') {
     const branch = typeof args.branch === 'string' ? args.branch.trim() : ''
     if (!branch) return { ok: false, error: 'bad-request', message: 'checkout 需提供 branch' }
     if (/\s/.test(branch)) return { ok: false, error: 'bad-request', message: 'branch 不能含空格' }
+    // branch 必须是可解析的 git 引用（分支/tag/commit hash）——否则 `git checkout <branch>`
+    // 会按 pathspec 回退：`.`,/目录名（`git checkout .` 实测丢弃工作区改动）、glob 等
+    // 名字能匹配文件路径就会走「还原路径」分支，破坏性覆盖未提交改动。
+    // `git rev-parse --verify <branch>^{commit}` 只认引用解析，路径名一律失败 → 拒绝。
+    const chk = await runGit(['rev-parse', '--verify', `${branch}^{commit}`], { cwd: realRoot })
+    if (!chk.ok) {
+      return { ok: false, error: 'bad-request', message: `checkout 的 branch 不是有效的分支/引用：${branch}` }
+    }
     const g = await runGit(['checkout', branch], { cwd: realRoot })
     recordGitOp({ root: realRoot, action: 'checkout', args: { branch }, ok: g.ok, stdout: g.stdout, error: g.error })
     if (!g.ok) return { ok: false, error: g.error, message: 'git checkout 执行失败' }

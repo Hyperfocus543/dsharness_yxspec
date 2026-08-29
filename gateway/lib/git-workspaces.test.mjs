@@ -175,6 +175,38 @@ test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外�
   assert.equal(badDir.error, 'bad-request', 'clone dir 相对路径应报 bad-request')
 })
 
+test('gitOperate checkout：branch 必须是可解析的 git 引用（. / 目录名 / glob → bad-request）', async () => {
+  // 回归：旧实现只查「非空 + 无空格」，`git checkout .`（或目录名/glob 等 pathspec）
+  // 会走「还原路径」分支，破坏性丢弃工作区未提交改动（实测 `git checkout .` 还原）。
+  // 修复：branch 先用 `git rev-parse --verify <branch>^{commit}` 解析，非引用 → 拒绝。
+  // 本测试跑在当前 git 仓库（branch 只读列表走默认根 = 本仓库），路径名/`.` 应全被拒。
+  const root = process.cwd().replace(/\\/g, '/')
+
+  // pathspec 形态：`.`（整树还原）、目录名、glob —— 均非有效引用 → bad-request
+  for (const b of ['.', 'src', '*.js', '..']) {
+    const r = await gitOperate({ root, action: 'checkout', args: { branch: b } })
+    assert.equal(r.ok, false, `checkout branch=${JSON.stringify(b)} 应拒绝`)
+    assert.equal(r.error, 'bad-request', `checkout branch=${JSON.stringify(b)} 应为 bad-request`)
+  }
+
+  // 空 / 含空格 → bad-request（既有校验不变）
+  const empty = await gitOperate({ root, action: 'checkout', args: {} })
+  assert.equal(empty.ok, false)
+  assert.equal(empty.error, 'bad-request')
+  const spaced = await gitOperate({ root, action: 'checkout', args: { branch: 'feat x' } })
+  assert.equal(spaced.ok, false)
+  assert.equal(spaced.error, 'bad-request')
+
+  // 合法引用（当前分支）→ 通过校验并执行成功（分支列表只读，不出意外）
+  const cur = await gitOperate({ root, action: 'branch' })
+  assert.equal(cur.ok, true, 'branch 只读列表应成功')
+  const curBranch = (cur.branches ?? []).find((b) => b !== '(HEAD detached)') ?? null
+  if (curBranch) {
+    const ok = await gitOperate({ root, action: 'checkout', args: { branch: curBranch } })
+    assert.equal(ok.ok, true, `checkout 当前分支 ${curBranch} 应成功`)
+  }
+})
+
 test('parseNumstat：加删行 + 文件数', () => {
   assert.deepEqual(parseNumstat('1\t2\tREADME.md\n10\t0\tlib/a.mjs\n'), { files: 2, added: 11, removed: 2 })
 })
