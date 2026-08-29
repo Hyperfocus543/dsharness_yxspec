@@ -1202,16 +1202,16 @@ export const GitWorkspaceCard: React.FC = () => {
                   className="text-xs border border-zinc-300 rounded-md pl-6 pr-1.5 py-0.5 bg-white text-zinc-600"
                   value={branchValue}
                   onChange={async (e) => {
-                    setBranchValue(e.target.value);
+                    // 打开分支面板：状态切到已展开、异步拉分支；value 保持空——
+                    // `__open__` 不是真实分支，不能写进 branchValue（否则 select 的
+                    // value 指向这把死值：分支加载后无匹配 option → 下拉框空白、
+                    // 0 分支时停在「重新打开」上，都回不到「选择分支…」占位）。
                     if (e.target.value === '__open__') {
-                      // 打开分支面板：状态切到已展开、异步拉分支；value 保持空
-                      // （`__open__` 不是真实选项，若塞进去 select 会永远停在这把
-                      // 死值上、无法再开面板——见下）。分支加载完成后再由末尾
-                      // 的「重新打开」兜底复位，保证下次点下拉还能再进面板。
                       setBranchPanelOpen(true);
                       await loadBranches().catch(() => {});
                       return;
                     }
+                    setBranchValue(e.target.value);
                     if (e.target.value) await doCheckout(e.target.value);
                   }}
                   disabled={operating || branchLoading}
