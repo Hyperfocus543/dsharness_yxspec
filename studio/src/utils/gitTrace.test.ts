@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { gitTraceBase, gitTraceBySeq, recentCommitDiffs } from './gitTrace';
+import { gitTraceBase, gitTraceBySeq, recentCommitDiffs, traceAtTime } from './gitTrace';
 import type { GitRecentCommit, GitStageTrace } from './ipc';
 
 function trace(partial: Partial<GitStageTrace>): GitStageTrace {
@@ -81,6 +81,46 @@ describe('gitTraceBySeq（seq → 留痕索引）', () => {
   it('null / 空 → 空 Map（行内不渲染 git 徽标）', () => {
     expect(gitTraceBySeq(null).size).toBe(0);
     expect(gitTraceBySeq([]).size).toBe(0);
+  });
+});
+
+describe('traceAtTime（自迭代轮次 ↔ 阶段执行检查点对齐）', () => {
+  const t1 = trace({ seq: 1, commit: 'aaa1111', startedAt: '2026-08-29T01:00:00.000Z' });
+  const t2 = trace({ seq: 2, commit: 'bbb2222', startedAt: '2026-08-29T02:00:00.000Z' });
+  const t3 = trace({ seq: 3, commit: 'ccc3333', startedAt: '2026-08-29T03:00:00.000Z' });
+
+  it('空 / null / 无时间 → null（不渲染 git 徽标）', () => {
+    expect(traceAtTime(null, '2026-08-29T01:30:00.000Z')).toBeNull();
+    expect(traceAtTime([], '2026-08-29T01:30:00.000Z')).toBeNull();
+    expect(traceAtTime([t1, t2], null)).toBeNull();
+    expect(traceAtTime([t1, t2], '')).toBeNull();
+    expect(traceAtTime([t1, t2], 'bad-date')).toBeNull();
+  });
+
+  it('取 startedAt ≤ at 的最近一次执行（不晚于打分的最后检查点）', () => {
+    expect(traceAtTime([t1, t2, t3], '2026-08-29T01:30:00.000Z')).toBe(t1);
+    expect(traceAtTime([t1, t2, t3], '2026-08-29T02:59:00.000Z')).toBe(t2);
+    expect(traceAtTime([t1, t2, t3], '2026-08-29T03:00:00.000Z')).toBe(t3);
+  });
+
+  it('at 早于所有执行 / 晚于全部执行 → 最近边界检查点', () => {
+    expect(traceAtTime([t2, t3], '2026-08-29T00:00:00.000Z')).toBeNull(); // 早于全部 → 无检查点
+    expect(traceAtTime([t1, t2], '2026-08-29T10:00:00.000Z')).toBe(t2); // 晚于全部 → 最新
+  });
+
+  it('同时刻多次执行 → 取较新 seq（打分通常对齐最后一次）', () => {
+    const a = trace({ seq: 1, commit: 'aaa1111', startedAt: '2026-08-29T01:00:00.000Z' });
+    const b = trace({ seq: 2, commit: 'bbb2222', startedAt: '2026-08-29T01:00:00.000Z' });
+    expect(traceAtTime([a, b], '2026-08-29T01:30:00.000Z')).toBe(b);
+  });
+
+  it('乱序输入也取最近检查点（不依赖数组顺序）', () => {
+    expect(traceAtTime([t3, t1, t2], '2026-08-29T02:30:00.000Z')).toBe(t2);
+  });
+
+  it('无 startedAt 的记录跳过（不阻塞检查点查找）', () => {
+    const noStart = trace({ seq: 0, commit: 'zzz0000', startedAt: null });
+    expect(traceAtTime([noStart, t1], '2026-08-29T01:30:00.000Z')).toBe(t1);
   });
 });
 

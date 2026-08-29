@@ -6,19 +6,25 @@
 //   · 顶部：当前 run 摘要（阶段/轮次/基线/目标/收敛状态）+ 刷新
 //   · 轮次瀑布：每阶段一条评分线（总分 + 等级 + 弱项 + 门禁），带 verdict 判定
 //     （continue 琥珀 / converge 绿 / degrade 红），score 与 round 分色标识
+//   · 评分 × git 检查点：每轮评分行对齐该评分时刻的阶段执行 commit + tag
+//     （/api/git/commits 同数据源，纯前端 traceAtTime 派生），hover 预览相对
+//     上一阶段执行的改动 —— 自迭代分数落在哪个代码检查点上一目了然
 //   · 空态：从未跑过自迭代 → 「尚未执行自迭代」提示（不阻塞驾驶舱）
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
 import React from 'react';
-import { EmptyState, Icon, SectionLabel } from '../ui';
+import { EmptyState, GitDiffPreview, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import {
   fetchSelfIteration,
+  getGitCommits,
+  type GitStageTrace,
   type SelfIterationOverview,
   type SelfIterationRound,
   type SelfIterationStage,
 } from '../../utils/ipc';
+import { gitTraceBase, traceAtTime } from '../../utils/gitTrace';
 import {
   summarizeStages,
   convergedCount,
@@ -175,11 +181,65 @@ function relTimeOf(ts: string | null | undefined): string {
   return `${Math.floor(diffH / 24)} 天前`;
 }
 
-/** 单条轮次留痕行：round + 类型（评分/判定）+ 总分 + 等级 + 弱项 + verdict */
-const RoundRow: React.FC<{ r: SelfIterationRound }> = ({ r }) => {
-  const v = verdictStyle(r.verdict);
+/** commit hash 缩写：保留前 8 位，其余折叠 */
+function shortHash(h: string | null | undefined): string {
+  if (!h) return '—';
+  return h.length > 12 ? `${h.slice(0, 8)}…${h.slice(-4)}` : h;
+}
+
+/** 评分 × git 检查点：该轮评分时刻的阶段执行 commit + tag（纯前端 traceAtTime 派生）。
+ *  数据源 = SelfIterationCard 已拉取的 getGitCommits(stage)（与 Git 工作区管控卡 /
+ *  轨迹瀑布同数据源，零新接口）；git 不可用/无留痕/无 commit → 不渲染（静默降级）。
+ *  hover commit 徽标 → 共享 GitDiffPreview：展示该 commit 相对上一阶段执行的改动，
+ *  与轨迹瀑布 commit 徽标同交互（至多一个浮层）。 */
+const StageTraceBadge: React.FC<{
+  trace: GitStageTrace | null;
+  /** diff 基线：比该检查点更早的最近一次执行 commit（无 → null，降级提示） */
+  base: string | null;
+  open: boolean;
+  onHover: (open: boolean) => void;
+}> = ({ trace, base, open, onHover }) => {
+  if (!trace?.commit) return null;
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
+    <>
+      <span
+        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px] hover:bg-emerald-50 hover:text-emerald-700 transition-all cursor-help"
+        title={[
+          `该轮评分时刻最新 commit：${trace.commitFull ?? trace.commit}`,
+          trace.subject ? `提交说明：${trace.subject}` : '（无提交说明）',
+          '悬停查看相对上一阶段执行的改动',
+        ].join('\n')}
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
+      >
+        {shortHash(trace.commit)}
+      </span>
+      {trace.tag && (
+        <span
+          className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+          title={`该轮评分时刻的 commit 打上了 tag：${trace.tag}`}
+        >
+          {trace.tag}
+        </span>
+      )}
+      <GitDiffPreview base={base} target={trace.commit || null} open={open} />
+    </>
+  );
+};
+
+/** 单条轮次留痕行：round + 类型（评分/判定）+ 总分 + 等级 + 弱项 + verdict + git 检查点 */
+const RoundRow: React.FC<{
+  r: SelfIterationRound;
+  /** 该轮评分时刻的阶段执行检查点（无 → null，不渲染 git 徽标） */
+  trace?: GitStageTrace | null;
+  /** diff 基线：比该检查点更早的最近一次执行 commit（无 → null，GitDiffPreview 首条降级提示） */
+  traceBase?: string | null;
+}> = ({ r, trace = null, traceBase = null }) => {
+  const v = verdictStyle(r.verdict);
+  // 评分 × git：hover 展开该 commit 相对上一阶段执行的改动（至多一个浮层，与轨迹瀑布同交互）
+  const [gitOpen, setGitOpen] = React.useState(false);
+  return (
+    <div className="relative flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group">
       <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500 font-mono" title={`第 ${r.round} 轮`}>
         R{r.round}
       </span>
@@ -216,6 +276,8 @@ const RoundRow: React.FC<{ r: SelfIterationRound }> = ({ r }) => {
         </span>
       )}
       <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOf(r.at)}</span>
+      {/* 评分 × git：该轮评分时刻的 commit + tag（hover 看相对上一阶段执行的改动） */}
+      <StageTraceBadge trace={trace} base={traceBase} open={gitOpen} onHover={setGitOpen} />
     </div>
   );
 };
@@ -251,8 +313,38 @@ const StageRunBadge: React.FC<{ s: StageRunSummary }> = ({ s }) => {
   );
 };
 
-/** 单阶段评分线：阶段名 + 最近状态 + 轮次瀑布（新→旧 或 全部） */
+/** 单阶段评分线：阶段名 + 最近状态 + 轮次瀑布（新→旧 或 全部）。
+ *  评分 × git 检查点：mount 时并行拉取该阶段 git 留痕（/api/git/commits，与
+ *  Git 工作区管控卡 / 轨迹瀑布同数据源），每轮评分行对齐其评分时刻的 commit + tag；
+ *  失败静默降级（不渲染 git 徽标，不阻塞评分瀑布）。 */
 const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
+  // 该阶段 git 留痕（阶段↔commit↔tag；git 不可用/无留痕 → null，行内不渲染）
+  const [gitTraces, setGitTraces] = React.useState<GitStageTrace[] | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    setGitTraces(null); // 切阶段（key 变化重挂）时清空，避免旧阶段留痕错位
+    getGitCommits(s.token)
+      .then((traces) => {
+        if (!cancelled && traces) setGitTraces(traces);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [s.token]);
+
+  // 每轮评分 → 对齐的阶段执行检查点 + diff 基线（纯前端派生；无 → null 不渲染）。
+  // base = 比该检查点更早的最近一次执行 commit（gitTraceBase 同口径：相邻执行 = 一个 diff 单元）。
+  const traceByRound = React.useMemo(() => {
+    const m = new Map<number, { trace: GitStageTrace | null; base: string | null }>();
+    if (!gitTraces || gitTraces.length === 0) return m;
+    for (const r of s.rounds) {
+      const trace = traceAtTime(gitTraces, r.at);
+      m.set(r.round, { trace, base: trace ? gitTraceBase(gitTraces, trace.seq) : null });
+    }
+    return m;
+  }, [gitTraces, s.rounds]);
+
   // 轮次留痕时间升序，展示新→旧（最近一次判定在最上）
   const rows = [...s.rounds].reverse();
   return (
@@ -273,9 +365,17 @@ const StageBlock: React.FC<{ s: SelfIterationStage }> = ({ s }) => {
       {/* 评分趋势（≥2 轮有分值才渲染）：一眼看清自迭代分数走向 */}
       <ScoreTrend s={s} />
       <div className="space-y-1">
-        {rows.map((r, i) => (
-          <RoundRow key={`${r.round}-${r.type}-${i}`} r={r} />
-        ))}
+        {rows.map((r, i) => {
+          const g = traceByRound.get(r.round);
+          return (
+            <RoundRow
+              key={`${r.round}-${r.type}-${i}`}
+              r={r}
+              trace={g?.trace ?? null}
+              traceBase={g?.base ?? null}
+            />
+          );
+        })}
       </div>
     </div>
   );

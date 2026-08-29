@@ -35,6 +35,34 @@ export function gitTraceBySeq(
   return m;
 }
 
+/**
+ * 某时间点对应的阶段执行检查点：取 startedAt ≤ at 的最近一次执行留痕
+ * （同时刻取较新 seq；无留痕 / at 缺失或非法 → null）。
+ * 语义：自迭代轮次打分发生在某次执行之后，其评分对应的 git 快照 =
+ * 最近一次已开始执行时的 commit（与网关 getStageRecords 同口径：
+ * commit = 执行 startedAt 时刻的最新提交）。
+ */
+export function traceAtTime(
+  traces: GitStageTrace[] | null | undefined,
+  atISO: string | null | undefined,
+): GitStageTrace | null {
+  if (!traces || traces.length === 0 || !atISO) return null;
+  const t = new Date(atISO).getTime();
+  if (!Number.isFinite(t)) return null;
+  let best: GitStageTrace | null = null;
+  let bestStart = -Infinity;
+  for (const tr of traces) {
+    if (!tr.startedAt) continue;
+    const st = new Date(tr.startedAt).getTime();
+    if (!Number.isFinite(st) || st > t) continue;
+    if (st < bestStart) continue;
+    if (st === bestStart && best && tr.seq < best.seq) continue; // 同时刻取较新执行
+    best = tr;
+    bestStart = st;
+  }
+  return best;
+}
+
 /** 最近提交 diff 对：相邻两条提交组成一个 diff 单元（旧 commit 为 base，新 commit 为 target）。
  *  数据源 = GitStatus.recentCommits（网关按时间倒序 新→旧；空 → []）。
  *  与阶段留痕 diff 同口径（gitTraceBase 的"相邻留痕 = 一个 diff 单元"），
