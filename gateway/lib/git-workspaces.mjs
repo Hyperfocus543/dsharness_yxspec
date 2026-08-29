@@ -908,10 +908,13 @@ export async function gitOperate({ root, action, args = {} } = {}) {
  */
 export function isSafeGitUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return false
+  // 换行/回车在任何位置都拒绝——trim() 会吞掉首尾的 \r\n，若只在 trim 后检查则
+  // `https://x/y\r\n` 这类带尾换行的 url 会漏网（净化为干净 url 前必须见真身）。
+  if (/[\r\n]/.test(url)) return false
   const u = url.trim()
   if (u.length > 2000) return false
   if (!/^(https:\/\/|git@|ssh:\/\/)/.test(u)) return false
-  if (/[|;`$&<>"'\s\r\n]/.test(u)) return false
+  if (/[|;`$&<>"'\s]/.test(u)) return false
   return true
 }
 

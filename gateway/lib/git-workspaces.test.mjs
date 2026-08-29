@@ -53,6 +53,10 @@ test('isSafeGitUrl：file://、- 开头、shell 元字符、含空格 → 拒绝
     'http://insecure.example.com/x', // 非 https
     'ftp://example.com/x',
     'ssh:notslashed',
+    'https://github.com/x\r\n', // 尾换行/回车（trim 吞尾后检查会漏网，先见真身再净化）
+    'https://github.com/x\n',
+    'git@github.com:org/repo\r',
+    'https://github.com/\nby',
     '', // 空
     null,
     undefined,
