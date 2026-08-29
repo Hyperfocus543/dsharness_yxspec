@@ -1105,7 +1105,15 @@ export const GitWorkspaceCard: React.FC = () => {
                       {branchTotal === 0 && <option value="__open__">重新打开</option>}
                     </>
                   ) : (
-                    <option value="__open__">切换分支</option>
+                    <>
+                      {/* 收起态常显当前分支：select value=branchValue 恒命中该 option 文本
+                          （含 checkout 后 branchValue=真实分支名、初始 '' 两态），
+                          避免 value 无匹配 option 时下拉显示空白；点「切换分支」打开面板。 */}
+                      <option value={branchValue} disabled hidden>
+                        {status.branch || '切换分支'}
+                      </option>
+                      <option value="__open__">切换分支</option>
+                    </>
                   )}
                 </select>
               </div>
