@@ -151,6 +151,24 @@ for (const cmd of [
   'powershell -WindowStyle "Hidden X" -c "git clean -fd"',
   'pwsh -ExecutionPolicy "Bypass All" -Command "git branch -D feature"',
   'powershell -NoProfile -ExecutionPolicy "Bypass All" -c "git checkout -f main"',
+  // 2026-08-29 追加：命令串后带尾随实参仍须解引用拒绝——`bash -c "git reset --hard" extra`
+  // 的尾随实参是位置参数（$0/$1），不影响命令执行；此前 commandAfter 要求引号命令串
+  // 须为末位，尾随实参被当作「不剥」依据，破坏性 git 整段漏过守卫（实测漏网）。
+  // 只读命令 + 尾随实参（`bash -c "git status" extra`）解包后仍只读 → 放行（见 §4）。
+  'bash -c "git reset --hard" extra',
+  'sh -c "git clean -fd" foo',
+  'bash -euxo pipefail -c "git push origin main" extra',
+  'powershell -c "git push origin main" extra',
+  'pwsh -Command "git reset --hard" more',
+  'cmd /c "git clean -fd" extra',
+  // 2026-08-29 追加：cmd/ps 隐式命令串（非 -c/-Command 直连）带尾随实参仍须解引用——
+  // `powershell -NoProfile "git reset --hard" extra` 的引号串是隐式执行命令，尾随实参
+  // 是 %*/args 不影响命令内容；此前 flag 值跳过逻辑把它当 `-NoProfile` 的值吞掉，
+  // 破坏性 git 整段漏过守卫（实测漏网）。
+  'powershell -NoProfile "git reset --hard" extra',
+  'powershell -NoProfile "git clean -fd" more',
+  'cmd /q "git reset --hard" more',
+  'cmd /q "git clean -fd" extra',
 ]) {
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -186,6 +204,12 @@ for (const cmd of [
   'bash --rcfile "my rc file" -c "git log --oneline -5"',
   'powershell -ExecutionPolicy "Bypass All" -Command "git status"',
   'powershell -WindowStyle "Hidden X" -c "git diff --stat"',
+  // 2026-08-29 追加：命令串带尾随实参的只读 wrapper 解包后仍只读 → 放行（不误伤）。
+  // 回归：修复「尾随实参不剥」时不能把只读命令 + 尾随实参误判为破坏性。
+  'bash -c "git status" extra',
+  'bash -c "git log -1" x y',
+  'powershell -NoProfile "git status" extra',
+  'cmd /q "git status" extra',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }

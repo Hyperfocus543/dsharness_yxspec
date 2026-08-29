@@ -286,17 +286,22 @@ function unwrapShellExec(segment) {
   const psFamily = /^(?:powershell|pwsh)(?:\.exe)?$/.test(exe)
   if (!shFamily && !cmdFamily && !psFamily) return null
 
-  // 命令 flag 后的引号串须为末位（后带参数 → 变量影响命令内容，保守不剥）
+  // 命令 flag 后的引号串（须非空）即被执行的命令。不必要求是末位：
+  // sh 的 -c 尾随实参是位置参数（$0/$1），cmd/ps 的尾随实参是 %* / args，
+  // 均只影响进程内变量、不影响命令内容 —— `bash -c "git reset --hard" extra`
+  // 仍会执行 reset，尾随实参若被当作「不剥」依据，破坏性 git 整段漏过守卫
+  // （实测漏网）。解包内容由守卫侧递归 splitCommandSegments + gitSubUnsafe 扫描，
+  // 只读命令 + 尾随实参（`bash -c "git status" extra`）解包后为只读 → 放行不误伤。
   const commandAfter = (i) => {
     const cmd = rest[i + 1]
-    if (!cmd || !cmd.quoted || i + 2 !== rest.length) return null
+    if (!cmd || !cmd.quoted) return null
     const text = cmd.text.trim()
     return text === '' ? null : text
   }
 
   for (let i = 0; i < rest.length; i++) {
     const t = rest[i]
-    // 命令 flag → 其后引号串即被执行的命令
+    // 命令 flag → 其后引号串即被执行的命令（尾随实参忽略，理由见 commandAfter）
     if ((shFamily && isShCmd(t)) || (cmdFamily && isCmdCmd(t)) || (psFamily && isPsCmd(t))) {
       return commandAfter(i)
     }
@@ -305,12 +310,21 @@ function unwrapShellExec(segment) {
     if (isFlag(t) || (cmdFamily && isCmdSwitch(t))) {
       if ((shFamily || psFamily) && i + 1 < rest.length) {
         const next = rest[i + 1]
-        if (!next.text.startsWith('-') && i + 1 !== rest.length - 1) i++
+        if (!next.text.startsWith('-') && i + 1 !== rest.length - 1) {
+          // 引号 token 后随「非 flag token」时不能当 flag 值跳过——它可能是隐式命令串
+          // 且带尾随实参（`powershell -NoProfile "git reset --hard" extra`），当值跳过
+          // 会让破坏性 git 整段漏过守卫（实测漏网）。引号值后随 flag token（如
+          // `-ExecutionPolicy "Bypass All" -Command …`）才是确定的值，可跳过。
+          const nxtNxt = rest[i + 2]
+          const quotedMaybeCommand = next.quoted && nxtNxt && !nxtNxt.text.startsWith('-')
+          if (!quotedMaybeCommand) i++
+        }
       }
       continue
     }
-    // 非 flag token：cmd/ps 的末位引号串按隐式命令剥；sh 无隐式，不剥
-    if ((cmdFamily || psFamily) && t.quoted && i === rest.length - 1) {
+    // 非 flag token：cmd/ps 的引号串按隐式命令剥（尾随实参是 %*/args，只影响
+    // 变量不影响命令内容，故不要求末位）；sh 无隐式，不剥
+    if ((cmdFamily || psFamily) && t.quoted) {
       const text = t.text.trim()
       return text === '' ? null : text
     }
