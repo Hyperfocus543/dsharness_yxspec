@@ -9,7 +9,7 @@
 
 import { create } from 'zustand';
 import * as ipc from '../utils/ipc';
-import type { GitStatus, GitStageTrace, GitWorkspace } from '../utils/ipc';
+import type { GitAuditEntry, GitStatus, GitStageTrace, GitWorkspace } from '../utils/ipc';
 import { useToastStore } from './toastStore';
 
 /** clone/init 完成后要激活的工作区：优先精确匹配新 root，其次服务端 activeId（若有），
@@ -65,6 +65,14 @@ interface GitStore {
   loadCommits: (stage: string) => Promise<void>;
   /** 记录回滚留档（POST /api/git/rollback）；成功 push toast，失败抛错由调用方处理 */
   rollback: (params: ipc.GitRollbackParams) => Promise<boolean>;
+  /** git 写操作审计留痕（GET /api/git/audit；时间倒序）。初始 null = 未加载 */
+  audit: GitAuditEntry[] | null;
+  /** audit 是否在加载中 */
+  auditLoading: boolean;
+  /** audit 加载失败（老网关无端点/网关未起）时置 true */
+  auditError: boolean;
+  /** 拉取写操作审计留痕（写操作完成后联动刷新，让新留痕立即可见） */
+  loadAudit: () => Promise<void>;
 }
 
 export const useGitStore = create<GitStore>((set, get) => ({
@@ -224,6 +232,26 @@ export const useGitStore = create<GitStore>((set, get) => ({
     } catch (e: any) {
       useToastStore.getState().push('error', `回滚留档失败：${e?.message || e}`);
       throw e;
+    }
+  },
+
+  audit: null,
+  auditLoading: false,
+  auditError: false,
+
+  loadAudit: async () => {
+    // 静默刷新（写操作后联动/挂载拉取）：已有内容时保持展示，不闪骨架；
+    // 网关瞬时失败不把已加载的留痕清空，仅标记 error（区块显示「加载失败 + 重试」）。
+    set({ auditLoading: true, auditError: false });
+    try {
+      const data = await ipc.fetchGitAudit(20);
+      if (data) {
+        set({ audit: data.entries, auditLoading: false, auditError: false });
+      } else {
+        set({ auditLoading: false, auditError: true });
+      }
+    } catch {
+      set({ auditLoading: false, auditError: true });
     }
   },
 }));

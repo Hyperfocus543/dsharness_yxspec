@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -297,6 +297,110 @@ test('setActiveWorkspace：全新注册表（磁盘无 defaultRoot）id=default 
   } finally {
     if (prevWs === undefined) delete process.env.YXSPEC_GIT_WORKSPACES
     else process.env.YXSPEC_GIT_WORKSPACES = prevWs
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文标签 + 成功/失败）', () => {
+  // 标准成功行（recordGitOp 写入形态）
+  assert.deepEqual(
+    normalizeAuditEntry({
+      at: 1725000000000,
+      root: 'D:/Work/x',
+      action: 'push',
+      args: {},
+      ok: true,
+      stdout: 'To github.com:org/repo.git\n   abc1234..def5678  main -> main\n',
+    }),
+    {
+      at: 1725000000000,
+      action: 'push',
+      actionLabel: '推送',
+      ok: true,
+      okLabel: '成功',
+      root: 'D:/Work/x',
+      args: {},
+      stdout: 'To github.com:org/repo.git\n   abc1234..def5678  main -> main',
+      error: null,
+    },
+  )
+
+  // 失败行：ok=false → 「失败」，error 透传，stdout 为空保留 null
+  assert.deepEqual(
+    normalizeAuditEntry({ at: 1725000001000, root: 'D:/Work/x', action: 'fetch', args: {}, ok: false, error: 'boom' }),
+    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom' },
+  )
+
+  // clone / checkout / init / pull → 中文标签映射
+  assert.equal(normalizeAuditEntry({ action: 'clone', ok: true }).actionLabel, '克隆')
+  assert.equal(normalizeAuditEntry({ action: 'checkout', ok: true }).actionLabel, '切换分支')
+  assert.equal(normalizeAuditEntry({ action: 'init', ok: true }).actionLabel, '新建仓库')
+  assert.equal(normalizeAuditEntry({ action: 'pull', ok: true }).actionLabel, '同步远端')
+
+  // 带字符串 args 的 checkout 行 → args 透传；空/非字符串值过滤
+  assert.deepEqual(
+    normalizeAuditEntry({ action: 'checkout', args: { branch: 'main', url: '' }, ok: true }).args,
+    { branch: 'main' },
+  )
+
+  // 未知 action 原文；缺 ok → 「未确认」且 ok=false（前端按中性色展示）
+  assert.equal(normalizeAuditEntry({ action: 'reset', ok: false }).actionLabel, 'reset')
+  assert.equal(normalizeAuditEntry({ action: 'clone' }).okLabel, '未确认')
+  assert.equal(normalizeAuditEntry({ action: 'clone' }).ok, false)
+})
+
+test('normalizeAuditEntry：宽容降级（缺字段 / 类型异常不抛）', () => {
+  // null / undefined / 非对象 → 全默认展示字段
+  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null })
+  assert.deepEqual(normalizeAuditEntry(undefined), normalizeAuditEntry(null))
+
+  // 非数字 at → null；action 非字符串 → unknown
+  assert.equal(normalizeAuditEntry({ at: 'yesterday' }).at, null)
+  assert.equal(normalizeAuditEntry({ action: 42 }).actionLabel, 'unknown')
+
+  // stdout / error 全空白 → null（前端不展示空行）
+  assert.equal(normalizeAuditEntry({ stdout: '   \n' }).stdout, null)
+  assert.equal(normalizeAuditEntry({ error: '   ' }).error, null)
+})
+
+test('listAuditLog：读审计文件返回时间倒序（新→旧），limit 截断，缺文件空数组', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-audit-'))
+  const auditPath = join(dir, 'audit.jsonl')
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_AUDIT = auditPath
+  try {
+    // 缺文件 → 空数组（不抛）
+    assert.deepEqual(listAuditLog({ limit: 5 }), { count: 0, entries: [] })
+
+    // 写入两条 + 一条损坏行 + 一条空行 → 时间倒序、损坏行跳过
+    writeFileSync(
+      auditPath,
+      [
+        JSON.stringify({ at: 1725000000000, root: 'D:/Work/x', action: 'push', args: {}, ok: true }),
+        'not-json{',
+        '',
+        JSON.stringify({ at: 1725000001000, root: 'D:/Work/y', action: 'fetch', args: {}, ok: false }),
+      ].join('\n'),
+      'utf8',
+    )
+    const r = listAuditLog({ limit: 10 })
+    assert.equal(r.count, 2)
+    assert.equal(r.entries[0].action, 'fetch') // 时间倒序：新（fetch，ok=false）在前
+    assert.equal(r.entries[0].ok, false)
+    assert.equal(r.entries[1].action, 'push')
+
+    // limit 截断：只取最新 1 条
+    const r1 = listAuditLog({ limit: 1 })
+    assert.equal(r1.count, 1)
+    assert.equal(r1.entries[0].action, 'fetch')
+
+    // limit 非法值：负数钳到最小 1；NaN/Infinity → 回落默认 20
+    assert.equal(listAuditLog({ limit: -5 }).count, 1)
+    assert.equal(listAuditLog({ limit: Number('abc') }).count, 2)
+    assert.equal(listAuditLog({ limit: Infinity }).count, 2)
+  } finally {
     if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
     else process.env.YXSPEC_GIT_AUDIT = prevAudit
     rmSync(dir, { recursive: true, force: true })

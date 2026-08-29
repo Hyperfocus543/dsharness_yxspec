@@ -1588,6 +1588,60 @@ export async function gitOperate(opts: GitOperateParams): Promise<GitOperateResu
 }
 
 // =============================================================================
+// git 写操作审计留痕 API（网关 GET /api/git/audit）
+// 数据源 = git-workspace-audit.jsonl（每次写操作 clone/fetch/pull/push/checkout/init
+// 由网关 recordGitOp 追加，append-only）。本端点只读展示，绝不修改文件。
+// 目标：把「写操作只有瞬时 toast」补成可回看的留痕 —— 谁在哪个仓库、哪一刻
+// 做了哪个 git 操作、成败如何，一目了然（尤其失败操作在 toast 消逝后仍可查）。
+// 老网关无此端点 → null（前端空态降级，不阻塞工作区管控卡）。
+// =============================================================================
+
+/** 单条 git 写操作审计留痕（网关 normalizeAuditEntry 归一化后的展示行）。 */
+export interface GitAuditEntry {
+  /** 操作时间（毫秒时间戳；缺失 → null，前端显示「—」） */
+  at: number | null;
+  /** 原始 action（clone / fetch / pull / push / checkout / init / unknown） */
+  action: string;
+  /** 中文动作标签（克隆 / 拉取远端 / 同步远端 / 推送 / 切换分支 / 新建仓库） */
+  actionLabel: string;
+  ok: boolean;
+  /** 成功 / 失败 / 未确认（ok 缺失时） */
+  okLabel: string;
+  /** 操作目标仓库根（无 → null） */
+  root: string | null;
+  /** 写操作入参（checkout 的 branch / clone 的 url+dir；空字符串值已过滤） */
+  args: Record<string, string>;
+  /** git 命令输出（截断至展示上限；无 → null） */
+  stdout: string | null;
+  /** 失败原因（ok=false 时网关记录；无 → null） */
+  error: string | null;
+}
+
+/** GET /api/git/audit 响应。 */
+export interface GitAuditResult {
+  count: number;
+  entries: GitAuditEntry[];
+}
+
+/**
+ * 拉取 git 写操作审计留痕（时间倒序）；失败返回 null（老网关无此端点 / 网关未起）。
+ * @param limit 条数上限（网关钳到 1~200；缺省 20）
+ */
+export async function fetchGitAudit(limit = 20): Promise<GitAuditResult | null> {
+  try {
+    const res = await fetch(`${GATEWAY_BASE}/api/git/audit?limit=${limit}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as GitAuditResult | null;
+    if (!data || !Array.isArray(data.entries)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// =============================================================================
 // 自迭代打分结果 API（网关 /api/self-iteration）
 // 数据源：@yxspec/self-iteration 插件落盘的 run-state.json + self_iteration/*.jsonl
 // （runtime-data，纯只读）。从未跑过自迭代 / 网关未起 → 空数据（state:null,

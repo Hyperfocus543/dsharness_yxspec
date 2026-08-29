@@ -31,7 +31,7 @@
 //     根、不含 ..），init 用前先 mkdirSync 确保目录存在，成功后自动 addWorkspace 登记。
 // =============================================================================
 import { execFile } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveGitRoot } from './git.mjs'
@@ -156,8 +156,9 @@ export { basenameOf }
  */
 function appendAuditLine(entry) {
   try {
-    mkdirSync(dirname(AUDIT_FILE), { recursive: true })
-    appendFileSync(AUDIT_FILE, JSON.stringify(entry) + '\n', 'utf8')
+    const file = auditFilePath()
+    mkdirSync(dirname(file), { recursive: true })
+    appendFileSync(file, JSON.stringify(entry) + '\n', 'utf8')
   } catch (e) {
     console.log(`[gateway] git-workspaces 审计落盘失败: ${e?.message ?? e}`)
   }
@@ -404,6 +405,88 @@ export function fetchBehindSummary(beforeOut, afterOut) {
   const after = parse(afterOut)
   if (before == null || after == null) return null
   return { before, after, delta: after - before }
+}
+
+/** 审计留痕展示动作 → 中文标签（listAuditLog 归一化用）。 */
+const AUDIT_ACTION_LABEL = {
+  clone: '克隆',
+  fetch: '拉取远端',
+  pull: '同步远端',
+  push: '推送',
+  checkout: '切换分支',
+  init: '新建仓库',
+}
+
+/** 审计文件路径：恒按当前生效 env 解析（与 defaultRoot 同口径——磁盘/模块常量的
+ *  陈旧快照不阻断；改 YXSPEC_GIT_AUDIT 后读写两侧立刻指向新文件，测试/换目录即生效）。
+ *  缺省回退模块默认路径。 */
+function auditFilePath() {
+  return process.env.YXSPEC_GIT_AUDIT || AUDIT_FILE
+}
+
+/**
+ * 归一化单条 git 写操作审计留痕为前端展示行（纯函数，可单测）。
+ * @param {object} e 审计 JSONL 原始行（recordGitOp 写入形态；类型不完整时宽容降级）
+ * @returns {object} { at, action, actionLabel, ok, okLabel, root, args, stdout, error } 展示字段恒存在
+ */
+export function normalizeAuditEntry(e) {
+  const rawAt = e && (e.at ?? e.ts)
+  const t = typeof rawAt === 'number' && Number.isFinite(rawAt) ? rawAt : NaN
+  const action = typeof e?.action === 'string' && e.action ? e.action : 'unknown'
+  const ok = e?.ok === true
+  const okLabel = e?.ok === true ? '成功' : e?.ok === false ? '失败' : '未确认'
+  const root = typeof e?.root === 'string' && e.root ? e.root : null
+  const args =
+    e?.args && typeof e.args === 'object' && !Array.isArray(e.args)
+      ? Object.fromEntries(Object.entries(e.args).filter(([, v]) => typeof v === 'string' && v.trim() !== ''))
+      : {}
+  const stdout = typeof e?.stdout === 'string' && e.stdout.trim() ? e.stdout.trim() : null
+  const error = typeof e?.error === 'string' && e.error.trim() ? e.error.trim() : null
+  return {
+    at: Number.isFinite(t) ? t : null,
+    action,
+    actionLabel: AUDIT_ACTION_LABEL[action] ?? action,
+    ok,
+    okLabel,
+    root,
+    args,
+    stdout,
+    error,
+  }
+}
+
+/**
+ * GET /api/git/audit 数据源：git 写操作审计留痕（git-workspace-audit.jsonl，时间倒序）。
+ * 该 JSONL 在每次写操作（clone/fetch/pull/push/checkout/init）时由 recordGitOp 追加，
+ * 本函数只读展示，绝不修改文件。缺文件 / 不可读 → 返回空数组（前端渲染空态）。
+ * @param {{limit?: number}} [opts]
+ * @returns {{count: number, entries: object[]}}
+ */
+export function listAuditLog({ limit = 20 } = {}) {
+  const n = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 20
+  const file = auditFilePath()
+  if (!existsSync(file)) return { count: 0, entries: [] }
+  let lines = []
+  try {
+    lines = readFileSync(file, 'utf8').split('\n')
+  } catch {
+    return { count: 0, entries: [] }
+  }
+  const entries = []
+  for (let i = lines.length - 1; i >= 0 && entries.length < n; i--) {
+    const line = lines[i]
+    if (!line || !line.trim()) continue
+    try {
+      const e = normalizeAuditEntry(JSON.parse(line))
+      // 截断 stdout 省略行（`… 截断 N 字符`）：审计文件里是 recordGitOp 已截断的
+      // stdout（AUDIT_STDOUT_MAX），展示用同样上限，防超大单行刷屏
+      if (e.stdout && e.stdout.length > AUDIT_STDOUT_MAX) e.stdout = e.stdout.slice(0, AUDIT_STDOUT_MAX) + '…'
+      entries.push(e)
+    } catch {
+      // 单行 JSON 损坏（理论上 appendFileSync 不会产生）→ 跳过，不阻断整列表
+    }
+  }
+  return { count: entries.length, entries }
 }
 
 /**

@@ -18,7 +18,7 @@ import { EmptyState, GitDiffPreview, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
-import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
+import { getGitDiff, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 
@@ -39,6 +39,24 @@ function relTimeOf(ts: string | null | undefined): string {
   const diffH = Math.floor(diffMin / 60);
   if (diffH < 24) return `${diffH} 小时前`;
   return `${Math.floor(diffH / 24)} 天前`;
+}
+
+/** 毫秒时间戳 → 相对时间文案（审计留痕 at 是 epoch ms；缺失/非法 → '—'） */
+function relTimeOfMs(ts: number | null | undefined): string {
+  if (ts == null || !Number.isFinite(ts)) return '—';
+  const diffMin = Math.floor((Date.now() - ts) / 60000);
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `${diffH} 小时前`;
+  return `${Math.floor(diffH / 24)} 天前`;
+}
+
+/** 审计留痕入参 → 紧凑展示文本（checkout 的 branch / clone 的 url+dir；空 → null） */
+function auditArgsText(a: Record<string, string> | undefined): string | null {
+  if (!a || Object.keys(a).length === 0) return null;
+  const parts = Object.entries(a).map(([k, v]) => `${k}=${v}`);
+  return parts.join(' ');
 }
 
 /** 脏文件状态 → 中文 + 色标（新增 emerald / 修改 amber / 删除 red / 冲突红/未暂存 zinc） */
@@ -261,6 +279,48 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean; root?: str
 
 /** 留痕 diff 预览浮层已迁移至共享组件 ui/GitDiffPreview.tsx（见 import）。 */
 
+/** 单条 git 写操作留痕行：结果徽标 + 动作徽标 + 入参/错误 + 相对时间。
+ *  成败色标与状态徽标同语义：成功 sage / 失败 red / 未确认 zinc。
+ *  root 是操作时记录的仓库根（多工作区下仍展示当时操作的仓库，不随活动切换漂移）。 */
+const AuditRow: React.FC<{ e: GitAuditEntry }> = ({ e }) => {
+  const argsText = auditArgsText(e.args);
+  const title = [
+    e.root ? `仓库：${e.root}` : null,
+    argsText ? `入参：${argsText}` : null,
+    e.stdout ? `输出：${e.stdout}` : null,
+    e.error ? `错误：${e.error}` : null,
+  ]
+    .filter((l): l is string => Boolean(l))
+    .join('\n');
+  const resultCls = e.ok
+    ? 'bg-sage-100 text-sage-700 border-sage-200'
+    : e.okLabel === '未确认'
+      ? 'bg-zinc-100 text-zinc-600 border-zinc-200'
+      : 'bg-red-100 text-red-700 border-red-200';
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
+      title={title || undefined}
+    >
+      <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${resultCls}`}>{e.okLabel}</span>
+      <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono" title={e.action}>
+        {e.actionLabel}
+      </span>
+      {argsText && (
+        <span className="min-w-0 truncate text-[10px] text-zinc-400 font-mono" title={argsText}>
+          {argsText}
+        </span>
+      )}
+      {e.error && (
+        <span className="min-w-0 truncate text-[10px] text-red-500" title={e.error}>
+          {e.error}
+        </span>
+      )}
+      <span className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums">{relTimeOfMs(e.at)}</span>
+    </div>
+  );
+};
+
 export const GitWorkspaceCard: React.FC = () => {
   const status = useGitStore((s) => s.status);
   const loading = useGitStore((s) => s.loading);
@@ -272,6 +332,11 @@ export const GitWorkspaceCard: React.FC = () => {
   const loadCommits = useGitStore((s) => s.loadCommits);
   const rollback = useGitStore((s) => s.rollback);
   const pushToast = useToastStore((s) => s.push);
+  // 写操作审计留痕（操作留痕区块数据源）：写操作完成后联动刷新，失败可回看
+  const audit = useGitStore((s) => s.audit);
+  const auditLoading = useGitStore((s) => s.auditLoading);
+  const auditError = useGitStore((s) => s.auditError);
+  const loadAudit = useGitStore((s) => s.loadAudit);
 
   // 多工作区管理：注册表 / 活动工作区 / 写操作态（gitOperate、workspaces 增删共用）
   const workspaces = useGitStore((s) => s.workspaces);
@@ -321,8 +386,9 @@ export const GitWorkspaceCard: React.FC = () => {
   // 工作区区块仍先就绪先渲染（不阻塞添加/切换），status 紧随其后。
   React.useEffect(() => {
     refreshWorkspaces().finally(() => refreshStatus().catch(() => {}));
+    loadAudit().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshWorkspaces, refreshStatus]);
+  }, [refreshWorkspaces, refreshStatus, loadAudit]);
 
   React.useEffect(() => {
     loadCommits(traceStage).catch(() => {});
@@ -563,6 +629,8 @@ export const GitWorkspaceCard: React.FC = () => {
       setBranchValue('');
       setBranchPanelOpen(false);
       await refreshStatus().catch(() => {});
+      // checkout 也是写操作 → 联动刷新操作留痕
+      loadAudit().catch(() => {});
     } catch (e: any) {
       setBranchError(e?.message || `切换分支失败：${branch}`);
     }
@@ -597,6 +665,8 @@ export const GitWorkspaceCard: React.FC = () => {
       );
       if (action === 'push') setPushConfirmOpen(false);
       await refreshStatus().catch(() => {});
+      // 写操作成功 → 联动刷新操作留痕（本次操作的审计行立即出现，不用手动点刷新）
+      loadAudit().catch(() => {});
     } catch (e: any) {
       pushToast('error', `${label}失败：${e?.message || e}`);
     } finally {
@@ -1243,6 +1313,49 @@ export const GitWorkspaceCard: React.FC = () => {
                 base={commitBaseByHash.get(c.hash) ?? null}
                 root={activeRoot}
               />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* git 写操作留痕：clone/fetch/pull/push/checkout/init 的审计列表（时间倒序）。
+          数据源 = 网关 git-workspace-audit.jsonl（写操作自动追加，append-only）。
+          目的：写操作不再只有瞬时 toast —— 谁在哪个仓库、哪一刻做了什么 git 操作、
+          成败如何，都可在卡片里回看（失败操作尤其要能查）。 */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <SectionLabel>操作留痕</SectionLabel>
+          <button
+            type="button"
+            onClick={() => loadAudit().catch(() => {})}
+            disabled={auditLoading}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+            title="刷新写操作审计留痕"
+          >
+            <Icon name={I.refresh} size={10} />
+            {auditLoading ? '刷新中…' : '刷新'}
+          </button>
+        </div>
+        {auditError && !audit ? (
+          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-red-200 rounded-lg space-y-1.5">
+            <div>操作留痕加载失败（老网关无此端点，或网关未响应）</div>
+            <button
+              type="button"
+              onClick={() => loadAudit().catch(() => {})}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+            >
+              <Icon name={I.refresh} size={11} />
+              重试
+            </button>
+          </div>
+        ) : !audit || audit.length === 0 ? (
+          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
+            {auditError ? '操作留痕加载失败' : '暂无 git 写操作留痕（fetch/pull/push/checkout/clone/init 后自动记录）'}
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {audit.map((e, i) => (
+              <AuditRow key={`${e.at ?? 'na'}-${i}`} e={e} />
             ))}
           </div>
         )}

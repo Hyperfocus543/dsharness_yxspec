@@ -35,7 +35,7 @@ import { listCapabilityCandidates } from './lib/candidates.mjs'
 import { listPlugins, setPluginEnabled } from './lib/plugins.mjs'
 import { trajectoryView, trajectoryAll, gateStage, gateSummary, rollbackTrajectory, exportOtelGenAi } from './lib/trajectory.mjs'
 import { getStatus, getStageRecords, getFileDiff, recordRollback } from './lib/git.mjs'
-import { listWorkspaces, addWorkspace, removeWorkspace, setActiveWorkspace, gitOperate } from './lib/git-workspaces.mjs'
+import { listWorkspaces, addWorkspace, removeWorkspace, setActiveWorkspace, gitOperate, listAuditLog } from './lib/git-workspaces.mjs'
 import { selfIterationOverview } from './lib/self-iteration.mjs'
 import { checkDispatchGate } from './lib/gate-enforce.mjs'
 
@@ -788,6 +788,13 @@ const server = createServer(async (req, res) => {
     //   PUT    /api/git/workspaces/active {id}          → 切换 active 工作区
     //   DELETE /api/git/workspaces/:id                  → 移除手动登记工作区（default/auto 拒绝）
     //   POST   /api/git/operate {root,action,args}      → git 写操作白名单（clone/fetch/pull/push/checkout/branch）
+    // 写操作审计留痕：GET /api/git/audit?limit=N
+    // 读 git-workspace-audit.jsonl（写操作 clone/fetch/pull/push/checkout/init 时
+    // recordGitOp 追加），时间倒序展示；缺文件 → 空数组（前端渲染空态）。
+    if (req.method === 'GET' && path === '/api/git/audit') {
+      return json(res, 200, listAuditLog({ limit: Number(url.searchParams.get('limit') ?? 20) }))
+    }
+
     if (req.method === 'GET' && path === '/api/git/workspaces') {
       return json(res, 200, await listWorkspaces())
     }
