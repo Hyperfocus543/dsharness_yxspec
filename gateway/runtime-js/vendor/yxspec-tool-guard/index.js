@@ -227,21 +227,40 @@ function gitArgsAfter(sub, segment) {
  * `powershell -Command "…"` / `powershell -c "…"` —— 引号串是「要执行的命令」而非
  * 惰性文本。命中则返回引号串内容（此后守卫按普通命令继续切分/判定，破坏性子命令
  * 可被检出）；未命中返回 null。规则：
- *   - sh 族可执行名（sh/bash/dash/ksh/zsh）+ 单连字符 flag 簇内含 `c`（-c/-lc/-exc）
- *   - cmd（Windows）/c 或 /k；powershell/pwsh（-NoProfile 等任意单连字符 flag 后）
- *     `-Command` 或官方短别名 `-c`（此前只认长名，`-c "git reset --hard"` 整段漏网）
+ *   - sh 族可执行名（sh/bash/dash/ksh/zsh，含 .exe）+ 命令 flag：单连字符 flag 簇
+ *     内含 `c`（-c/-lc/-eu -c）或长名 `--command`。带值 flag（-e -u 之后的非 flag
+ *     token、--login 等）须跳过——此前 `sh -c` 只认「`-c` 紧跟可执行名」，`bash -e
+ *     -c "git reset --hard"` / `bash --login -c …` / `bash -euxo pipefail -c …`
+ *     整段漏网（git 词在引号内被裸分支引号过滤当文本放过）；现 flag 逐个解析，值
+ *     token 跳过，最终仍落到 `-c/--command` 才解引用。只读 `bash -e -c "git status"`
+ *     解引用后子命令只读 → 不误伤。
+ *   - cmd（Windows，含 cmd.exe）：任意 `/开关` 参数（/q、/v:on、/d…）后可跟 /c 或 /k
+ *     执行字符串（`cmd /q /c "git clean -fd"` 此前只认 `cmd /c` 裸形态，/q 等开关
+ *     在前时整段漏网）；`cmd "…"`（无 /c，cmd 对首参引号串按隐式 /c 处理）也解引用。
+ *   - powershell/pwsh（含 .exe）：任意单/双连字符 flag（含带值 flag，如
+ *     `-ExecutionPolicy Bypass`）后跟 `-Command` / 官方短别名 `-c`，或直接裸引号串
+ *     （ps 无 -Command 也执行剩余字符串）。此前 `powershell -NoProfile -c "…"` /
+ *     `powershell -ExecutionPolicy Bypass -Command "…"` 因 -c/-Command 前有额外 flag
+ *     而漏网；现 flag 逐个跳过、值 token 跳过，-Command/-c/裸串三形态都解引用。
  *   - 只剥首参引号串；引号串后不允许再带参数（无法判定变量是否影响命令内容 →
  *     保守不剥）；嵌套壳（`sh -c "sh -c 'git push'"`）由守卫侧的递归扫描逐层解包。
  */
 function unwrapShellExec(segment) {
-  const prefixes = [
-    /^(?:\s*(?:sh|bash|dash|ksh|zsh)\s+-(?!-)[a-zA-Z]*c(?=\s|$)\s+)/i,
-    /^(?:\s*cmd(?:\s+\/c|\s+\/k)?\s+)/i,
-    /^(?:\s*powershell(?:\s+-\w+)*\s+(?:-Command|-c)\s+)/i,
-    /^(?:\s*pwsh(?:\s+-\w+)*\s+(?:-Command|-c)\s+)/i,
-  ]
+  // sh 族：`(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*)` 逐个吞 flag（负前瞻排除 -c/-lc/--command
+  // 本身）；`(?:\s+(?!-|["'`])[^\s]+)?` 跳过带值 flag 的值 token（`-e -u`、`--login`
+  // 后跟的非 flag 词）；最终必须落到含 `c` 的短 flag 簇或 `--command` 才解引用。
+  const shRe =
+    /^(?:\s*(?:sh|bash|dash|ksh|zsh)(?:\.exe)?\s+(?:(?!--command|-[a-zA-Z]*c[a-zA-Z]*)(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*)(?:\s+(?!-|["'`])[^\s]+)?\s+)*(?:-[a-zA-Z]*c[a-zA-Z]*|--command)(?=\s|$)\s+)/i
+  // cmd：可执行名后任意 `/开关` 参数（/q、/v:on、/d…，含 /c /k 本身），随后落在
+  // 引号串上（cmd 对首参引号串按隐式 /c 处理，无 /c 也解引用，宁可误伤不放过）。
+  const cmdRe = /^(?:\s*cmd(?:\.exe)?(?:\s+\/[a-zA-Z][\w:.@-]*)*\s*)/i
+  // powershell/pwsh：任意单/双连字符 flag（负前瞻排除 -Command/-c 本身；带值 flag
+  // 的值 token 一并跳过），随后可选 `-Command|-c`，再落到引号串。`-Command|-c` 整体
+  // 可省（`powershell "git status"` 无命令 flag 也直接执行剩余字符串）。
+  const psRe =
+    /^(?:\s*(?:powershell|pwsh)(?:\.exe)?(?:\s+(?!-Command|-c(?=\s|$))(?:--?[a-zA-Z][\w-]*)(?:\s+(?!-|["'`])[^\s]+)?)*\s*(?:(?:-Command|-c)(?=\s|$)\s+)?)/i
   const quotedArg = /^(?:"([^"\r\n]*)"|'([^'\r\n]*)')/i
-  for (const prefix of prefixes) {
+  for (const prefix of [shRe, cmdRe, psRe]) {
     const pm = prefix.exec(segment)
     if (!pm) continue
     const rest = segment.slice(pm[0].length)

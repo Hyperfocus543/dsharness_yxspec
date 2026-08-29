@@ -88,6 +88,27 @@ for (const cmd of [
   'powershell -NonInteractive -NoProfile -c "git checkout -f main"',
   'powershell -c "git reset --hard && git status"',
   "pwsh -c 'git rebase main'",
+  // 2026-08-29 追加：wrapper 带额外 flag/开关/可执行名后缀时仍须解引用（此前整段漏网）
+  'cmd /q /c "git clean -fd"',
+  'cmd /q /c "git reset --hard"',
+  'cmd /v:on /q /c "git reset --hard"',
+  'cmd.exe /c "git clean -fd"',
+  'cmd /q /k "git reset --hard"',
+  'bash -e -c "git reset --hard"',
+  'bash -x -c "git push origin main"',
+  'bash -eu -c "git clean -fd"',
+  'bash --login -c "git reset --hard"',
+  'sh -l -c "git push"',
+  'bash --command "git reset --hard"',
+  'bash.exe -c "git reset --hard"',
+  'bash -euxo pipefail -c "git clean -fd"',
+  'powershell -ExecutionPolicy Bypass -Command "git reset --hard"',
+  'powershell -NoProfile -ExecutionPolicy Bypass -c "git push origin main"',
+  'pwsh -ExecutionPolicy Bypass -Command "git clean -fd"',
+  'powershell.exe -Command "git reset --hard"',
+  'powershell "git reset --hard"',
+  'pwsh "git clean -fd"',
+  'powershell -NoProfile "git reset --hard"',
 ]) {
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -106,6 +127,17 @@ for (const cmd of [
   'powershell -c "git status"',
   'powershell -c "git log --oneline -5"',
   "pwsh -c 'git diff --stat'",
+  // 2026-08-29 追加：wrapper 带额外 flag/开关的只读命令解引用后子命令只读 → 放行
+  'cmd /q /c "git status"',
+  'bash -e -c "git status"',
+  'bash --login -c "git diff --stat"',
+  'bash -euxo pipefail -c "git status"',
+  'powershell -ExecutionPolicy Bypass -Command "git status"',
+  'powershell -NoProfile -ExecutionPolicy Bypass -c "git status"',
+  'powershell.exe -Command "git status"',
+  'powershell "git status"',
+  'powershell -NoProfile "git status"',
+  'cmd /v:on /q /c "git diff --stat"',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
