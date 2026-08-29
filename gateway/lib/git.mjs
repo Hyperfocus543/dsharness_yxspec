@@ -62,6 +62,47 @@ function isStageToken(token) {
 }
 
 /**
+ * 反引号 porcelain 路径：git status --porcelain 对含 空格/制表符/引号/反斜杠 的路径，
+ * 即使 `-c core.quotepath=false` 也仍按 C 风格加双引号包裹（core.quotepath 只关
+ * 非 ASCII 转义，不含空格类）。即 `?? "with space.txt"`、`R "old a" -> "new b"`。
+ * 而 getStatus / getFileDiff 的路径判定（untracked/deleted 匹配、diff -- <path>）
+ * 需要的是「无引号的真实路径」，否则 dirtyFiles.path 会带字面引号、状态匹配恒失败。
+ * 解析规则（对齐 git 的 C-style quoting）：
+ *   - 整段以 `"` 开头才视为被引号包裹（纯空格内路径），逐个解析转义：
+ *     `\"`→"、`\\`→\、`\n`→换行、`\t`→制表、`\NNN`（八进制）→ 该字节字符；
+ *   - 未包裹（首尾无引号）→ 原样返回（`中文文件.txt`、`normal.txt`）。
+ */
+function unquoteGitPath(raw) {
+  const s = String(raw ?? '')
+  if (s.length < 2 || s[0] !== '"') return s
+  let out = ''
+  for (let i = 1; i < s.length; i++) {
+    const c = s[i]
+    if (c === '\\' && i + 1 < s.length) {
+      const n = s[i + 1]
+      if (n === '"') { out += '"'; i += 1; continue }
+      if (n === '\\') { out += '\\'; i += 1; continue }
+      if (n === 'n') { out += '\n'; i += 1; continue }
+      if (n === 't') { out += '\t'; i += 1; continue }
+      if (n >= '0' && n <= '7' && i + 3 < s.length) {
+        const oct = s.slice(i + 1, i + 4)
+        if (/^[0-7]{3}$/.test(oct)) {
+          out += String.fromCharCode(parseInt(oct, 8))
+          i += 3
+          continue
+        }
+      }
+      out += n // 未知转义：保留字面（与原字符等价）
+      i += 1
+      continue
+    }
+    if (c === '"' && i === s.length - 1) break // 收尾引号
+    out += c
+  }
+  return out
+}
+
+/**
  * porcelain v1 XY → 语义化状态（前端 GitDirtyFile.status 契约：
  * added | modified | deleted | renamed | untracked | conflict）。
  * 优先级：暂存区 X 位冲突/重命名优先（'AA'/'DD' → conflict，'R' → renamed），
@@ -211,9 +252,11 @@ export async function getStatus() {
     // 重命名条目（R 位）：porcelain v1 输出 `XY old -> new`（箭头分隔源/目标）。
     // 路径取 ` -> ` 之后的目标路径（前端契约 path=当前工作区相对路径），
     // 否则会把整串 `old -> new` 当路径（diff 预览/回滚按此路径会 404）。
+    // 含空格路径在 porcelain 里被引号包裹（如 `"old a" -> "new b"`）→ 先按
+    // ` -> ` 切分再对目标段反引号，整段一起 unquote 会保留箭头前的字面 `"`。
     let path = line.slice(3)
     const arrow = path.indexOf(' -> ')
-    if (arrow >= 0) path = path.slice(arrow + 4)
+    path = arrow >= 0 ? unquoteGitPath(path.slice(arrow + 4)) : unquoteGitPath(path)
     base.dirtyFiles.push({
       path,
       status: porcelainStatus(xy), // 语义化（前端 DIRTY_STYLE 契约），staged 单独判定
@@ -356,7 +399,9 @@ export async function getFileDiff({ path, staged = false, from = null, to = null
   } else {
     // 脏文件模式：先判定文件状态（untracked 无基线可 diff；deleted 走完整删除 diff）
     const st = await runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--', p], { cwd })
-    const line = (st.ok ? st.stdout.split('\n').find((l) => l.slice(3) === p) : null) ?? ''
+    // porcelain 输出路径可能被引号包裹（含空格/转义）→ 反引号后再与请求路径比对，
+    // 否则 untracked/deleted 判定恒失败（`?? "a b.txt"` 的 `"a b.txt"` ≠ p）。
+    const line = (st.ok ? st.stdout.split('\n').find((l) => unquoteGitPath(l.slice(3)) === p) : null) ?? ''
     const xy = line.slice(0, 2)
     const isUntracked = xy[0] === '?' && xy[1] === '?'
     isDeleted = porcelainStatus(xy) === 'deleted'
