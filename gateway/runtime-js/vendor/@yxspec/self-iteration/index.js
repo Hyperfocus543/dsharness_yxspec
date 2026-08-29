@@ -239,6 +239,11 @@ function isRoundEndReason(reason) {
  */
 function decide(roundNo, total, baselineTotal, goal, gateOk, maxIter) {
   const g = String(goal ?? '').trim()
+  // 封顶优先于降级：roundNo 已达 maxIter → 本轮无论 degrade/continue 都收束
+  // （converge_by_maxiter，状态置 converged）。否则「末轮降级」会置 status='running'、
+  // stopPoint='degrade_round_N'，而 advanceState 不递增 currentRound → roundNo 恒 1、
+  // roundNo>=maxIter 永不触发，自迭代死循环。
+  if (roundNo >= (maxIter || DEFAULT_MAX_ITER)) return 'converge_by_maxiter'
   // 降级判定只在"本轮确实有分"时才有意义：total 缺失（score tool 降级/未调用）时
   // `total < baselineTotal` 恒真（null<N），会无限 degrade、converge_by_maxiter
   // 永不触发 → 自迭代死循环。无分轮不判降级，交由下方 roundNo>=maxIter 兜底收束。
@@ -261,7 +266,6 @@ function decide(roundNo, total, baselineTotal, goal, gateOk, maxIter) {
     goalMet = gateOk === true // 未给 goal / strict/drift 全绿 → 门禁全绿即达
   }
   if (goalMet) return 'converge'
-  if (roundNo >= (maxIter || DEFAULT_MAX_ITER)) return 'converge_by_maxiter'
   return 'continue'
 }
 
