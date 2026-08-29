@@ -484,6 +484,137 @@ async function execSelfIterScore(args, state) {
   // 与上一轮记录对比 → decision/quadrant/效率增量；首轮无上一轮 → baseline。
   // 任何不可用（score_core 缺失 / python 挂 / JSON 解析失败）→ degraded:true，不抛，
   // 不落 lastScore（框架判定非本轮产物分，不进轮次状态机）。
+  if (mode === 'framework') {
+    // 1) time_min：agent 显式观测（timeMin>0）优先；否则 run-state 会话时长折算
+    //    （sessionStartedAt → now 分钟数，下限 0.1）；两者都没有 → 降级（无耗时算不了效率）。
+    let timeMin = null
+    const timeRaw = args?.timeMin
+    if (typeof timeRaw === 'number' && Number.isFinite(timeRaw) && timeRaw > 0) {
+      timeMin = timeRaw
+    } else if (state.stateRoot) {
+      const st = readRunState(state.stateRoot)
+      const t0 = st?.sessionStartedAt ? Date.parse(st.sessionStartedAt) : NaN
+      if (Number.isFinite(t0) && t0 > 0) {
+        timeMin = Math.max(0.1, (Date.now() - t0) / 60000)
+      }
+    }
+    if (timeMin == null) {
+      // 降级：无 timeMin 且 run-state 无 sessionStartedAt → 照降级范式不抛
+      return {
+        ok: true,
+        degraded: true,
+        reason: 'framework-no-time',
+        message: 'framework 模式缺少本轮耗时：未传 timeMin 且 run-state 无 sessionStartedAt。降级：无法算效率，请 agent 观测本轮耗时后以 timeMin 重试。',
+        error: null,
+        stdout: res.stdout, stderr: res.stderr,
+      }
+    }
+
+    // 2) 本轮打分记录落盘（yxspec 侧 framework-scores/round-{n}.json，UTF-8）
+    const fwRound = roundNo && Number.isFinite(roundNo) && roundNo > 0 ? roundNo : 1
+    const fwRoot = join(state.stateRoot, 'framework-scores')
+    const curPath = join(fwRoot, `round-${fwRound}.json`)
+    const prevPath = join(fwRoot, `round-${fwRound - 1}.json`)
+    try {
+      mkdirSync(fwRoot, { recursive: true })
+      writeFileSync(curPath, JSON.stringify({
+        stage: stageName,
+        round: fwRound,
+        total: parsed.total,
+        time_min: timeMin,
+        at: new Date().toISOString(),
+      }, null, 2) + '\n', 'utf8')
+    } catch (e) {
+      // 落盘失败（目录不可写等）→ 降级，不抛
+      return {
+        ok: true,
+        degraded: true,
+        reason: 'framework-eval-failed',
+        message: `framework 打分记录落盘失败：${String(e?.message ?? e)}。降级：跳过框架判定。`,
+        error: null,
+        stdout: res.stdout, stderr: res.stderr,
+      }
+    }
+
+    // 3) 首轮（无上一轮记录）→ baseline，不调 score_core；否则对比效率
+    if (!existsSync(prevPath)) {
+      return {
+        ok: true,
+        degraded: false,
+        stage: stageName,
+        round: roundNo,
+        stdout: res.stdout,
+        parsed,
+        gateOk: inferGateOk(res.stdout),
+        framework: { decision: 'baseline' },
+        message: `framework 首轮 baseline：round-${fwRound} Total=${parsed.total} time_min=${timeMin}。下一轮起对比效率。`,
+      }
+    }
+
+    // 4) 调 score_core.py --eval-framework（同事 §9 框架效率判定）
+    const coreScript = process.env.YXSPEC_SELF_ITERATION_SCORE_CORE
+      || join(state.scriptsDir, '..', 'references', 'standard', 'score', 'score_core.py')
+    if (!existsSync(coreScript)) {
+      return {
+        ok: true,
+        degraded: true,
+        reason: 'framework-eval-failed',
+        message: `未找到同事的 score_core.py（${coreScript}）。降级：跳过框架效率判定（打分记录已落盘 round-${fwRound}.json）。`,
+        error: null,
+        stdout: res.stdout, stderr: res.stderr,
+      }
+    }
+    // cwd=score_core.py 所在目录（其内部 SELF_ITER_DIR / score_registry 相对该目录解析）。
+    const coreRes = await runPython(
+      ['score_core.py', '--eval-framework', '--before', prevPath, '--after', curPath],
+      { cwd: dirname(coreScript) },
+    )
+    if (!coreRes.ok) {
+      return {
+        ok: true,
+        degraded: true,
+        reason: 'framework-eval-failed',
+        message: `score_core.py --eval-framework 执行失败：${coreRes.error || coreRes.stderr || '未知错误'}。降级：跳过框架效率判定。`,
+        error: null,
+        stdout: coreRes.stdout, stderr: coreRes.stderr,
+      }
+    }
+    let fw = null
+    try {
+      fw = JSON.parse(coreRes.stdout)
+    } catch {
+      return {
+        ok: true,
+        degraded: true,
+        reason: 'framework-eval-failed',
+        message: `score_core.py 输出 JSON 解析失败（stdout: ${String(coreRes.stdout).slice(0, 200)}）。降级：跳过框架效率判定。`,
+        error: null,
+        stdout: coreRes.stdout, stderr: coreRes.stderr,
+      }
+    }
+    // 归一 framework 子对象：只带非空字段（决策/象限为字符串，效率为数值；
+    // 缺失字段不落 null——schema 子集不支持 union，参照现有序字段哨兵纪律）。
+    const framework = {}
+    if (typeof fw?.decision === 'string' && fw.decision) framework.decision = fw.decision
+    if (typeof fw?.quadrant === 'string' && fw.quadrant) framework.quadrant = fw.quadrant
+    if (typeof fw?.efficiency_before === 'number') framework.efficiency_before = fw.efficiency_before
+    if (typeof fw?.efficiency_after === 'number') framework.efficiency_after = fw.efficiency_after
+    if (typeof fw?.efficiency_change_pct === 'number') framework.efficiency_change_pct = fw.efficiency_change_pct
+    return {
+      ok: true,
+      degraded: false,
+      stage: stageName,
+      round: roundNo,
+      stdout: res.stdout,
+      parsed,
+      gateOk: inferGateOk(res.stdout),
+      framework,
+      message: framework.decision
+        ? `framework 效率对比：${framework.decision}（${framework.quadrant ?? '—'}）效率 ${framework.efficiency_before ?? '—'} → ${framework.efficiency_after ?? '—'}（${framework.efficiency_change_pct ?? '—'}%）`
+        : 'framework 效率判定返回异常（无 decision 字段，见 stdout）。',
+    }
+  }
+
   return {
     ok: true,
     degraded: false,
@@ -528,7 +659,9 @@ export function apply(ctx, input = {}) {
       description:
         '对指定 yxspec 阶段（如 sqt-script-gen）执行确定性打分（调用同事的 score_aggregate.py，非 LLM 自评）。'
         + '输入 stage（节点名，下划线或连字符均可）+ 可选 round/repo-root/run-dir/session。'
-        + '返回 Master/Stage/Total 分 + 等级（A~D）+ 弱项（<60 维度）结构化结果；脚本不可用时返回 degraded=true（此时禁止自行打分，改走提示词路径）。',
+        + '双模式：product（缺省）= 评阶段产物，返回 Master/Stage/Total 分 + 等级（A~D）+ 弱项（<60 维度）结构化结果；'
+        + 'framework = 评框架效率（需先后两轮打分记录对比，返回 framework 子对象含 decision/quadrant/效率增量）。'
+        + '脚本不可用时返回 degraded=true（此时禁止自行打分，改走提示词路径）。',
       parameters: {
         type: 'object',
         properties: {
@@ -537,6 +670,8 @@ export function apply(ctx, input = {}) {
           repoRoot: { type: 'string', description: '项目根（--repo-root，默认脚本 cwd）' },
           runDir: { type: 'string', description: '本轮产物目录（--run-dir，优先评 rounds/r{N}/run/ 复制产物）' },
           session: { type: 'string', description: '会话标识（同一会话全部轮次写入同一个 score-{session}.json）' },
+          mode: { type: 'string', enum: ['product', 'framework'], description: '打分模式：product=评阶段产物（默认）；framework=评框架效率（复用同事 score_core.py --eval-framework，需先后两轮打分记录对比）' },
+          timeMin: { type: 'number', description: 'framework 模式本轮耗时分钟（agent 观测）；缺省用 run-state 会话时长折算' },
         },
         required: ['stage'],
         additionalProperties: false,
@@ -562,6 +697,19 @@ export function apply(ctx, input = {}) {
             error: { type: 'string' },
             stdout: { type: 'string' },
             stderr: { type: 'string' },
+            framework: {
+              type: 'object',
+              // framework 模式成功判定才携带（decision 恒为 string；quadrant/效率
+              // 为 string/number）；product 模式或缺省/降级时省略该键（可选属性）。
+              additionalProperties: false,
+              properties: {
+                decision: { type: 'string' },
+                quadrant: { type: 'string' },
+                efficiency_before: { type: 'number' },
+                efficiency_after: { type: 'number' },
+                efficiency_change_pct: { type: 'number' },
+              },
+            },
           },
         },
         render: (a, v) => [{
@@ -575,9 +723,12 @@ export function apply(ctx, input = {}) {
         const res = await execSelfIterScore(args, {
           scriptsDir,
           defaultRepoRoot: input.repoRoot || process.env.YXSPEC_WORKSPACE_CWD || 'D:/Work/01_Projects/Aima_X1_BCM',
+          stateRoot,
         })
-        // 成功打分 → 暂存到 run-state（finishRound 消费，供轮次状态机判定）
-        if (res.ok && !res.degraded && res.parsed) {
+        // 成功打分 → 暂存到 run-state（finishRound 消费，供轮次状态机判定）。
+        // 仅 product 模式暂存：framework 判定是框架效率证据，非本轮产物分，
+        // 进了 lastScore 会被 decide() 当产物分参与降级判定 → 污染轮次状态机。
+        if (res.ok && !res.degraded && res.parsed && args?.mode !== 'framework') {
           const st = readRunState(stateRoot)
           if (st) {
             st.lastScore = {
@@ -601,9 +752,25 @@ export function apply(ctx, input = {}) {
             at: new Date().toISOString(),
           })
         }
-        // 结构化返回（stdout 截断防爆；缺失字段用可判定哨兵，无 union type）
+        // framework 成功判定 → 写轨迹（框架效率证据；降级不写，留痕只记有效判定）
+        if (res.ok && !res.degraded && res.framework?.decision) {
+          appendTrajectory(trajRoot, res.stage, {
+            type: 'self-iteration/framework-eval/v1',
+            stage: res.stage,
+            round: res.round,
+            decision: res.framework.decision,
+            quadrant: res.framework.quadrant ?? null,
+            efficiency_before: res.framework.efficiency_before ?? null,
+            efficiency_after: res.framework.efficiency_after ?? null,
+            efficiency_change_pct: res.framework.efficiency_change_pct ?? null,
+            at: new Date().toISOString(),
+          })
+        }
+        // 结构化返回（stdout 截断防爆；缺失字段用可判定哨兵，无 union type）。
+        // framework 只在 framework 模式成功判定时携带（对象，见 schema）；product/
+        // 降级时省略该键（schema additionalProperties:false 禁多余字段，缺省可选属性合法）。
         const p = res.parsed
-        return {
+        const out = {
           ok: res.ok,
           degraded: res.degraded ?? false,
           stage: res.stage ?? '',
@@ -619,6 +786,8 @@ export function apply(ctx, input = {}) {
           stdout: String(res.stdout ?? '').slice(0, 4000),
           stderr: String(res.stderr ?? '').slice(0, 2000),
         }
+        if (res.framework) out.framework = res.framework
+        return out
       },
     })
     log('tool self_iter_score registered')
