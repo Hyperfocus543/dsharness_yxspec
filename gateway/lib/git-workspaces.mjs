@@ -296,6 +296,25 @@ export async function addWorkspace({ root } = {}) {
     const list = await listWorkspaces()
     return { ok: true, already: true, workspace: existing, list: list.workspaces }
   }
+  // 当前生效根（resolveGitRoot 推导）只在 listWorkspaces 内存合并为 'default' 条目，
+  // 磁盘注册表不落它 → 上面 existing 永远查不到。重新 add 当前默认根会新建一条 manual
+  // ws-N 与 default 同 root，withDefaultRoot 见 existing.has(root) 后抑制 auto 条目
+  // → 默认工作区从列表消失、activeId 回落 null（实测复现）。故与当前生效根显式比对：
+  // 命中即视作已存在（登记粒度本就是仓库根，子目录 add 也会归一到同 root），返回内存
+  // 合并后的 default 条目。归一正斜杠后逐字比较（rev-parse 输出分隔符平台不一）。
+  const gr = await resolveGitRoot()
+  const defaultRootNorm = gr && gr.root ? gr.root.replace(/\\/g, '/') : null
+  if (defaultRootNorm && verified.root === defaultRootNorm) {
+    const list = await listWorkspaces()
+    const def = list.workspaces.find((w) => w.id === 'default' && w.source === 'auto')
+    return {
+      ok: true,
+      already: true,
+      workspace:
+        def ?? { id: 'default', name: workspaceNameFor({ root: verified.root, source: 'auto' }), root: verified.root, source: 'auto' },
+      list: list.workspaces,
+    }
+  }
   const entry = {
     id: workspaceIdFor({ root: verified.root, source: 'manual' }, reg.workspaces.map((w) => w.id).concat('default')),
     name: workspaceNameFor({ root: verified.root, source: 'manual' }),
@@ -304,7 +323,6 @@ export async function addWorkspace({ root } = {}) {
   }
   // 落盘时补 defaultRoot（磁盘注册表首次写入时 default 根也持久化，
   // 否则 defaultRoot 恒 null，setActive/gitOperate 读盘拿不到 default）
-  const gr = await resolveGitRoot()
   const newReg = {
     ...reg,
     defaultRoot: reg.defaultRoot || (gr ? gr.root : null),

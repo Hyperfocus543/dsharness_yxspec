@@ -10,7 +10,7 @@
 //   - canRemoveWorkspace：default/auto 拒绝，不存在 not-found，手动条放行
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { test } from 'node:test'
@@ -19,7 +19,7 @@ import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -593,6 +593,50 @@ test('cloneWithProgress：key 用剥尾分隔符的 dir（前端轮询口径）�
     assert.equal(entries[0].pct, 100, `pct 应为 100，实际 ${entries[0].pct}`)
     assert.equal(listCloneProgress({ dir: target }).length, 0, '带尾 key 不应匹配（注册表用剥尾 key）')
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 回归：addWorkspace 重复登记「当前生效根」。
+// 修复前：default 条目只在 listWorkspaces 内存合并（磁盘不落），existing 查不到当前根
+// → 重新 add 当前默认根会新建一条 manual ws-N，withDefaultRoot 见同 root 后抑制 auto 条目
+// → 默认工作区从列表消失、activeId 回落 null（实测复现，_probe_dupadd）。修复后：
+// 与 resolveGitRoot 当前生效根显式比对 → already:true 返回 default 条目，列表恒含 auto 默认。
+test('addWorkspace：重复登记当前生效根 → already:true 返回 default 条目（不新建 manual 抑制 auto）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-dupadd-'))
+  const regPath = join(dir, 'registry.json')
+  writeFileSync(regPath, JSON.stringify({ version: 1, defaultRoot: null, activeId: null, workspaces: [] }))
+  const prevWs = process.env.YXSPEC_GIT_WORKSPACES
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_WORKSPACES = regPath
+  process.env.YXSPEC_GIT_AUDIT = join(dir, 'audit.jsonl')
+  try {
+    const root = process.cwd().replace(/\\/g, '/')
+    const r1 = await addWorkspace({ root })
+    assert.equal(r1.ok, true, `add 当前默认根应成功: ${JSON.stringify(r1)}`)
+    assert.equal(r1.already, true, `当前默认根应命中 already: ${JSON.stringify(r1)}`)
+    assert.equal(r1.workspace?.id, 'default', `返回条目应为 default: ${JSON.stringify(r1.workspace)}`)
+    assert.equal(r1.workspace?.source, 'auto')
+    assert.ok(r1.list.some((w) => w.id === 'default' && w.source === 'auto'), '列表应含 auto 默认条目')
+
+    // 磁盘注册表不被污染：不落 manual ws-N 条目
+    const raw = JSON.parse(readFileSync(regPath, 'utf8'))
+    assert.equal(raw.workspaces.length, 0, `磁盘注册表不应新增条目: ${JSON.stringify(raw.workspaces)}`)
+
+    // 再次 add 同 root → 仍 already:true default
+    const r2 = await addWorkspace({ root })
+    assert.equal(r2.already, true)
+    assert.equal(r2.workspace?.id, 'default')
+
+    const list = await listWorkspaces()
+    assert.equal(list.activeId, 'default', `activeId 应保持 default: ${JSON.stringify(list.activeId)}`)
+    assert.ok(list.workspaces.some((w) => w.id === 'default' && w.source === 'auto'), '最终列表应含 auto 默认条目')
+    assert.ok(!list.workspaces.some((w) => w.source === 'manual'), '最终列表不应含 manual 条目')
+  } finally {
+    if (prevWs === undefined) delete process.env.YXSPEC_GIT_WORKSPACES
+    else process.env.YXSPEC_GIT_WORKSPACES = prevWs
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
     rmSync(dir, { recursive: true, force: true })
   }
 })
