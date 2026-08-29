@@ -9,6 +9,8 @@ import * as ipc from '../utils/ipc';
 interface ReviewStore {
   entries: ReviewEntry[];
   loading: boolean;
+  /** 加载失败（读取中断/Tauri invoke 异常）→ true；与「真无审查报告」区分，供 UI 给错误态+重试 */
+  loadError: boolean;
   load: (projectPath: string) => Promise<void>;
   byStage: (stage: string) => ReviewEntry | undefined;
 }
@@ -16,14 +18,15 @@ interface ReviewStore {
 export const useReviewStore = create<ReviewStore>((set, get) => ({
   entries: [],
   loading: false,
+  loadError: false,
   load: async (projectPath: string) => {
-    set({ loading: true });
+    set({ loading: true, loadError: false });
     try {
       const entries = await ipc.listReviews(projectPath);
-      set({ entries, loading: false });
+      set({ entries, loading: false, loadError: false });
     } catch (e) {
       console.error('load reviews failed:', e);
-      set({ loading: false });
+      set({ loading: false, loadError: true });
     }
   },
   byStage: (stage: string) => get().entries.find((e) => e.stage === stage),

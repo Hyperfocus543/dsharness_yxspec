@@ -6,7 +6,7 @@ import type { ReviewEntry, ReviewVerdict } from '../../data/types';
 import { countByVerdict, useReviewStore } from '../../store/reviewStore';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import { I } from '../ui/icons';
-import { Button, Icon, Panel } from '../ui';
+import { Button, EmptyState, Icon, Panel } from '../ui';
 import { ReviewQueue } from './ReviewQueue';
 
 const VERDICT_COLORS: Record<ReviewVerdict, string> = {
@@ -123,10 +123,11 @@ export const ReviewCenter: React.FC<ReviewCenterProps> = ({ projectPath }) => {
   const load = useReviewStore((s) => s.load);
   const entries = useReviewStore((s) => s.entries);
   const loading = useReviewStore((s) => s.loading);
+  const loadError = useReviewStore((s) => s.loadError);
 
   React.useEffect(() => {
     load(projectPath);
-  }, [projectPath]);
+  }, [projectPath, load]);
 
   const counts = React.useMemo(() => countByVerdict(entries), [entries]);
   const total = entries.length;
@@ -140,32 +141,69 @@ export const ReviewCenter: React.FC<ReviewCenterProps> = ({ projectPath }) => {
           </span>
           审查中心
         </h3>
-        <Button variant="secondary" size="sm" onClick={() => load(projectPath)}>
+        <Button variant="secondary" size="sm" onClick={() => load(projectPath)} disabled={loading}>
           <Icon name={I.refresh} size={14} />
           刷新
         </Button>
       </div>
 
-      {/* D1 审批队列：顶部待审批区块（读 dshState.stages 找 review pending / pending_review） */}
-      <div className="mb-4">
-        <ReviewQueue />
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-4">
-        <Stat label="approved" value={counts.approved} color="sage" />
-        <Stat label="conditional" value={counts.conditional} color="amber" />
-        <Stat label="rejected" value={counts.rejected} color="red" />
-        <Stat label="无审查报告" value={counts.none} color="gray" />
-      </div>
-
-      {loading ? (
-        <div className="py-8 text-center text-zinc-500">加载中…</div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {entries.map((entry) => (
-            <ReviewCard key={entry.stage} entry={entry} />
+      {/* 首次加载骨架（复用驾驶舱同款骨架：不闪「无审查报告」空态） */}
+      {loading && total === 0 && (
+        <div className="border border-zinc-200 rounded-lg bg-white p-3 space-y-2" role="status" aria-busy="true" aria-label="正在加载审查报告">
+          <div className="h-4 bg-zinc-200 rounded animate-pulse w-1/3" />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-14 bg-zinc-100 rounded animate-pulse" />
+            ))}
+          </div>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-10 bg-zinc-100 rounded animate-pulse" />
           ))}
         </div>
+      )}
+
+      {/* 加载失败 ≠ 无审查报告：给专属错误态 + 重试（与轨迹/工作区卡同款，网关未起时原地重拉） */}
+      {loadError && (
+        <div className="space-y-3">
+          <div className="border border-zinc-200 rounded-lg bg-white">
+            <EmptyState icon={I.shield} title="审查报告加载失败" hint="网关未响应或读取中断（/api/reviews 拿不到清单）。确认网关运行中，再点下方重试。" />
+          </div>
+          <div className="flex justify-center">
+            <Button variant="secondary" size="sm" onClick={() => load(projectPath)}>
+              <Icon name={I.refresh} size={14} />
+              重试
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 数据就绪（或已加载为空）：统计 + 卡片列表 */}
+      {!loadError && !(loading && total === 0) && (
+        <>
+          {/* D1 审批队列：顶部待审批区块（读 dshState.stages 找 review pending / pending_review） */}
+          <div className="mb-4">
+            <ReviewQueue />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-4">
+            <Stat label="approved" value={counts.approved} color="sage" />
+            <Stat label="conditional" value={counts.conditional} color="amber" />
+            <Stat label="rejected" value={counts.rejected} color="red" />
+            <Stat label="无审查报告" value={counts.none} color="gray" />
+          </div>
+
+          {entries.length === 0 ? (
+            <div className="text-xs text-zinc-400 py-6 text-center border border-dashed border-zinc-200 rounded-lg">
+              还没有审查报告（project/specs/*/review-*.md 或 task_review_*.md 未产生）
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {entries.map((entry) => (
+                <ReviewCard key={entry.stage} entry={entry} />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       <div className="mt-4 flex items-start gap-1 text-xs text-zinc-500">
