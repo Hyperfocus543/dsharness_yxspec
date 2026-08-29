@@ -106,6 +106,10 @@ const STAGE_UPSTREAM = {
 // 复合命令（&& || ; | 换行）按 shell 分隔符切段逐段判定，任一段命中破坏性
 // git 操作即整体拒绝。核心拦截：push / reset / clean / checkout -f /
 //   checkout -- / rm -rf / cherry-pick / rebase / merge / stash drop / remote add 等。
+// shell 执行包装器（`sh -c "…"` / `cmd /c "…"` / `powershell -Command "…"`）：
+//   引号串是「被执行命令」而非 `echo "git status"` 那种惰性文本，须先解引用再
+//   按真实命令内容判定——否则 git 词落在引号内会被裸分支引号过滤当作文本放过，
+//   `sh -c "git reset --hard"` 整段漏过守卫（实测漏网）。
 // =============================================================================
 
 /** 只读/安全 git 子命令（无 flag 争议，直接放行）。 */
@@ -218,6 +222,37 @@ function gitArgsAfter(sub, segment) {
   return r && r.sub === sub ? r.args : '';
 }
 
+/**
+ * shell 执行包装器解引用：`sh -c "…"` / `bash -c '…'` / `cmd /c "…"` /
+ * `powershell -Command "…"` —— 引号串是「要执行的命令」而非惰性文本。命中则
+ * 返回引号串内容（此后守卫按普通命令继续切分/判定，破坏性子命令可被检出）；
+ * 未命中返回 null。规则：
+ *   - sh 族可执行名（sh/bash/dash/ksh/zsh）+ 单连字符 flag 簇内含 `c`（-c/-lc/-exc）
+ *   - cmd（Windows）/c 或 /k；powershell/pwsh（-NoProfile 等任意单连字符 flag 后）-Command
+ *   - 只剥首参引号串；引号串后不允许再带参数（无法判定变量是否影响命令内容 →
+ *     保守不剥）；嵌套壳（`sh -c "sh -c 'git push'"`）由守卫侧的递归扫描逐层解包。
+ */
+function unwrapShellExec(segment) {
+  const prefixes = [
+    /^(?:\s*(?:sh|bash|dash|ksh|zsh)\s+-(?!-)[a-zA-Z]*c(?=\s|$)\s+)/i,
+    /^(?:\s*cmd(?:\s+\/c|\s+\/k)?\s+)/i,
+    /^(?:\s*powershell(?:\s+-\w+)*\s+-Command\s+)/i,
+    /^(?:\s*pwsh(?:\s+-\w+)*\s+-Command\s+)/i,
+  ]
+  const quotedArg = /^(?:"([^"\r\n]*)"|'([^'\r\n]*)')/i
+  for (const prefix of prefixes) {
+    const pm = prefix.exec(segment)
+    if (!pm) continue
+    const rest = segment.slice(pm[0].length)
+    const qm = quotedArg.exec(rest)
+    if (!qm) continue
+    if (rest.slice(qm[0].length).trim() !== '') continue // 引号后还有参数 → 保守不剥
+    const inner = (qm[1] ?? qm[2]).trim()
+    return inner === '' ? null : inner
+  }
+  return null
+}
+
 /** 判定某个 git 子命令在该段内是否破坏性（返回 true = 应拒绝）。 */
 function gitSubUnsafe(sub, segment) {
   if (GIT_READONLY_SUBS.has(sub)) return false;
@@ -259,14 +294,67 @@ function gitSubUnsafe(sub, segment) {
   return true; // 非只读白名单内的 git 子命令，默认拒绝
 }
 
+/**
+ * 引号感知切段：命令按 `&& || | ; \n` 切段（与旧 `command.split(/…/)` 同语义），
+ * 但引号包裹区间（"…" / '…' / `…`）内的分隔符属于被引号包裹的文本，不在此层切分——
+ * `sh -c "git reset --hard && git status"` 的 `&&` 由解包后的递归扫描判定，不在此层
+ * 拆开（否则引号内命令被拆成碎片，git 子命令带引号后缀无法识别）。
+ * 单 `&`（后台符/`2>&1` 重定向）不是命令分隔符，不切（与旧 split 行为一致）。
+ */
+function splitCommandSegments(command) {
+  const segs = []
+  let cur = ''
+  let quote = null
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i]
+    if (quote) {
+      cur += ch
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch
+      cur += ch
+      continue
+    }
+    if (ch === '&' && command[i + 1] === '&') {
+      if (cur.trim()) segs.push(cur.trim())
+      i += 1 // 吞掉第二个 &
+      cur = ''
+      continue
+    }
+    if (ch === '|' || ch === ';' || ch === '\n') {
+      if (cur.trim()) segs.push(cur.trim())
+      if (ch === '|' && command[i + 1] === '|') i += 1 // 吞掉第二个 |
+      cur = ''
+      continue
+    }
+    cur += ch
+  }
+  if (cur.trim()) segs.push(cur.trim())
+  return segs
+}
+
+/** 递归扫描命令文本：shell 执行包装器（sh -c "…" / cmd /c "…" / powershell -Command "…"）
+ *  解包后继续扫描（解包内容可能是复合命令/嵌套壳）；普通段直接判 git 子命令。
+ *  命中破坏性 git 子命令 → 加入 denied。 */
+function scanGitDeny(text, denied) {
+  for (const seg of splitCommandSegments(text)) {
+    const unwrapped = unwrapShellExec(seg)
+    if (unwrapped) {
+      scanGitDeny(unwrapped, denied) // 解包内容按真实命令递归扫描（可含分隔符/嵌套壳）
+      continue
+    }
+    const sub = gitSubcommandOf(seg)
+    if (sub && gitSubUnsafe(sub, seg)) denied.push(sub)
+  }
+}
+
 /** git 命令级守卫入口：返回中文 deny 文案；放行返回 null。 */
 function gitGuardDeny(command) {
   if (typeof command !== 'string' || command.trim() === '') return null;
   const denied = [];
-  for (const seg of command.split(/(?:&&|\|\||\n|;|\|)/)) {
-    const sub = gitSubcommandOf(seg);
-    if (sub && gitSubUnsafe(sub, seg)) denied.push(sub);
-  }
+  scanGitDeny(command, denied);
   if (denied.length === 0) return null;
   return `[yxspec-tool-guard] git 命令级拦截：${denied.join('/')} 被禁止。当前工作区受 git 管控，仅允许只读命令（status/diff/log/branch/rev-parse/show/tag -l 等），禁止 push/reset/clean/checkout -f/rm -rf/cherry-pick/rebase/merge/stash drop 等破坏性操作，请改用只读命令`;
 }
