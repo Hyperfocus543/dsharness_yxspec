@@ -246,14 +246,14 @@ test('parseNumstat：非字符串 → null', () => {
 })
 
 test('fetchBehindSummary：fetch 前后落后数 + 增量', () => {
-  // 拉到 3 个新提交：落后 3 → 0
-  assert.deepEqual(fetchBehindSummary('3\n', '0\n'), { before: 3, after: 0, delta: -3 })
+  // 拉到 3 个新提交：落后 3 → 0（delta = before - after = 3）
+  assert.deepEqual(fetchBehindSummary('3\n', '0\n'), { before: 3, after: 0, delta: 3 })
   // 落后 2 → 1（拉到 1 个）
-  assert.deepEqual(fetchBehindSummary('2', '1'), { before: 2, after: 1, delta: -1 })
+  assert.deepEqual(fetchBehindSummary('2', '1'), { before: 2, after: 1, delta: 1 })
   // 无更新：落后数不变（delta 0）
   assert.deepEqual(fetchBehindSummary('0', '0'), { before: 0, after: 0, delta: 0 })
-  // 远端新增了提交但本地还没 merge：落后反而变多（fetch 拉回上游提交）
-  assert.deepEqual(fetchBehindSummary('1', '4'), { before: 1, after: 4, delta: 3 })
+  // 远端新增了提交但本地还没 merge：落后反而变多（delta 为负，本地未拉到新提交）
+  assert.deepEqual(fetchBehindSummary('1', '4'), { before: 1, after: 4, delta: -3 })
 })
 
 test('fetchBehindSummary：任一边缺上游 / 非数字 → null（前端不展示）', () => {
