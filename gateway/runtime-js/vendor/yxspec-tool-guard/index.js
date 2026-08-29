@@ -426,6 +426,21 @@ function splitCommandSegments(command) {
       cur = ''
       continue
     }
+    if (ch === '&') {
+      // 单 `&`（bash 后台操作符 `cmd1 & cmd2`）：分隔两条命令，两条都执行——
+      // 破坏性 git 藏在后台符后（`git status & git push origin main`）会整段漏过守卫
+      // （旧实现不切段，gitSubAndArgs 只取段内首个 git 调用 = 只读 status，push 永不扫）。
+      // 例外：`&` 是重定向一部分时不切（`2>&1` / `1>&2` / `&>file` / `>&file` / `0<&-`）——
+      // `2>&1` 这类 `&` 紧跟前一非空字符 `<`/`>`；`&>` 这类 `&` 后紧跟 `>`。
+      const prev = i > 0 ? command[i - 1] : ''
+      if (prev === '<' || prev === '>' || command[i + 1] === '>') {
+        cur += ch
+        continue
+      }
+      if (cur.trim()) segs.push(cur.trim())
+      cur = ''
+      continue
+    }
     if (ch === '|' || ch === ';' || ch === '\n') {
       if (cur.trim()) segs.push(cur.trim())
       if (ch === '|' && command[i + 1] === '|') i += 1 // 吞掉第二个 |

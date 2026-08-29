@@ -61,6 +61,16 @@ for (const cmd of [
   'git -c a=1 -c b=2 -c c=3 -c d=4 status',
   'git -c a=1 -c b=2 -c c=3 -c d=4 -c e=5 -c f=6 log -1',
   'git -C D:/Work/a -C D:/Work/b -C D:/Work/c -C D:/Work/d branch -a',
+  // 2026-08-30 追加：单 `&` 切段（后台操作符）时 `&` 的重定向形态不切——
+  // `2>&1` / `&>file` 是重定向的一部分，若被当分隔符切段，`>&1` 段会被误判成
+  // 非 git 段（无子命令）→ 默认拒绝误伤整条只读命令。
+  'git status 2>&1',
+  'git log --format="%x09" 2>&1',
+  'git status &>/dev/null',
+  'git status >& log.txt',
+  // 2026-08-30 追加：`cmd1 & cmd2` 两条都执行（后台符分隔）；两条都只读 → 放行（不误伤）
+  'git status & git log -1',
+  'git log -1 & git status',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
@@ -100,6 +110,18 @@ for (const cmd of [
   'git -c a=1 -c b=2 -c c=3 -c d=4 push',
   'git -c a=1 -c b=2 -c c=3 -c d=4 -c e=5 -c f=6 reset --hard',
   'git -C D:/Work/repo -C D:/Work/other -C D:/Work/three -C D:/Work/four clean -fd',
+  // 2026-08-30 追加：单 `&`（bash 后台操作符）分隔的两条命令**都执行**——
+  // `git status & git push origin main` 的 push 真实运行，此前 `&` 不切段、
+  // 只扫段内首个 git 调用（只读 status）→ 破坏性 git 整段漏过守卫（实测漏网）。
+  // 现须 DENY；无空格连写（`status&git push`）与 `&&`/`;` 分隔同属已覆盖形态。
+  'git status & git push origin main',
+  'git log & git reset --hard',
+  'git status & git clean -fd',
+  'git status&git push origin main',
+  'git status & git remote add origin http://x',
+  'git status & git branch -D feature',
+  // 后台符后的破坏性 git 藏在引号/子 shell 里同须检出
+  'echo "abc & git push" & git push origin main',
 ]) {
   assert(`拒绝: ${cmd}`, gitGuardDeny(cmd) !== null)
 }
@@ -175,6 +197,12 @@ for (const cmd of [
   'powershell -NoProfile "git clean -fd" more',
   'cmd /q "git reset --hard" more',
   'cmd /q "git clean -fd" extra',
+  // 2026-08-30 追加：shell 执行包装器内用单 `&`（后台符）分隔的复合命令——
+  // `sh -c "git status & git push origin main"` 解包后切段扫描，push 须被检出
+  // （此前 `&` 不切段，解包后只扫首个 git 调用 = 只读 status，push 漏网）
+  'sh -c "git status & git push origin main"',
+  'bash -c "git log & git reset --hard"',
+  'powershell -c "git status & git clean -fd"',
 ]) {
   assert(`拒绝包装器: ${cmd}`, gitGuardDeny(cmd) !== null, JSON.stringify(gitGuardDeny(cmd)))
 }
