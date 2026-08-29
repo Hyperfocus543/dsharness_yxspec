@@ -12,8 +12,9 @@
 //
 // 轨迹门控徽标（叠层，不取代三态底色）：gate_policy==='artifact+trajectory' 的
 // 阶段在卡片右上叠加「迹」徽标，色随轨迹证据三态（gate_trajectory），
-// hover 显示门控证据 tooltip（策略/轨迹三态/原因/产物命中）。数据源 =
-// stageStore 已拉取的 /api/trajectory-gate 全量汇总，不额外发请求。
+// hover 显示门控证据 tooltip（策略/轨迹三态/原因/产物命中 + 证据详情行：
+// 产物文件数、轨迹 turn/end、工具成败计数、token —— 与 StageNode 徽标同口径）。
+// 数据源 = stageStore 已拉取的 /api/trajectory-gate 全量汇总，不额外发请求。
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
@@ -26,6 +27,7 @@ import { useToastStore } from '../../store/toastStore';
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { Button, EmptyState, Icon } from '../ui';
 import { I } from '../ui/icons';
+import { gateDetail, gateDetailLines, type GateEvidenceDetail } from '../../utils/gateEvidence';
 
 const GROUP_LABEL: Record<string, string> = {
   ACQ: 'ACQ.4',
@@ -88,6 +90,8 @@ export const GateOverview: React.FC = () => {
   const dshError = useStageStore((s) => s.dshError);
   const loadDshState = useStageStore((s) => s.loadDshState);
   const stages = useStageStore((s) => s.stages);
+  // 轨迹门控全量 payload（StageNode 徽标已同数据源复用；门控证据详情 tooltip 数据源）
+  const trajectoryGates = useStageStore((s) => s.trajectoryGates);
   const { dispatch, sending, dispatchingCmd } = useStageDispatch();
   const pushToast = useToastStore((s) => s.push);
   const projectPath = useProjectStore((s) => s.current?.path || '');
@@ -102,8 +106,13 @@ export const GateOverview: React.FC = () => {
       policy: s.gate_policy,
       status: s.gate_trajectory ?? null,
       reason: s.gate_reason ?? null,
+      // 门控证据详情（v2 tooltip）：stageStore 已把 /api/trajectory-gate 全量 payload
+      // 存进 trajectoryGates（与徽标同数据源、零新请求）——和 StageNode 徽标同口径，
+      // hover 时展示产物命中/文件数 + 轨迹 turn/end + 工具成败计数 + token 的具体证据，
+      // 替代抽象三态文案。
+      detail: gateDetail(trajectoryGates[token]),
     };
-  }, [stages]);
+  }, [stages, trajectoryGates]);
 
   const cards = React.useMemo<GateCardData[]>(() => {
     if (!dshState?.stages) return [];
@@ -303,6 +312,8 @@ interface TrajGateInfo {
   policy: 'artifact' | 'artifact+trajectory';
   status: 'verified' | 'unverified' | 'blocked' | null;
   reason: string | null;
+  /** 门控证据详情（v2 tooltip：产物命中/文件数、轨迹 turn/end、工具成败、token；无 → null） */
+  detail?: GateEvidenceDetail | null;
 }
 
 const GateCard: React.FC<{
@@ -321,11 +332,15 @@ const GateCard: React.FC<{
   const trajBadge = trajGate?.policy === 'artifact+trajectory'
     ? TRAJ_BADGE[trajGate.status ?? 'unverified']
     : null;
+  // 门控证据详情行（v2 tooltip：与 StageNode 徽标同口径，复用 gateEvidence.ts）；
+  // 产物命中/文件数 + 轨迹 turn/end + 工具成败计数 + token，替代抽象三态文案。
+  const evidenceLines = trajGate?.detail ? gateDetailLines(trajGate.detail) : [];
   const trajTooltip = [
     `门控策略：${trajGate?.policy ?? 'artifact'}`,
     `产物：${card.gate?.spec_hit ? '已命中' : '缺失'}`,
     `轨迹证据：${trajGate?.status ? (TRAJ_BADGE[trajGate.status]?.label ?? trajGate.status) : '未参与/无数据'}`,
     trajGate?.reason ? `判定：${REASON_TEXT[trajGate.reason] ?? trajGate.reason}` : null,
+    ...(evidenceLines.length > 0 ? ['', '—— 门控证据 ——', ...evidenceLines] : []),
   ]
     .filter((l): l is string => Boolean(l))
     .join('\n');
