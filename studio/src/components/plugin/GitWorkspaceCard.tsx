@@ -20,6 +20,7 @@ import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
 import { getGitDiff, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
+import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -370,9 +371,20 @@ export const GitWorkspaceCard: React.FC = () => {
   const [wsDir, setWsDir] = React.useState('');
   const [wsInitDir, setWsInitDir] = React.useState('');
   const [wsFormError, setWsFormError] = React.useState<string | null>(null);
-  // 分支切换（区块 C）：首次展开时拉 branches，选中后 checkout
+  // 分支切换（区块 C）：首次展开时拉 branches，选中后 checkout。
+  // 分组派生纯前端（utils/gitBranches.groupGitBranches）：本地分支在前、
+  // 远端按 remote 分组（多远端仓库一眼可分），checkout 的 value 恒为原始分支名
+  // （不改变既有 checkout 语义 —— 远端分支仍按原样 checkout）。
   const [branchPanelOpen, setBranchPanelOpen] = React.useState(false);
   const [branches, setBranches] = React.useState<string[]>([]);
+  const branchGroups = React.useMemo<GitBranchGroup[]>(
+    () => groupGitBranches(branches, status?.branch ?? null),
+    [branches, status?.branch],
+  );
+  const branchTotal = React.useMemo(
+    () => branchGroups.reduce((n, g) => n + g.branches.length, 0),
+    [branchGroups],
+  );
   const [branchLoading, setBranchLoading] = React.useState(false);
   const [branchValue, setBranchValue] = React.useState('');
   const [branchError, setBranchError] = React.useState<string | null>(null);
@@ -949,12 +961,18 @@ export const GitWorkspaceCard: React.FC = () => {
                   ) : branchPanelOpen ? (
                     <>
                       <option value="" disabled>
-                        选择分支…
+                        选择分支…（{branchTotal}）
                       </option>
-                      {branches.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
+                      {/* 分组下拉：本地分支在前，远端按 remote 分组（多远端一眼可分）。
+                          当前分支标 ●（仅本地）；checkout 的 value 恒为原始分支名，语义不变。 */}
+                      {branchGroups.map((g) => (
+                        <optgroup key={g.label} label={`${g.label}（${g.branches.length}）`}>
+                          {g.branches.map((b) => (
+                            <option key={b.value} value={b.value}>
+                              {b.current ? `● ${b.label}` : b.label}
+                            </option>
+                          ))}
+                        </optgroup>
                       ))}
                     </>
                   ) : (
