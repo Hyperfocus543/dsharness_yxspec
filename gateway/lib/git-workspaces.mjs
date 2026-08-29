@@ -384,10 +384,10 @@ export function parseNumstat(out) {
  * fetch 落后提交摘要（纯函数，供 fetch 结果展示）。
  * 入参 = fetch 前后各一次 `git rev-list --count HEAD..@{u}` 的 stdout（trim 后为整数串）。
  * 返回 { before, after, delta }：before/after 为该时刻落后上游的提交数，
- * delta = before - after（正 = 这次 fetch 拉到了 N 个新提交；0 = 无更新）。
- * 符号说明：`fetch` 拉回上游提交后本地落后数下降（`HEAD..@{u}` 变少），
- * 故「拉到 N 个」对应 before - after = N（正）；反之为负（远端新增提交，
- * 本地未动，落后数反而变多）。
+ * delta = after - before（正 = 这次 fetch 拉到了 N 个新提交；0 = 无更新）。
+ * 符号说明：`fetch` 只推进远端跟踪分支（@{u}）而不动本地 HEAD，落后数
+ * （`HEAD..@{u}`）在 fetch 后是**上升**的（0 → N）——「拉到 N 个」对应
+ * after - before = N（正）；远端无新提交时 after === before，delta 0。
  * 任一边缺上游（如首次 push 前无 @{u}，rev-list 输出空）→ null（前端不展示）。
  * @param {string|null|undefined} beforeOut fetch 前 rev-list stdout
  * @param {string|null|undefined} afterOut fetch 后 rev-list stdout
@@ -403,7 +403,7 @@ export function fetchBehindSummary(beforeOut, afterOut) {
   const before = parse(beforeOut)
   const after = parse(afterOut)
   if (before == null || after == null) return null
-  return { before, after, delta: before - after }
+  return { before, after, delta: after - before }
 }
 
 /**

@@ -246,14 +246,16 @@ test('parseNumstat：非字符串 → null', () => {
 })
 
 test('fetchBehindSummary：fetch 前后落后数 + 增量', () => {
-  // 拉到 3 个新提交：落后 3 → 0（delta = before - after = 3）
-  assert.deepEqual(fetchBehindSummary('3\n', '0\n'), { before: 3, after: 0, delta: 3 })
-  // 落后 2 → 1（拉到 1 个）
-  assert.deepEqual(fetchBehindSummary('2', '1'), { before: 2, after: 1, delta: 1 })
+  // git fetch 只推进远端跟踪分支（@{u}）不动 HEAD，落后数在 fetch 后上升：
+  // 落后 0 → 3（delta = after - before = 3，拉到 3 个新提交）
+  assert.deepEqual(fetchBehindSummary('0\n', '3\n'), { before: 0, after: 3, delta: 3 })
+  // 落后 1 → 3（拉到 2 个）
+  assert.deepEqual(fetchBehindSummary('1', '3'), { before: 1, after: 3, delta: 2 })
   // 无更新：落后数不变（delta 0）
   assert.deepEqual(fetchBehindSummary('0', '0'), { before: 0, after: 0, delta: 0 })
-  // 远端新增了提交但本地还没 merge：落后反而变多（delta 为负，本地未拉到新提交）
-  assert.deepEqual(fetchBehindSummary('1', '4'), { before: 1, after: 4, delta: -3 })
+  // 落后 4 → 1（fetch 后落后反而变少——本地相对新远端只差 1，实际是本地 HEAD 之外
+  // 的部分被 fetch 追赶上的极端情形；负数 = 落后数下降，不属于「拉到新提交」的常规语义）
+  assert.deepEqual(fetchBehindSummary('4', '1'), { before: 4, after: 1, delta: -3 })
 })
 
 test('fetchBehindSummary：任一边缺上游 / 非数字 → null（前端不展示）', () => {
