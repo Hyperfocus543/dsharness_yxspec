@@ -1308,6 +1308,11 @@ export const GitWorkspaceCard: React.FC = () => {
                       await loadBranches().catch(() => {});
                       return;
                     }
+                    // 收起分支列表：纯折叠面板，不触发 checkout（只看不切时的退出路径）
+                    if (e.target.value === '__close__') {
+                      setBranchPanelOpen(false);
+                      return;
+                    }
                     setBranchValue(e.target.value);
                     if (e.target.value) await doCheckout(e.target.value);
                   }}
@@ -1323,6 +1328,10 @@ export const GitWorkspaceCard: React.FC = () => {
                       <option value="" disabled>
                         选择分支…（{branchTotal}）
                       </option>
+                      {/* 收起分支列表：纯折叠面板、不触发 checkout —— 面板一旦展开
+                          只能靠 checkout 或切工作区退出，「只看不切」的用户会被困在
+                          展开列表里；给一条明确的退出路径。 */}
+                      <option value="__close__">收起分支列表</option>
                       {/* 分组下拉：本地分支在前，远端按 remote 分组（多远端一眼可分）。
                           当前分支标 ●（仅本地）；checkout 的 value 恒为原始分支名，语义不变。 */}
                       {branchGroups.map((g) => (
