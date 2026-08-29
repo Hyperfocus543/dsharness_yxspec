@@ -92,13 +92,12 @@ function isWindowsDriveRoot(p) {
 
 /**
  * 工作区 id 推导。
- * source:'auto' → 恒 'default'；source:'manual' → 优先 ws-<n> 递增，其次 root hash 短码。
- * @param {object} entry { root, source }
+ * source:'auto' → 恒 'default'；source:'manual' → 取最小未占用的 ws-<n> 递增。
+ * @param {object} entry { source }
  * @param {string[]} existingIds 已占用 id（自动条目含 'default'）
  */
-function workspaceIdFor({ root, source }, existingIds) {
+function workspaceIdFor({ source }, existingIds) {
   if (source === 'auto') return 'default'
-  const rootNorm = String(root).replace(/\\/g, '/')
   for (let n = 1; ; n++) {
     const id = `ws-${n}`
     if (!existingIds.includes(id)) return id
