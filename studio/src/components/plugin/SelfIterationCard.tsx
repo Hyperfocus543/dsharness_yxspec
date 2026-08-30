@@ -40,6 +40,7 @@ import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
 import { useGitStore } from '../../store/gitStore';
 import { buildSelfIterateCommand, clampMaxIterInput } from '../../utils/selfIterateCommand';
+import { shouldDefaultResume } from '../../utils/selfIterationResume';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
@@ -442,6 +443,9 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   );
   // 启动表单「阶段」是否已被用户改过：手动选择优先，预填只在仍为空时生效
   const stageTouchedRef = React.useRef(false);
+  // 「断点恢复」是否已被用户手动改过：默认勾选判定只在用户未干预时套用
+  // （手动改过 → 尊重用户选择，刷新/重挂不覆盖），与 stageTouchedRef 同范式。
+  const resumeTouchedRef = React.useRef(false);
   // 启动联动：本次启动目标阶段（sending 期间瀑布高亮该块 + 运行中徽标；取消/结束不残留）
   const [targetStage, setTargetStage] = React.useState('');
   // 阶段评分瀑布区 DOM 引用（启动后滚进视区，聚焦轮次瀑布）
@@ -508,6 +512,19 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageOptions, data, defaultStage]);
+
+  // 启动表单「断点恢复」默认勾选：同阶段 run 进行中（有完成轮次、未收敛）→ 预勾
+  // --resume。用户没勾就启动时，@yxspec/self-iteration 的 openRun 会因
+  // `st.stage===stage && opts.resume` 不成立而 emptyState 重置 run-state：冻结基线
+  // 丢失（首轮重新锚定）、轮次计数归零 —— 续跑几乎是必然意图，默认勾上防误重置。
+  // 只在用户未手动改过时套用（resumeTouchedRef 之后改 → 尊重用户选择，不覆盖）；
+  // 预填阶段变化后重判（同一次选阶段 → 勾选跟随），表单最终状态恒等于用户意图。
+  React.useEffect(() => {
+    if (resumeTouchedRef.current) return;
+    const next = shouldDefaultResume(data?.state, stageSel);
+    if (resumeSel !== next) setResumeSel(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, stageSel]);
 
   // 启动新迭代：拼命令 → 空阶段 warn → 派活 → 派活完自动刷新卡内数据（新轮次留痕/新 run 摘要）
   const onStart = async () => {
@@ -741,16 +758,34 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
           </label>
           <label
             className="flex items-end pb-1.5 gap-1.5 text-xs text-zinc-500 cursor-pointer"
-            title="--resume：从上一会话断点续跑"
+            title={
+              resumeSel
+                ? '--resume：从 run-state 断点续跑（保留该阶段基线/轮次计数）'
+                : '--resume：从 run-state 断点续跑（保留该阶段基线/轮次计数）。\n同阶段 run 进行中时默认勾选，防误重置 run-state'
+            }
           >
             <input
               type="checkbox"
               checked={resumeSel}
-              onChange={(e) => setResumeSel(e.target.checked)}
+              onChange={(e) => {
+                if (sending) return;
+                resumeTouchedRef.current = true;
+                setResumeSel(e.target.checked);
+              }}
               disabled={sending}
               className="accent-emerald-600 disabled:opacity-50"
             />
             断点恢复
+            {/* 默认预勾提示：同阶段 run 进行中 → 「续跑」徽标（语义同阶段预填的
+                「阶段已预填」角标；用户手动改过 → 不再提示，尊重用户选择） */}
+            {resumeSel && !resumeTouchedRef.current && (
+              <span
+                className="shrink-0 px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-[10px] font-medium"
+                title="同阶段 run 进行中：默认续跑（保留基线/轮次）。取消勾选将启动新 run 并重置 run-state。"
+              >
+                续跑
+              </span>
+            )}
           </label>
         </div>
         <div className="flex items-center gap-2">
