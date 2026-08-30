@@ -558,9 +558,6 @@ const cloneSpawns = new Map()
 /** clone 进度快照注册表（append-only）：key → 进度对象（前端轮询 /api/git/clone-progress）。 */
 const cloneProgress = new Map()
 
-/** chunk 边界粘滞尾（stderr 数据块可能切半行，粘住下一块再整行解析）。 */
-let stderrTail = ''
-
 /** 进度轮询条数上限（防泄漏兜底；正常 clone 只会写 1 条/次） */
 const CLONE_PROGRESS_MAX = 50
 
@@ -600,6 +597,11 @@ export function parseCloneProgressLine(line) {
  */
 export function cloneWithProgress(args, { cwd, key, timeoutMs = GIT_OP_TIMEOUT_MS }) {
   return new Promise((resolve_) => {
+    // chunk 边界粘滞尾（stderr 数据块可能切半行，粘住下一块再整行解析）。
+    // 必须为本次 clone 的闭包私有：并发 clone 共用模块级变量会让一条 clone 的
+    // 半行残留混进另一条的 chunk，进度百分比被拼接串位/丢行（同一 chunk 流
+    // 只属于一个子进程，粘滞尾也应随之隔离）。
+    let stderrTail = ''
     let stdout = ''
     let stderr = ''
     // 终态只落一次：spawn 失败时 Node 会**双 fire**（实测 ENOENT 先 error 后 close），
