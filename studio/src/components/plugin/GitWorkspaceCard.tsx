@@ -1680,7 +1680,16 @@ export const GitWorkspaceCard: React.FC = () => {
               重试
             </button>
           </div>
-        ) : !audit || audit.length === 0 ? (
+        ) : audit === null ? (
+          // audit 初始为 null（未加载）≠ 空数组（已确认无留痕）：与阶段留痕同口径——
+          // null 归入骨架屏，避免首帧误闪「暂无 git 写操作留痕」再切到加载态。
+          // 只认 null：刷新留痕（audit 已有内容 + auditLoading=true）不闪骨架，静默保持旧内容。
+          <div className="space-y-1" role="status" aria-busy="true" aria-label="正在加载操作留痕">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-8 bg-zinc-100 rounded animate-pulse" />
+            ))}
+          </div>
+        ) : audit.length === 0 ? (
           <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
             {auditError ? '操作留痕加载失败' : '暂无 git 写操作留痕（fetch/pull/push/checkout/clone/init 后自动记录）'}
           </div>
