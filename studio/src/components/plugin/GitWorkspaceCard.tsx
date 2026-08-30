@@ -649,6 +649,9 @@ export const GitWorkspaceCard: React.FC = () => {
   // 单靠它区分不了三个按钮哪个在跑；busyAction 记下本次动作，
   // 只有它自己显示「执行中…」，其余按钮保持原 label 但同样禁用。
   const [busyAction, setBusyAction] = React.useState<'fetch' | 'pull' | 'push' | null>(null);
+  // fetch/pull/push 失败的行内错误：toast 之外给持久错误态（失败原因可回看、可据此恢复，
+  // 如 push 被拒时提示先 pull）；新操作开始/切工作区时清空，不残留陈旧错误。
+  const [opError, setOpError] = React.useState<string | null>(null);
   // git 写操作执行时长反馈：clone/init/fetch/pull/push 这类长操作（大仓库克隆/拉取
   // 常 30s~2min）期间递增秒数，替代静态「执行中…」——用户能区分「还在跑」和「卡死」。
   // 复用 operating 全局互斥锁（clone/init 也走 store.gitOperate → operating=true，
@@ -696,6 +699,7 @@ export const GitWorkspaceCard: React.FC = () => {
     setPushConfirmOpen(false);
     setConfirmTarget(null);
     setRollbackReason('');
+    setOpError(null);
   }, [activeWorkspace?.id]);
 
   // 工作区校验（前端只做空串拦截，路径存在性由网关校验）
@@ -877,10 +881,13 @@ export const GitWorkspaceCard: React.FC = () => {
   };
 
   // git 写操作（fetch/pull/push）：成功后刷新状态，失败推 error toast
+  // 并给行内持久错误（toast 之外失败原因可回看——push 被拒/无权限/网络抖动，
+  // toast 消逝后仍有恢复线索可循；新操作开始即清空，不残留陈旧错误）。
   const doGitOperate = async (action: 'fetch' | 'pull' | 'push') => {
     if (!activeWorkspace) return;
     const label = action === 'fetch' ? '拉取远端' : action === 'pull' ? '同步远端' : '推送本地提交';
     setBusyAction(action);
+    setOpError(null);
     try {
       const res = await useGitStore.getState().gitOperate({ root: activeWorkspace.root, action });
       // fetch 成功后若网关返回了落后提交摘要（before/after/delta），拼进成功 toast：
@@ -911,7 +918,9 @@ export const GitWorkspaceCard: React.FC = () => {
       // → 分支缓存失效（面板展开强制重拉，收起清空留待下次打开），下拉不再显示陈旧分支
       invalidateBranches();
     } catch (e: any) {
-      pushToast('error', `${label}失败：${e?.message || e}`);
+      const msg = e?.message || String(e);
+      pushToast('error', `${label}失败：${msg}`);
+      setOpError(msg);
     } finally {
       setBusyAction(null);
     }
@@ -1472,6 +1481,29 @@ export const GitWorkspaceCard: React.FC = () => {
           )}
 
           {branchError && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">{branchError}</div>}
+          {/* fetch/pull/push 失败的行内错误（持久态）：toast 之外失败原因可回看，
+              如 push 被拒 → 提示「先 pull 同步」；切工作区/新操作开始即清空。 */}
+          {opError && (
+            <div
+              className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 space-y-1"
+              role="alert"
+            >
+              <div className="inline-flex items-center gap-1">
+                <Icon name={I.warn} size={11} weight="fill" className="shrink-0" />
+                操作失败：{opError}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setOpError(null)}
+                  className="px-1.5 py-0.5 rounded bg-white border border-red-200 text-[11px] text-red-700 hover:bg-red-100 transition-all active:scale-[0.98]"
+                  title="关闭错误提示"
+                >
+                  知道了
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
