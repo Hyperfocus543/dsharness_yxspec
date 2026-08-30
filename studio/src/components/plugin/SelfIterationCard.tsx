@@ -652,7 +652,8 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               type="button"
               onClick={() => setModeSel('product')}
               aria-pressed={modeSel === 'product'}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] ${
+              disabled={sending}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
                 modeSel === 'product' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
               }`}
               title="默认：评分本阶段产物"
@@ -664,7 +665,8 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               type="button"
               onClick={() => setModeSel('framework')}
               aria-pressed={modeSel === 'framework'}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] ${
+              disabled={sending}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
                 modeSel === 'framework' ? 'bg-white text-emerald-700 shadow-sm' : 'text-zinc-500 hover:bg-white/50'
               }`}
               title="评分框架代码本身效率，复用 --eval-framework 效率对比"
@@ -685,10 +687,12 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
             <select
               value={stageSel}
               onChange={(e) => {
+                if (sending) return;
                 stageTouchedRef.current = true;
                 setStageSel(e.target.value);
               }}
-              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              disabled={sending}
+              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-zinc-50"
             >
               <option value="" disabled hidden>选择阶段</option>
               {stageOptions.map((t) => (
@@ -704,7 +708,8 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               max={10}
               value={maxIterSel}
               onChange={(e) => setMaxIterSel(clampMaxIterInput(e.target.value))}
-              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              disabled={sending}
+              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-zinc-50"
             />
           </label>
           <label className="flex flex-col gap-1 text-[10px] text-zinc-400">
@@ -714,7 +719,8 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               placeholder="如 Total>=80 且门禁全绿"
               value={goalSel}
               onChange={(e) => setGoalSel(e.target.value)}
-              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              disabled={sending}
+              className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-zinc-50"
             />
           </label>
           <label
@@ -725,7 +731,8 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               type="checkbox"
               checked={resumeSel}
               onChange={(e) => setResumeSel(e.target.checked)}
-              className="accent-emerald-600"
+              disabled={sending}
+              className="accent-emerald-600 disabled:opacity-50"
             />
             断点恢复
           </label>
