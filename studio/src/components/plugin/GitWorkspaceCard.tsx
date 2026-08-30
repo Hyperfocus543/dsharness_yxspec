@@ -667,7 +667,11 @@ export const GitWorkspaceCard: React.FC = () => {
   // EmptyState，见 403-425 行），因此本分支实际只有两态 —— git 可用（sage 绿）或
   // git 不可用（amber 警告：网关在线但工作区非 git 仓库 / 未装 git）。
   // 旧实现把 !gitOk 渲染成「未连接」灰标，与下方红色 error 条语义冲突（网关明明连着）。
+  // 关键前置：status 为 null（未加载/首拉/刷新中）时 gitOk 恒 false —— 不能把「未知」
+  // 渲染成「git 不可用」的 amber 判定。下方状态区用骨架/错误态承接 status=null 时，
+  // 顶部徽标给「状态加载中…」灰点；status 到手后再按 gitAvailable 出真实判定。
   const gitOk = status?.gitAvailable === true;
+  const gitStateKnown = !!status;
   // 游离 HEAD（git checkout <commit>/<tag> 后 detached；网关 status.detached 已解析）：
   // 分支框收起态给「游离 HEAD」占位（不再是裸「—」），分支区块警示徽标 amber 强调。
   const detached = status?.detached === true;
@@ -1076,7 +1080,13 @@ export const GitWorkspaceCard: React.FC = () => {
           </span>
           <span className="text-sm font-bold text-zinc-800">Git 工作区管控</span>
           <span className="text-xs text-zinc-400">
-            {gitOk ? `（${dirtyCount} 处改动）` : !status ? (loading ? '（状态加载中…）' : '（状态不可用）') : '（git 不可用，状态未知）'}
+            {gitOk
+              ? `（${dirtyCount} 处改动）`
+              : !gitStateKnown
+                ? loading
+                  ? '（状态加载中…）'
+                  : '（状态不可用）'
+                : '（git 不可用，状态未知）'}
           </span>
         </div>
         <button
@@ -1605,21 +1615,53 @@ export const GitWorkspaceCard: React.FC = () => {
                 游离 HEAD
               </span>
             )}
+            {/* 连接状态徽标：status 未就绪（首拉/刷新中）时显示「状态加载中…」灰点，
+                不把「未知」误渲染成 amber「git 不可用」判定（与下方加载骨架同口径，
+                避免慢网关上误导用户以为仓库没配 git）。 */}
             <span
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
-                gitOk ? 'bg-sage-100 text-sage-700' : 'bg-amber-100 text-amber-800'
+                gitOk
+                  ? 'bg-sage-100 text-sage-700'
+                  : gitStateKnown
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-zinc-100 text-zinc-500'
               }`}
-              title={gitOk ? 'git 可用（网关已连）' : '网关在线但 git 不可用：工作区非 git 仓库或未安装 git（详见下方错误条）'}
+              title={
+                gitOk
+                  ? 'git 可用（网关已连）'
+                  : gitStateKnown
+                    ? '网关在线但 git 不可用：工作区非 git 仓库或未安装 git（详见下方错误条）'
+                    : loading
+                      ? '正在加载工作区状态…'
+                      : '网关未响应，工作区状态不可用'
+              }
             >
-              <span className={`inline-block w-1.5 h-1.5 rounded-full ${gitOk ? 'bg-sage-500' : 'bg-amber-500'}`} aria-hidden />
-              {gitOk ? '已连接' : 'git 不可用'}
+              <span
+                className={`inline-block w-1.5 h-1.5 rounded-full ${gitOk ? 'bg-sage-500' : gitStateKnown ? 'bg-amber-500' : 'bg-zinc-400'} ${
+                  !gitStateKnown && loading ? 'animate-pulse' : ''
+                }`}
+                aria-hidden
+              />
+              {gitOk ? '已连接' : gitStateKnown ? 'git 不可用' : loading ? '状态加载中…' : '状态不可用'}
             </span>
           </div>
         </div>
-        {/* 分支名：游离 HEAD 时 status.branch=null → 显示「游离 HEAD」（mono 琥珀），
-            而非误导性的裸「—」（裸「—」会被误读成无分支/未知，游离态是明确已知的状态）。 */}
-        <div className={`font-mono text-sm truncate ${detached ? 'text-amber-700' : 'text-zinc-800'}`} title={detached ? 'HEAD 游离（detached）：不在任何分支上' : (status.branch ?? '')}>
-          {detached ? '游离 HEAD' : (status.branch || '—')}
+        {/* 分支名：status 未就绪（首拉/刷新中）→ 灰「—」占位（不给「游离 HEAD」或
+            「—」的误导性确定态）；游离 HEAD（status.branch=null）→「游离 HEAD」琥珀。
+            游离态是明确已知状态（detached=true），裸「—」会被误读成无分支/未知。 */}
+        <div
+          className={`font-mono text-sm truncate ${detached ? 'text-amber-700' : 'text-zinc-800'}`}
+          title={
+            !gitStateKnown
+              ? loading
+                ? '正在加载工作区状态…'
+                : '工作区状态不可用'
+              : detached
+                ? 'HEAD 游离（detached）：不在任何分支上'
+                : (status.branch ?? '')
+          }
+        >
+          {!gitStateKnown ? '—' : detached ? '游离 HEAD' : (status.branch || '—')}
         </div>
         {/* 上游跟踪分支：porcelain 首行 `## main...origin/main` 的 `origin/main`
             （网关 getStatus.upstream 已解析；无上游/游离/老网关 → null，不渲染）。
