@@ -1522,7 +1522,7 @@ export interface GitFetchBehind {
   before: number;
   /** fetch 后落后上游的提交数 */
   after: number;
-  /** before - after：正 = 这次 fetch 拉到了 N 个新提交（落后数下降）；0 = 无更新 */
+  /** after - before：正 = 这次 fetch 拉到了 N 个新提交（落后数上升）；0 = 无更新 */
   delta: number;
 }
 
