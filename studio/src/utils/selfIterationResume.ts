@@ -58,3 +58,27 @@ export function defaultRunIteration(
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 1 || n > 10) return null;
   return Math.floor(n);
 }
+
+/**
+ * 断点恢复时「收敛目标」应预填的 run goal：同阶段 run 进行中（可续跑）→ 返回该 run
+ * 的目标文案（run-state.json 的 goal）；否则 → null（表单维持空框）。
+ * 判定与 shouldDefaultResume 严格一致——预填目标只在「将要续跑」时才有意义：
+ * 插件 openRun 续跑分支是 `else if (opts.goal) st.goal = opts.goal` ——表单 goal 为空时
+ * **保留** run 原目标（语义上不重置），但表单空框会让用户误以为续跑会清除目标，
+ * 或在空白处另填一个目标静默覆盖原判定（所见 ≠ 所跑）。预填 + 只读角标让
+ * 「表单目标 = run 实际目标」一眼对齐，与轮数预算预填（defaultRunIteration）同范式。
+ * 空串目标（该 run 从未设过）→ null（无内容可预填，表单维持空框不误标「续跑目标」）。
+ * 非运行态 / 阶段不符 / 已收敛 → null（不预填，新 run 的目标由用户按需填写）。
+ * @param state run-state 摘要（/api/self-iteration 的 state；无 → null）
+ * @param stage 表单当前所选阶段（空 → 不预填）
+ */
+export function defaultRunGoal(
+  state: SelfIterationState | null | undefined,
+  stage: string | null | undefined,
+): string | null {
+  if (!shouldDefaultResume(state, stage)) return null;
+  const g = state?.goal;
+  if (typeof g !== 'string') return null;
+  const goal = g.trim();
+  return goal ? goal : null;
+}

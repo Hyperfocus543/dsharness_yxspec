@@ -43,7 +43,7 @@ import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
 import { useGitStore } from '../../store/gitStore';
 import { buildSelfIterateCommand, clampMaxIterInput } from '../../utils/selfIterateCommand';
-import { shouldDefaultResume, defaultRunIteration } from '../../utils/selfIterationResume';
+import { shouldDefaultResume, defaultRunIteration, defaultRunGoal } from '../../utils/selfIterationResume';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
@@ -452,6 +452,9 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // 「轮数」是否已被用户手动改过：run 预算预填只在用户未干预时套用
   // （续跑语义下用户打任意数字 = 有意重设预算，刷新/重挂不覆盖）。
   const maxIterTouchedRef = React.useRef(false);
+  // 「收敛目标」是否已被用户手动改过：run goal 预填只在用户未干预时套用
+  // （续跑语义下用户删空/另填 = 有意重设目标，刷新/重挂不覆盖）。
+  const goalTouchedRef = React.useRef(false);
   // 启动联动：本次启动目标阶段（sending 期间瀑布高亮该块 + 运行中徽标；取消/结束不残留）
   const [targetStage, setTargetStage] = React.useState('');
   // 阶段评分瀑布区 DOM 引用（启动后滚进视区，聚焦轮次瀑布）
@@ -548,6 +551,20 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     if (maxIterTouchedRef.current || !resumeSel) return;
     const runMax = defaultRunIteration(data?.state, stageSel);
     if (runMax != null && maxIterSel !== String(runMax)) setMaxIterSel(String(runMax));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, stageSel, resumeSel]);
+
+  // 启动表单「收敛目标」run goal 预填：同阶段 run 进行中且「断点恢复」勾选
+  // （resumeSel=true）时，目标框预填该 run 的 goal —— 插件 openRun 续跑分支是
+  // `else if (opts.goal) st.goal = opts.goal`：表单 goal 为空时**保留** run 原目标，
+  // 但空框会让用户误以为续跑会清除目标，或在空白处另填一个目标静默覆盖原判定
+  // （所见 ≠ 所跑）。预填 + 输入框旁「续跑目标」角标让表单目标 = run 实际目标，
+  // 与轮数预算预填（defaultRunIteration）同范式。只在用户未手动改过目标
+  // （goalTouchedRef）且确实在续跑时套用；run 无目标（空串）→ 不预填，表单维持空框。
+  React.useEffect(() => {
+    if (goalTouchedRef.current || !resumeSel) return;
+    const runGoal = defaultRunGoal(data?.state, stageSel);
+    if (runGoal != null && goalSel !== runGoal) setGoalSel(runGoal);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, stageSel, resumeSel]);
 
@@ -791,10 +808,25 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               type="text"
               placeholder="如 Total>=80 且门禁全绿"
               value={goalSel}
-              onChange={(e) => setGoalSel(e.target.value)}
+              onChange={(e) => {
+                if (sending) return;
+                goalTouchedRef.current = true; // 用户手动改目标 → 不再按 run goal 覆盖
+                setGoalSel(e.target.value);
+              }}
               disabled={sending}
               className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-zinc-50"
             />
+            {/* 续跑目标角标：断点恢复勾选 + 目标未被手动改过时，标注当前值 =
+                该 run 的 goal（续跑时插件保留 run 原目标，表单空框会误以为清除/另填覆盖）。
+                用户手动改过目标 / 取消断点恢复 / run 无目标 → 不再提示（尊重用户有意重设/开新 run）。 */}
+            {resumeSel && !goalTouchedRef.current && defaultRunGoal(data?.state, stageSel) != null && (
+              <span
+                className="self-start shrink-0 px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-[10px] font-medium"
+                title="该 run 的收敛目标：续跑时插件保留此目标（表单为空不会清除）。手动修改目标将重设判定基准。"
+              >
+                续跑目标
+              </span>
+            )}
           </label>
           <label
             className="flex items-end pb-1.5 gap-1.5 text-xs text-zinc-500 cursor-pointer"
