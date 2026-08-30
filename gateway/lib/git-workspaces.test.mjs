@@ -202,28 +202,42 @@ test('gitOperate checkout：branch 必须是可解析的 git 引用（. / 目录
   // 本测试跑在当前 git 仓库（branch 只读列表走默认根 = 本仓库），路径名/`.` 应全被拒。
   const root = process.cwd().replace(/\\/g, '/')
 
-  // pathspec 形态：`.`（整树还原）、目录名、glob —— 均非有效引用 → bad-request
-  for (const b of ['.', 'src', '*.js', '..']) {
-    const r = await gitOperate({ root, action: 'checkout', args: { branch: b } })
-    assert.equal(r.ok, false, `checkout branch=${JSON.stringify(b)} 应拒绝`)
-    assert.equal(r.error, 'bad-request', `checkout branch=${JSON.stringify(b)} 应为 bad-request`)
-  }
+  // 审计隔离：成功 checkout 当前分支会 recordGitOp 追加审计 JSONL——本测试不设 env
+  // 会写进真实 runtime-data/git-workspace-audit.jsonl（每次测试运行污染运行时数据，
+  // 实测文件里堆积了数十条历史 checkout 留痕）。与文件内其他测试同口径：
+  // YXSPEC_GIT_AUDIT 指向临时文件，跑完清理。auditFilePath() 恒按当前生效 env 解析，
+  // 运行时设置立即生效，无需模块重载。
+  const dir = mkdtempSync(join(tmpdir(), 'gw-checkout-audit-'))
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_AUDIT = join(dir, 'audit.jsonl')
+  try {
+    // pathspec 形态：`.`（整树还原）、目录名、glob —— 均非有效引用 → bad-request
+    for (const b of ['.', 'src', '*.js', '..']) {
+      const r = await gitOperate({ root, action: 'checkout', args: { branch: b } })
+      assert.equal(r.ok, false, `checkout branch=${JSON.stringify(b)} 应拒绝`)
+      assert.equal(r.error, 'bad-request', `checkout branch=${JSON.stringify(b)} 应为 bad-request`)
+    }
 
-  // 空 / 含空格 → bad-request（既有校验不变）
-  const empty = await gitOperate({ root, action: 'checkout', args: {} })
-  assert.equal(empty.ok, false)
-  assert.equal(empty.error, 'bad-request')
-  const spaced = await gitOperate({ root, action: 'checkout', args: { branch: 'feat x' } })
-  assert.equal(spaced.ok, false)
-  assert.equal(spaced.error, 'bad-request')
+    // 空 / 含空格 → bad-request（既有校验不变）
+    const empty = await gitOperate({ root, action: 'checkout', args: {} })
+    assert.equal(empty.ok, false)
+    assert.equal(empty.error, 'bad-request')
+    const spaced = await gitOperate({ root, action: 'checkout', args: { branch: 'feat x' } })
+    assert.equal(spaced.ok, false)
+    assert.equal(spaced.error, 'bad-request')
 
-  // 合法引用（当前分支）→ 通过校验并执行成功（分支列表只读，不出意外）
-  const cur = await gitOperate({ root, action: 'branch' })
-  assert.equal(cur.ok, true, 'branch 只读列表应成功')
-  const curBranch = (cur.branches ?? []).find((b) => b !== '(HEAD detached)') ?? null
-  if (curBranch) {
-    const ok = await gitOperate({ root, action: 'checkout', args: { branch: curBranch } })
-    assert.equal(ok.ok, true, `checkout 当前分支 ${curBranch} 应成功`)
+    // 合法引用（当前分支）→ 通过校验并执行成功（分支列表只读，不出意外）
+    const cur = await gitOperate({ root, action: 'branch' })
+    assert.equal(cur.ok, true, 'branch 只读列表应成功')
+    const curBranch = (cur.branches ?? []).find((b) => b !== '(HEAD detached)') ?? null
+    if (curBranch) {
+      const ok = await gitOperate({ root, action: 'checkout', args: { branch: curBranch } })
+      assert.equal(ok.ok, true, `checkout 当前分支 ${curBranch} 应成功`)
+    }
+  } finally {
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 
