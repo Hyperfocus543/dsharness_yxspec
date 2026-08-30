@@ -1,7 +1,9 @@
-// git.mjs parsePorcelainHead 单测（porcelain v1 首行 → 分支/游离态解析）
+// git.mjs parsePorcelainHead 单测（porcelain v1 首行 → 分支/上游/游离态解析）
 // 运行：cd gateway && node test/git-status.test.mjs
 // 覆盖：
 //   - 正常分支：`main` / `main...origin/main` / 带方括号领先落后
+//   - 上游跟踪分支提取：`main...origin/main` → upstream='origin/main'（v2：旧实现丢弃，
+//     前端无法显示「领先/落后相对哪个远端分支」）；无上游（`main`）→ null
 //   - 游离 HEAD：`HEAD (no branch)` / `HEAD (detached at …)` 以及**括号内领先落后**
 //     （`HEAD (no branch, ahead 1, behind 2)`——旧实现把括号当分支名 → 误显示正常分支）
 //   - 首次提交前：`No commits yet on main`
@@ -24,30 +26,41 @@ const assert = (name, cond, extra = '') => {
 }
 
 console.log('== 1) 正常分支 ==')
-assert('main', JSON.stringify(parsePorcelainHead('main')) === JSON.stringify({ branch: 'main', detached: false }))
-assert('main...origin/main', JSON.stringify(parsePorcelainHead('main...origin/main')) === JSON.stringify({ branch: 'main', detached: false }))
-assert('main...origin/main（strip brackets）', JSON.stringify(parsePorcelainHead('main...origin/main')) === JSON.stringify({ branch: 'main', detached: false }))
+assert('main', JSON.stringify(parsePorcelainHead('main')) === JSON.stringify({ branch: 'main', upstream: null, detached: false }))
+assert(
+  'main...origin/main → upstream=origin/main',
+  JSON.stringify(parsePorcelainHead('main...origin/main')) === JSON.stringify({ branch: 'main', upstream: 'origin/main', detached: false }),
+  JSON.stringify(parsePorcelainHead('main...origin/main')),
+)
+assert(
+  'main...origin/main（strip brackets）→ upstream=origin/main',
+  JSON.stringify(parsePorcelainHead('main...origin/main')) === JSON.stringify({ branch: 'main', upstream: 'origin/main', detached: false }),
+)
+assert(
+  '带方括号区间由调用方剥离：branchInfo 已剥（main...origin/main）→ upstream=origin/main',
+  JSON.stringify(parsePorcelainHead('main...origin/main')) === JSON.stringify({ branch: 'main', upstream: 'origin/main', detached: false }),
+)
 
 console.log('== 2) 游离 HEAD（领先/落后在括号里）==')
-assert('HEAD (no branch)', JSON.stringify(parsePorcelainHead('HEAD (no branch)')) === JSON.stringify({ branch: null, detached: true }))
+assert('HEAD (no branch)', JSON.stringify(parsePorcelainHead('HEAD (no branch)')) === JSON.stringify({ branch: null, upstream: null, detached: true }))
 assert(
   'HEAD (no branch, ahead 1, behind 2)',
-  JSON.stringify(parsePorcelainHead('HEAD (no branch, ahead 1, behind 2)')) === JSON.stringify({ branch: null, detached: true }),
+  JSON.stringify(parsePorcelainHead('HEAD (no branch, ahead 1, behind 2)')) === JSON.stringify({ branch: null, upstream: null, detached: true }),
   JSON.stringify(parsePorcelainHead('HEAD (no branch, ahead 1, behind 2)')),
 )
 assert(
   'HEAD (detached at abc123)',
-  JSON.stringify(parsePorcelainHead('HEAD (detached at abc123)')) === JSON.stringify({ branch: null, detached: true }),
+  JSON.stringify(parsePorcelainHead('HEAD (detached at abc123)')) === JSON.stringify({ branch: null, upstream: null, detached: true }),
 )
 assert(
   'HEAD (detached from main, ahead 1)',
-  JSON.stringify(parsePorcelainHead('HEAD (detached from main, ahead 1)')) === JSON.stringify({ branch: null, detached: true }),
+  JSON.stringify(parsePorcelainHead('HEAD (detached from main, ahead 1)')) === JSON.stringify({ branch: null, upstream: null, detached: true }),
 )
 
 console.log('== 3) 首次提交前 ==')
 assert(
   'No commits yet on main',
-  JSON.stringify(parsePorcelainHead('No commits yet on main')) === JSON.stringify({ branch: 'main', detached: false }),
+  JSON.stringify(parsePorcelainHead('No commits yet on main')) === JSON.stringify({ branch: 'main', upstream: null, detached: false }),
 )
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)

@@ -223,25 +223,32 @@ export async function loadGitIndex(cwd) {
 }
 
 /**
- * 解析 porcelain v1 首行（`## <branch>...<upstream> [ahead N, behind M]`）→ 分支/游离态。
+ * 解析 porcelain v1 首行（`## <branch>...<upstream> [ahead N, behind M]`）→ 分支/上游/游离态。
  * 纯函数（可单测）：branchInfo 已剥掉尾部方括号区间。
  * 游离 HEAD 的领先/落后在**括号**里（`## HEAD (no branch, ahead 1, behind 2)`），
  * 不匹配 `[...]` —— 若把括号当分支名会得到 branch="HEAD (no branch, ahead 1…)"
  * 且 detached=false，前端把游离态显示成正常分支名。故单独识别游离头部后
  * 再剥离括号区间。
+ * 上游跟踪分支：`## main...origin/main` 里的 `origin/main` 是本分支跟踪的远端分支
+ * （ahead/behind 统计的就是相对它的距离）。旧实现丢弃它，前端只显示分支名与
+ * 「领先 N · 落后 M」，却不显示「领先/落后相对哪个远端分支」——现在保留给前端。
+ * 无上游（未 push 前）/游离 HEAD → upstream:null。
  * @param {string} branchInfo
- * @returns {{ branch: string|null, detached: boolean }}
+ * @returns {{ branch: string|null, upstream: string|null, detached: boolean }}
  */
 export function parsePorcelainHead(branchInfo) {
   if (branchInfo.startsWith('No commits yet on ')) {
-    return { branch: branchInfo.slice('No commits yet on '.length) || null, detached: false }
+    return { branch: branchInfo.slice('No commits yet on '.length) || null, upstream: null, detached: false }
   }
   if (branchInfo.startsWith('HEAD (no branch') || branchInfo.startsWith('HEAD (detached')) {
-    return { branch: null, detached: true }
+    return { branch: null, upstream: null, detached: true }
   }
   const paren = branchInfo.match(/ \(.*\)$/)
   const plain = paren ? branchInfo.slice(0, paren.index).trim() : branchInfo.trim()
-  return { branch: plain.split('...')[0] || null, detached: false }
+  const [branch, ...rest] = plain.split('...')
+  // 分隔符后是「未被 `?` 吞掉的空段」时（`main...` 末端仍带 `...`），按无上游处理
+  const upstream = rest.length > 0 && rest[0] ? rest.join('...') : null
+  return { branch: branch || null, upstream, detached: false }
 }
 
 /**
@@ -255,6 +262,9 @@ export async function getStatus(root) {
   const base = {
     gitAvailable: false,
     branch: null,
+    // 当前分支跟踪的远端分支（`main...origin/main` 的 `origin/main`；无上游 → null）。
+    // 与 ahead/behind 配套：头部显示「领先 N · 落后 M」时能看出相对哪个远端分支。
+    upstream: null,
     detached: false,
     head: null,
     dirtyFiles: [],
@@ -313,6 +323,8 @@ export async function getStatus(root) {
     const branchInfo = bracket ? headPart.slice(0, bracket.index).trim() : headPart.trim()
     const parsed = parsePorcelainHead(branchInfo)
     base.branch = parsed.branch
+    // 上游跟踪分支（`main...origin/main` → `origin/main`；无上游/游离 → null）
+    base.upstream = parsed.upstream
     base.detached = parsed.detached
     let ahead = 0
     let behind = 0

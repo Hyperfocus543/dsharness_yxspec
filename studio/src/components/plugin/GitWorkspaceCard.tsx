@@ -1461,6 +1461,21 @@ export const GitWorkspaceCard: React.FC = () => {
         <div className={`font-mono text-sm truncate ${detached ? 'text-amber-700' : 'text-zinc-800'}`} title={detached ? 'HEAD 游离（detached）：不在任何分支上' : (status.branch ?? '')}>
           {detached ? '游离 HEAD' : (status.branch || '—')}
         </div>
+        {/* 上游跟踪分支：porcelain 首行 `## main...origin/main` 的 `origin/main`
+            （网关 getStatus.upstream 已解析；无上游/游离/老网关 → null，不渲染）。
+            与「领先 N · 落后 M」配套——一眼看出领先/落后相对哪个远端分支，不用猜。 */}
+        {status.upstream && !detached && (
+          <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+            <span className="text-zinc-400 shrink-0">跟踪</span>
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sage-50 text-sage-700 font-mono border border-sage-200/70"
+              title={`当前分支跟踪远端分支 ${status.upstream}（领先/落后统计相对它计算）`}
+            >
+              <Icon name={I.branch} size={10} />
+              {status.upstream}
+            </span>
+          </div>
+        )}
         {status.error && (
           <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
             {status.error}

@@ -1281,6 +1281,10 @@ export interface GitRecentCommit {
 export interface GitStatus {
   gitAvailable: boolean;
   branch: string | null;
+  /** 当前分支跟踪的远端分支（porcelain 首行 `main...origin/main` 的 `origin/main`；
+   *  无上游（未 push 前）/ 游离 HEAD → null。与 ahead/behind 配套：头部「领先 N · 落后 M」
+   *  能看出相对哪个远端分支 */
+  upstream?: string | null;
   /** 游离 HEAD（git checkout <commit>/<tag> 后 detached）：网关已解析（branch=null + detached=true），
    *  前端据此展示「游离 HEAD」警示徽标，避免把游离态显示成正常分支名「—」 */
   detached?: boolean;
