@@ -569,8 +569,15 @@ function scanGitDeny(text, denied) {
 /** git 命令级守卫入口：返回中文 deny 文案；放行返回 null。 */
 function gitGuardDeny(command) {
   if (typeof command !== 'string' || command.trim() === '') return null;
+  // 反斜杠-换行（行继续符）先归一：bash 在任何词法处理前删除 `\<newline>` 对
+  // （双引号内同样生效——双引号保留 `\` 对换行的特殊意义，`sh -c "git \<newline>push"`
+  // 真实执行 `git push`）。而引号感知切分（tokenizeShell 的引号 span 排除 \r\n）会在
+  // 换行处断段：`"git \` 被当引号串尾巴、`push` 当裸词 → 解引用拿不到完整命令 →
+  // 破坏性 git 整段漏过守卫（实测漏网，裸 `git \<newline>push` 同样漏）。
+  // 归一后按 bash 实际解析语义扫描；只读命令 + 行继续（`git \<newline>status`）不误伤。
+  const norm = command.replace(/\\\r?\n/g, '');
   const denied = [];
-  scanGitDeny(command, denied);
+  scanGitDeny(norm, denied);
   if (denied.length === 0) return null;
   // 同一破坏性子命令可能同时被外层段与内层命令替换（`$(git push)` 段首形态）扫到，
   // 去重防文案出现 push/push 重复。

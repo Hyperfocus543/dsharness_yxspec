@@ -223,6 +223,26 @@ for (const cmd of [
   'cmd /c"git clean -fd"',
   'cmd /c"echo hi & git push origin main"',
   'cmd /c"git branch -D feature"',
+  // 2026-08-30 追加：反斜杠-换行（bash 行继续符）把破坏性 git 拆成两行——
+  // bash 在任何词法处理前删除 `\<newline>` 对（双引号内同样生效），
+  // `sh -c "git \<newline>push origin main"` 真实执行 `git push`。而引号感知切分
+  // 的引号 span 排除换行，`"git \` 被当引号串尾巴、`push` 当裸词 → 解引用拿不到
+  // 完整命令，破坏性 git 整段漏过守卫（实测漏网，裸 `git \<newline>push` 同样漏）。
+  // 入口归一移除 `\\\n`/`\\\r\n` 后须检出。
+  'sh -c "git \\\npush origin main"',
+  'sh -c "git \\\r\npush origin main"',
+  'sh -c \'git \\\npush origin main\'',
+  'bash -c "git \\\nreset --hard"',
+  'powershell -Command "git \\\nclean -fd"',
+  'cmd /c "git \\\ncheckout -f main"',
+  'sh -c "git \\\nstatus & git push origin main"',
+  // 裸形态行继续同样漏网（无 shell 包装，段首 git 后跟行继续拆散）
+  'git \\\npush origin main',
+  'git \\\n \\\npush',
+  'git \\\nreset --hard',
+  'git \\\r\nclean -fd',
+  // 多级行继续后紧跟破坏性 git
+  'sh -c "git \\\n \\\npush"',
   'bash -c"git reset --hard"',
   "bash -c'git push origin main'",
   'sh -c"git clean -fd"',
@@ -305,6 +325,11 @@ for (const cmd of [
   'sh -c"git diff --stat"',
   'powershell -c"git status"',
   'pwsh -c"git log --oneline -5"',
+  // 2026-08-30 追加：反斜杠-换行（行继续符）拆开的只读命令不误伤——
+  // 入口归一移除 `\\\n` 后解引用子命令仍只读 → 放行
+  'sh -c "git \\\nstatus"',
+  'git \\\nstatus',
+  'git -C D:/Work \\\nlog -1',
 ]) {
   assert(`放行: ${cmd}`, gitGuardDeny(cmd) === null, JSON.stringify(gitGuardDeny(cmd)))
 }
