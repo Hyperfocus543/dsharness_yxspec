@@ -63,6 +63,25 @@ export function traceAtTime(
   return best;
 }
 
+/**
+ * 某条执行记录是否「真正打了阶段收尾 tag」：tag 指向的 commit 必须等于该次执行
+ * 时刻的最新 commit（tagCommit 是后端 for-each-ref 的 peeled commit）。
+ * 背景：trajectory-all 的 tag 是「该时刻最新 commit 上挂的 tag」——某次执行期间提交了
+ * 新 commit 后，旧 tag 可能「滞后」挂在它之后的最新 commit 上，若仍标成检查点会把
+ * 「打了 tag 的执行」误报成「tag 指向的执行」。tagCommit 精确对位后只认真打上的，
+ * 兼容缺省（tagCommit 缺省 → 退化为 tag 存在即算，与旧前端行为一致）。
+ * @param rec 轨迹 × git 增强后的执行记录（tag / tagCommit / commit 均可能缺省）
+ */
+export function hasStageTag(rec: Pick<TrajectoryAllEntry, 'tag' | 'tagCommit' | 'commit'> | null | undefined): boolean {
+  if (!rec?.tag) return false;
+  const c = rec.tagCommit;
+  if (!c) return true; // 兼容缺省：老网关/无 peeled 信息 → 退化为 tag 存在即算
+  const base = rec.commit ?? null;
+  if (!base) return false;
+  // 完整 hash 前缀比对（trajectory-all 的 commit 是 7 位短 hash，tagCommit 是完整 hash）
+  return c === base || c.startsWith(base) || base.startsWith(c);
+}
+
 /** 最近提交 diff 对：相邻两条提交组成一个 diff 单元（旧 commit 为 base，新 commit 为 target）。
  *  数据源 = GitStatus.recentCommits（网关按时间倒序 新→旧；空 → []）。
  *  与阶段留痕 diff 同口径（gitTraceBase 的"相邻留痕 = 一个 diff 单元"），

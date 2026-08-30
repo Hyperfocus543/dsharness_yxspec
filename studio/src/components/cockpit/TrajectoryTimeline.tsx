@@ -22,7 +22,7 @@ import { EmptyState, GitDiffPreview, Icon } from '../ui';
 import { I } from '../ui/icons';
 import { useGitStore } from '../../store/gitStore';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
-import { traceBaseAt } from '../../utils/gitTrace';
+import { hasStageTag, traceBaseAt } from '../../utils/gitTrace';
 import { filterTraceRows } from '../../utils/traceFilters';
 import { modelDisplayName, shortModelName } from '../../utils/modelBadge';
 import { STAGE_TABLE } from '../../data/stage-mapping';
@@ -138,10 +138,13 @@ const GitBadge: React.FC<{
       >
         {rec.commit}
       </span>
-      {rec.tag && (
+      {hasStageTag(rec) && (
         <span
           className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
-          title={`该次执行时刻的 commit 打上了 tag：${rec.tag}`}
+          title={[
+            `该次执行时刻的 commit 打上了 tag：${rec.tag}`,
+            rec.tagCommit ? `tag 指向 commit：${rec.tagCommit}` : null,
+          ].filter((l): l is string => Boolean(l)).join('\n')}
         >
           {rec.tag}
         </span>
@@ -248,7 +251,9 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   const [textQuery, setTextQuery] = React.useState('');
   // 展开的阶段详情（点击行内阶段徽标 → 打开单阶段面板）
   const [openStage, setOpenStage] = React.useState<string | null>(null);
-  // 活动工作区 root：commit diff 按活动 root 拉（多工作区不串根）
+  // 活动工作区 root：commit/tag 解析 + commit diff 按活动 root 拉（多工作区不串根）。
+  // 轨迹 × git 增强已支持 ?root= —— 显式传活动根，否则恒解析网关默认根（与 status/
+  // commits/diff 各拉各的，轨迹流的 commit/tag 会串到别的仓库）。
   const activeRoot = useGitStore((s) => s.activeWorkspace?.root ?? null);
   // 全局派活（重跑/驾驶舱一键派活同通道）：重跑中的行显示秒表并禁用其余重跑按钮，
   // 防连点重复派活同一阶段。
@@ -266,19 +271,19 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
   const load = React.useCallback(() => {
     setLoading(true);
     setLoadError(null);
-    fetchTrajectoryAll(200)
+    fetchTrajectoryAll(200, activeRoot)
       .then((d) => {
         setData(d);
         if (!d) setLoadError('网关未响应或未启动');
       })
       .catch(() => setLoadError('加载失败'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [activeRoot]);
 
   React.useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchTrajectoryAll(200)
+    fetchTrajectoryAll(200, activeRoot)
       .then((d) => {
         if (!cancelled) {
           setData(d);
@@ -294,7 +299,7 @@ export const TrajectoryTimeline: React.FC<{ onOpenStage?: (t: string) => void }>
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeRoot]);
 
   // 阶段小计：从全量 rows 聚合（失败/打回/已回滚计数做强调），runs 以网关 stageCounts 为准
   // （rows 可能被 200 上限截断，stageCounts 是全量计数）。放在加载态 early-return 之前，

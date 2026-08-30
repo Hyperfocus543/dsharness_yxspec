@@ -941,6 +941,9 @@ export interface TrajectoryAllEntry extends TrajectoryRecord {
   subject?: string | null;
   /** 指向该 commit 的 tag（无 → null） */
   tag?: string | null;
+  /** 该 tag 指向的 commit 完整 hash（用于标注哪次执行真正打了阶段收尾 tag；
+   *  后端 for-each-ref 的 peeled commit；无 → null） */
+  tagCommit?: string | null;
 }
 export interface TrajectoryAll {
   ok: boolean;
@@ -954,11 +957,18 @@ export interface TrajectoryAll {
   root?: string | null;
 }
 
-/** 拉取全阶段轨迹聚合（总轨迹时间轴）；失败返回 null。 */
-export async function fetchTrajectoryAll(limit = 200): Promise<TrajectoryAll | null> {
+/**
+ * 拉取全阶段轨迹聚合（总轨迹时间轴）；失败返回 null。
+ * @param limit 行数上限（网关钳到 1~1000，默认 200）
+ * @param root 显式工作区根（可选；多工作区下轨迹 × git 按活动 root 拉，
+ *   与 getGitStatus/getGitCommits 的 root 参数同口径；缺省走网关默认根）
+ */
+export async function fetchTrajectoryAll(limit = 200, root?: string | null): Promise<TrajectoryAll | null> {
   try {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (root) q.set('root', root);
     const res = await fetch(
-      `${GATEWAY_BASE}/api/trajectory-all?limit=${limit}`,
+      `${GATEWAY_BASE}/api/trajectory-all?${q.toString()}`,
       { headers: { Accept: 'application/json' } },
     );
     if (!res.ok) return null;

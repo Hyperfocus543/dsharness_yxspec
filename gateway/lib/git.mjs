@@ -198,7 +198,9 @@ export async function resolveGitRoot(root) {
 export async function loadGitIndex(cwd) {
   const [logR, tagR] = await Promise.all([
     runGit(['log', '--all', '--date=unix', '--format=%H%x09%ct%x09%s'], { cwd }),
-    runGit(['for-each-ref', 'refs/tags', '--format=%(objectname)%x09%(*objectname)%x09%(refname:short)'], { cwd }),
+    // for-each-ref 的 %09 展开为真实 tab（%x09 保持字面量，ref-filter 不支持 %xXX；
+    // 用 %x09 则行无法按 \t 切分 → tagByCommit 永远为空）。
+    runGit(['for-each-ref', 'refs/tags', '--format=%(objectname)%09%(*objectname)%09%(refname:short)'], { cwd }),
   ])
   const commits = [] // { hash, sec, subject }，时间降序
   if (logR.ok) {

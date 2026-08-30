@@ -98,9 +98,11 @@ export function latestTrajectory(stage) {
  *   无 → null）；顶层 gitAvailable + root（git 不可用 → false + null，各字段 null，
  *   不阻塞轨迹流）。
  * @param {number} [limit] 全局行数上限（默认 200，防爆）
+ * @param {string} [root] 显式工作区根（多工作区下轨迹 × git 按活动 root 拉；
+ *   与 /api/git/status|commits|diff 的 ?root= 同口径；缺省走 env/默认根解析）
  * @returns {Promise<object>} { ok, total, stageCounts, rows, gitAvailable, root }
  */
-export async function trajectoryAll(limit = 200) {
+export async function trajectoryAll(limit = 200, root = null) {
   const stageCounts = {}
   const rows = []
   for (const token of Object.keys(STAGES)) {
@@ -122,15 +124,18 @@ export async function trajectoryAll(limit = 200) {
   rows.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0) || a.stage.localeCompare(b.stage))
 
   // 轨迹 × git 增强：一次 git log --all + for-each-ref，逐条合并"该时刻最新提交 + tag"。
-  // git 不可用（非仓库/未装 git）→ gitAvailable:false，各记录 commit/tag 为 null，不阻塞。
+  // 显式 root（多工作区活动工作区）→ resolveGitRoot 只校验该路径（source:'explicit'）；
+  // 缺省 → env/默认根。git 不可用（非仓库/未装 git）→ gitAvailable:false，记录 commit/tag
+  // 为 null，不阻塞。与 getStatus/getStageRecords/getFileDiff 的 root 解析同口径，
+  // 多工作区下「轨迹流 commit/tag 的解析仓库」与「diff 预览的仓库」不再各自为政。
   let gitAvailable = false
-  let root = null
+  let gitRoot = null
   try {
-    const gr = await resolveGitRoot()
+    const gr = await resolveGitRoot(root)
     if (gr) {
       const { commits, tagByCommit, ok } = await loadGitIndex(gr.root)
       gitAvailable = ok
-      root = gr.root
+      gitRoot = gr.root
       if (ok) {
         for (const row of rows) {
           const started = row.startedAt ? Math.floor(row.startedAt / 1000) : null
@@ -141,6 +146,11 @@ export async function trajectoryAll(limit = 200) {
             row.commitFull = at.hash
             row.subject = at.subject
             row.tag = tagByCommit.get(at.hash) ?? null
+            // tagCommit = 该 tag 指向的 commit（for-each-ref 的 peeled commit）。
+            // tagByCommit 的键正是 tag 指向的 commit → at.hash 即 tagCommit；
+            // 前端据此精确标注「哪次执行真正打了阶段收尾 tag」（旧 tag 滞后挂在
+            // 更晚 commit 上时不误报为检查点）。
+            row.tagCommit = row.tag ? at.hash : null
           }
         }
       }
@@ -150,7 +160,7 @@ export async function trajectoryAll(limit = 200) {
   }
 
   const cap = Math.max(1, Math.min(1000, Number(limit) || 200))
-  return { ok: true, total: rows.length, stageCounts, rows: rows.slice(0, cap), gitAvailable, root }
+  return { ok: true, total: rows.length, stageCounts, rows: rows.slice(0, cap), gitAvailable, root: gitRoot }
 }
 
 /** rollbackId 形态校验：`<stage>-<seq>`（stage 为小写字母/数字/下划线，seq 为正整数）。 */

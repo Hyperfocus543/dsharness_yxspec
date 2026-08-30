@@ -670,11 +670,13 @@ const server = createServer(async (req, res) => {
       return json(res, 200, view)
     }
 
-    // 全阶段轨迹聚合（总轨迹时间轴数据源）：GET /api/trajectory-all?limit=N
-    // trajectoryAll 内合并"该时刻最新 commit/tag"（轨迹 × git 增强），故为 async
+    // 全阶段轨迹聚合（总轨迹时间轴数据源）：GET /api/trajectory-all?limit=N&root=
+    // trajectoryAll 内合并"该时刻最新 commit/tag"（轨迹 × git 增强），故为 async。
+    // 支持 ?root= 显式工作区（与 /api/git/status|commits|diff 同口径）：多工作区下
+    // 轨迹流的 commit/tag 解析仓库 = 活动工作区，与 diff 预览的仓库一致（否则各拉各的）。
     if (req.method === 'GET' && path === '/api/trajectory-all') {
       const limit = Number(url.searchParams.get('limit') ?? 200)
-      return json(res, 200, await trajectoryAll(limit))
+      return json(res, 200, await trajectoryAll(limit, url.searchParams.get('root') || undefined))
     }
 
     if (req.method === 'GET' && path === '/api/trajectory-gate') {

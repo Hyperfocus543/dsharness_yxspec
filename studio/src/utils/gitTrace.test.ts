@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { gitTraceBase, gitTraceBySeq, recentCommitDiffs, traceAtTime, traceBaseAt } from './gitTrace';
+import { gitTraceBase, gitTraceBySeq, hasStageTag, recentCommitDiffs, traceAtTime, traceBaseAt } from './gitTrace';
 import type { GitRecentCommit, GitStageTrace, TrajectoryAllEntry } from './ipc';
 
 function trace(partial: Partial<GitStageTrace>): GitStageTrace {
@@ -224,5 +224,31 @@ describe('traceBaseAt（全局轨迹流相邻执行 diff 基线）', () => {
     const t2same = entry({ seq: 2, startedAt: 1756003600000, commit: 'ccc3333' });
     const rows2 = [t3, t2same];
     expect(traceBaseAt(rows2, t3)).toBeNull();
+  });
+});
+
+describe('hasStageTag（该次执行是否真正打了阶段收尾 tag）', () => {
+  it('无 tag / null / undefined → false', () => {
+    expect(hasStageTag(null)).toBe(false);
+    expect(hasStageTag(undefined)).toBe(false);
+    expect(hasStageTag({ tag: null })).toBe(false);
+    expect(hasStageTag({ tag: '' })).toBe(false);
+  });
+
+  it('tagCommit 与 commit 逐字一致 → true', () => {
+    expect(hasStageTag({ tag: 'yxspec/swe_req/1', tagCommit: 'abc1234', commit: 'abc1234' })).toBe(true);
+  });
+
+  it('tagCommit 为完整 hash、commit 为 7 位短 hash（前缀比对）→ true', () => {
+    expect(hasStageTag({ tag: 'yxspec/swe_req/1', tagCommit: 'abc1234def5678', commit: 'abc1234' })).toBe(true);
+  });
+
+  it('tagCommit 与 commit 不一致（旧 tag 滞后挂在更晚提交上）→ false', () => {
+    expect(hasStageTag({ tag: 'yxspec/swe_req/1', tagCommit: 'def5678', commit: 'abc1234' })).toBe(false);
+  });
+
+  it('tagCommit 缺省（老网关无 peeled 信息）→ 退化为 tag 存在即算', () => {
+    expect(hasStageTag({ tag: 'yxspec/swe_req/1', tagCommit: null, commit: 'abc1234' })).toBe(true);
+    expect(hasStageTag({ tag: 'yxspec/swe_req/1', commit: 'abc1234' })).toBe(true);
   });
 });

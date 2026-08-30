@@ -16,6 +16,7 @@ import { mkdirSync, writeFileSync, rmSync, readFileSync, appendFileSync } from '
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { execFileSync } from 'node:child_process'
 
 const TMP = join(tmpdir(), 'yxspec-traj-test-' + Date.now())
 const TMP_PROJ = join(TMP, 'proj')
@@ -27,7 +28,7 @@ process.env.YXSPEC_TRAJECTORY_ROOT = TMP_TRAJ
 mkdirSync(join(TMP_PROJ, 'project', 'specs', 'sys'), { recursive: true })
 writeFileSync(join(TMP_PROJ, 'project', 'specs', 'sys', 'sys-req-01-测试.md'), '# SR-001', 'utf8')
 
-const { gateStage, latestTrajectory, listTrajectories, rollbackTrajectory, exportOtelGenAi, isValidRollbackId } = await import(
+const { gateStage, latestTrajectory, listTrajectories, rollbackTrajectory, exportOtelGenAi, isValidRollbackId, trajectoryAll } = await import(
   pathToFileURL(join(process.cwd(), 'lib', 'trajectory.mjs')).href
 )
 const { checkDispatchGate, gateAction, gateEnforceEnabled } = await import(
@@ -438,6 +439,55 @@ console.log('== 25) OTel 导出：回滚轨迹标注 + 失败工具 + 多阶段�
   assert('未回滚阶段 resource 无 rolled_back 标注', other.resource['yxspec.trajectory.status'] === undefined, JSON.stringify(other.resource))
   assert('未知阶段 → null', exportOtelGenAi('not-a-stage') === null, String(exportOtelGenAi('not-a-stage')))
   assert('无轨迹阶段 → null', exportOtelGenAi('sys_arch') === null, String(exportOtelGenAi('sys_arch')))
+}
+
+// =============================================================================
+// trajectoryAll ?root= 显式工作区（多工作区下轨迹 × git 按活动 root 拉）
+// 复刻真实多仓库场景：本地临时 git 仓库 A（已打 yxspec tag）+ 显式 root 参数 →
+// 轨迹流的 commit/tag 应解析自 A；缺省 root（本仓库非空 git 仓库）→ gitAvailable
+// 且 commit 存在（但 tag 不指向 A 的 yxspec tag）。断言显式 root 被真正采用。
+// =============================================================================
+console.log('== 26) trajectoryAll 显式 root（?root= 解析工作区）==')
+{
+  const repoA = join(TMP, 'repoA')
+  mkdirSync(repoA, { recursive: true })
+  writeFileSync(join(repoA, 'init.txt'), 'init', 'utf8')
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repoA })
+  execFileSync('git', ['add', '-A'], { cwd: repoA })
+  execFileSync('git', ['-c', 'user.email=test@local', '-c', 'user.name=test', 'commit', '-q', '-m', 'probe'], { cwd: repoA })
+  const commitA = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoA }).toString().trim()
+  execFileSync('git', ['tag', 'yxspec/sys_analysis/1', commitA], { cwd: repoA })
+  const shortA = commitA.slice(0, 7)
+
+  // 该阶段造一条轨迹（startedAt 用当前时间附近，保证能解析出 commit）
+  const st = Date.now()
+  writeTraj('sqt_strategy', 30, mkRec('sqt_strategy', 30, { sessionId: 't30', startedAt: st, status: 'passed' }))
+
+  // 显式 root=repoA → 轨迹流按 A 解析 git 增强
+  // （root 断言以 git 规范化为准：os.tmpdir() 可能返回 8.3 短路径如 ADMINI~1，
+  //  而 git --show-toplevel 会展开成完整路径 → 期望值取自 git 本身）
+  const repoANorm = execFileSync('git', ['-C', repoA, 'rev-parse', '--show-toplevel'], { cwd: repoA }).toString().trim().replace(/\\/g, '/')
+  const allA = await trajectoryAll(200, repoANorm)
+  const rowA = (allA.rows ?? []).find((r) => r.stage === 'sqt_strategy' && r.seq === 30)
+  assert('显式 root → gitAvailable=true', allA.gitAvailable === true, JSON.stringify(allA.gitAvailable))
+  assert('显式 root → root 指向 repoA', allA.root === repoANorm, JSON.stringify(allA.root))
+  assert('显式 root → 该行 commit 解析自 repoA', rowA?.commit === shortA, JSON.stringify(rowA && { commit: rowA.commit, tag: rowA.tag }))
+  assert('显式 root → tag 命中 repoA 的 yxspec tag', rowA?.tag === 'yxspec/sys_analysis/1', JSON.stringify(rowA?.tag))
+  assert('显式 root → tagCommit 指向该 tag 的 commit', rowA?.tagCommit === commitA, JSON.stringify(rowA?.tagCommit))
+  assert('显式 root → 该行 tag 精确对位（commit/tagCommit 前缀一致）', hasTagAt(rowA), JSON.stringify(rowA && { commit: rowA.commit, tagCommit: rowA.tagCommit }))
+
+  // 缺省 root（本仓库：非空 git 仓库）→ gitAvailable 且该行 commit 存在，
+  // 但 tag 不指向 repoA 的 yxspec tag（跨仓库隔离，不串 tag）
+  const allDef = await trajectoryAll(200)
+  const rowDef = (allDef.rows ?? []).find((r) => r.stage === 'sqt_strategy' && r.seq === 30)
+  assert('缺省 root → gitAvailable=true（本仓库）', allDef.gitAvailable === true, JSON.stringify(allDef.gitAvailable))
+  assert('缺省 root → 该行 commit 存在', typeof rowDef?.commit === 'string' && rowDef.commit.length >= 7, JSON.stringify(rowDef?.commit))
+  assert('缺省 root → 不串 repoA 的 yxspec tag', (rowDef?.tag ?? null) !== 'yxspec/sys_analysis/1', JSON.stringify(rowDef?.tag))
+}
+
+function hasTagAt(r) {
+  if (!r?.tag || !r?.tagCommit || !r?.commit) return false
+  return r.tagCommit === r.commit || r.tagCommit.startsWith(r.commit) || r.commit.startsWith(r.tagCommit)
 }
 
 rmSync(TMP, { recursive: true, force: true })
