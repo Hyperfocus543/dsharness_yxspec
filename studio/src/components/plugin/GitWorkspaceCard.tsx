@@ -5,7 +5,8 @@
 //   · 顶部：分支 + HEAD commit（mono）+ 连接状态徽标（gitAvailable 才亮）
 //   · 脏文件列表：路径 + 状态色标（新增/修改/删除/未暂存），空则「工作区干净」
 //   · commit 历史：最近 5 条（message + hash + 相对时间）
-//   · 阶段留痕：输入/选择 stage → 列出该阶段 commit/tag 对照（复用 getGitCommits）
+//   · 阶段留痕：输入/选择 stage → 列出该阶段 commit/tag 对照（复用 getGitCommits）；
+//     tag 徽标 hover 显示可读摘要（utils/gitTagName：阶段 + 序号，变体阶段不混淆）
 //   · 回滚按钮：选中一条留痕 → 底部唯一确认面板（填原因）→ recordGitRollback（只留档）→ toast 提示不自动执行
 //   · 留痕 hover diff：每行该条 commit 相对上一留痕 commit 的改动（共享 ui/GitDiffPreview）
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
@@ -20,6 +21,7 @@ import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
 import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
+import { parseYxspecTag, stageTagSummary, yxspecTagOf } from '../../utils/gitTagName';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
 import { retryAuditLabel, retryAuditParams, retryAuditTitle } from '../../utils/gitRetry';
@@ -166,7 +168,7 @@ const TraceRow: React.FC<{
         {shortHash(rec.commit)}
       </span>
       {rec.tag && (
-        <span className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono border border-emerald-200" title={rec.tag}>
+        <span className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono border border-emerald-200" title={yxspecTagOf(rec)?.summary ?? rec.tag}>
           {rec.tag}
         </span>
       )}
@@ -1639,9 +1641,14 @@ export const GitWorkspaceCard: React.FC = () => {
               const tagInfo = toGitTagInfo(t);
               if (!tagInfo) return null;
               const isHead = headTags.includes(tagInfo.name);
-              const tagTitle = isHead
-                ? '指向当前 HEAD（当前检查点）'
-                : (gitTagTitle(tagInfo) ?? tagInfo.name);
+              // 阶段收尾 tag（yxspec/<stage>/<seq>）→ 摘要首行优先（「SWE.4 swe_coding_verify_pc
+              // #3 · 阶段收尾 tag」）；HEAD tag 角标优先于摘要；其余走 gitTagTitle（commit/时间）。
+              const yxTag = parseYxspecTag(tagInfo.name);
+              const tagTitle = yxTag
+                ? [stageTagSummary(yxTag), gitTagTitle(tagInfo)].filter((l): l is string => Boolean(l)).join('\n')
+                : isHead
+                  ? '指向当前 HEAD（当前检查点）'
+                  : (gitTagTitle(tagInfo) ?? tagInfo.name);
               return (
                 <span
                   key={tagInfo.name}

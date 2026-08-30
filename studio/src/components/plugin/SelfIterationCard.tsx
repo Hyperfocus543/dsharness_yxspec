@@ -13,7 +13,8 @@
 //     （continue 琥珀 / converge 绿 / degrade 红），score 与 round 分色标识
 //   · 评分 × git 检查点：每轮评分行对齐该评分时刻的阶段执行 commit + tag
 //     （/api/git/commits 同数据源，纯前端 traceAtTime 派生），hover 预览相对
-//     上一阶段执行的改动 —— 自迭代分数落在哪个代码检查点上一目了然
+//     上一阶段执行的改动 —— 自迭代分数落在哪个代码检查点上一目了然；收尾 tag
+//     展示短标签 `stage/seq` + 摘要（utils/gitTagName，变体阶段不混淆）
 //   · 空态：从未跑过自迭代 → 「尚未执行自迭代」提示（不阻塞驾驶舱）
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
@@ -30,6 +31,7 @@ import {
   type SelfIterationStage,
 } from '../../utils/ipc';
 import { gitTraceBase, traceAtTime } from '../../utils/gitTrace';
+import { yxspecTagOf } from '../../utils/gitTagName';
 import {
   summarizeStages,
   convergedCount,
@@ -213,6 +215,9 @@ const StageTraceBadge: React.FC<{
   root?: string | null;
 }> = ({ trace, base, open, onHover, root = null }) => {
   if (!trace?.commit) return null;
+  // 收尾 tag 可读化：yxspec/<stage>/<seq> → 短标签 + 摘要；仅解析真正留痕 tag，
+  // 非 yxspec 自定义 tag → 仍走裸展示（避免误标阶段收尾）。
+  const yxTag = trace.tag ? yxspecTagOf(trace) : null;
   return (
     <>
       <span
@@ -227,7 +232,18 @@ const StageTraceBadge: React.FC<{
       >
         {shortHash(trace.commit)}
       </span>
-      {trace.tag && (
+      {yxTag && (
+        <span
+          className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+          title={[
+            yxTag.summary,
+            yxTag.commit ? `指向 commit：${yxTag.commit}` : null,
+          ].filter((l): l is string => Boolean(l)).join('\n')}
+        >
+          {yxTag.short}
+        </span>
+      )}
+      {!yxTag && trace.tag && (
         <span
           className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
           title={`该轮评分时刻的 commit 打上了 tag：${trace.tag}`}

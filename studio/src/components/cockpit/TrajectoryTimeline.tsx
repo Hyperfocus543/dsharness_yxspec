@@ -9,7 +9,8 @@
 //
 // 轨迹 × git 联动：每行在「时间」前展示该次执行 startedAt 时刻的最新 commit
 // （git log --all + for-each-ref，网关 trajectoryAll 已合并，零额外请求）。
-// commit 徽标 tooltip 给完整 hash + 提交说明；tag 徽标 emerald（指向同一 commit）。
+// commit 徽标 tooltip 给完整 hash + 提交说明；tag 徽标 emerald（指向同一 commit），
+// 阶段收尾 tag（yxspec/<stage>/<seq>）展示短标签 `stage/seq` + 摘要（utils/gitTagName）。
 // hover commit 徽标 → 共享 GitDiffPreview：展示该 commit 相对相邻更早执行的改动
 // （基线上文 = 时间相邻的上一次执行 commit，纯前端 traceBaseAt 派生，与阶段留痕
 // "相邻执行 = 一个 diff 单元"同口径），补齐全局轨迹页最后的 git 触点盲区。
@@ -23,6 +24,7 @@ import { I } from '../ui/icons';
 import { useGitStore } from '../../store/gitStore';
 import { fetchTrajectoryAll, type TrajectoryAll, type TrajectoryAllEntry } from '../../utils/ipc';
 import { hasStageTag, traceBaseAt } from '../../utils/gitTrace';
+import { yxspecTagOf } from '../../utils/gitTagName';
 import { filterTraceRows } from '../../utils/traceFilters';
 import { modelDisplayName, shortModelName } from '../../utils/modelBadge';
 import { STAGE_TABLE } from '../../data/stage-mapping';
@@ -122,6 +124,10 @@ const GitBadge: React.FC<{
 }> = ({ rec, gitAvailable, rows, open, onHover, root = null }) => {
   // 数据源 gitAvailable=false（非仓库/未装 git）或该条无 commit → 整组不渲染
   if (!gitAvailable || !rec.commit) return null;
+  // 收尾 tag 可读化：yxspec/<stage>/<seq> → 短标签 + 摘要（「SWE.2 swe_arch #7 · 阶段收尾 tag」）。
+  // 仅该次执行真正打上收尾 tag（hasStageTag 判定）且能解析才展示摘要；用户自定义 tag
+  // （v1.0）不解析 → 仍走裸展示（避免把非留痕 tag 误标成阶段收尾）。
+  const yxTag = hasStageTag(rec) ? yxspecTagOf(rec) : null;
   // diff 基线：相邻更早执行时刻的最新 commit（纯函数派生；无 → GitDiffPreview 首条降级提示）
   const diffBase = traceBaseAt(rows, rec);
   return (
@@ -138,7 +144,19 @@ const GitBadge: React.FC<{
       >
         {rec.commit}
       </span>
-      {hasStageTag(rec) && (
+      {yxTag && (
+        <span
+          className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+          title={[
+            yxTag.summary,
+            yxTag.commit ? `指向 commit：${yxTag.commit}` : null,
+            '（git-workspace 阶段收尾自动打的留痕 tag）',
+          ].filter((l): l is string => Boolean(l)).join('\n')}
+        >
+          {yxTag.short}
+        </span>
+      )}
+      {!yxTag && hasStageTag(rec) && (
         <span
           className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
           title={[
