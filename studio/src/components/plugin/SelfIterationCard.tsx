@@ -609,9 +609,17 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // 只在用户未手动改过轮数（maxIterTouchedRef）且确实在续跑时套用；阶段预填后再填
   // （依赖 stageSel，阶段未定/数据未就绪时预算未知，保持默认 3 不抢先覆盖）。
   React.useEffect(() => {
-    if (maxIterTouchedRef.current || !resumeSel) return;
-    const runMax = defaultRunIteration(data?.state, stageSel);
-    if (runMax != null && maxIterSel !== String(runMax)) setMaxIterSel(String(runMax));
+    if (maxIterTouchedRef.current) return;
+    if (resumeSel) {
+      const runMax = defaultRunIteration(data?.state, stageSel);
+      if (runMax != null && maxIterSel !== String(runMax)) setMaxIterSel(String(runMax));
+    } else if (maxIterSel !== '3') {
+      // 续跑预算失效回退：断点恢复取消 / 切到无进行中 run 的阶段后，之前为旧 run
+      // 预填的轮数不再有意义——残留值会被静默带进新 run 的派活（--max-iter=N 意外生效），
+      // 且「续跑预算」角标已消失，残留数字无处解释（所见 ≠ 所跑）。
+      // 用户没手改过轮数才回落默认 3；手改过（maxIterTouchedRef）尊重用户输入。
+      setMaxIterSel('3');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, stageSel, resumeSel]);
 
@@ -623,9 +631,17 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // 与轮数预算预填（defaultRunIteration）同范式。只在用户未手动改过目标
   // （goalTouchedRef）且确实在续跑时套用；run 无目标（空串）→ 不预填，表单维持空框。
   React.useEffect(() => {
-    if (goalTouchedRef.current || !resumeSel) return;
-    const runGoal = defaultRunGoal(data?.state, stageSel);
-    if (runGoal != null && goalSel !== runGoal) setGoalSel(runGoal);
+    if (goalTouchedRef.current) return;
+    if (resumeSel) {
+      const runGoal = defaultRunGoal(data?.state, stageSel);
+      if (runGoal != null && goalSel !== runGoal) setGoalSel(runGoal);
+    } else if (goalSel !== '') {
+      // 续跑目标失效回退：断点恢复取消 / 切到无进行中 run 的阶段后，之前为旧 run
+      // 预填的目标不再有意义——残留目标会被带进新 run 的派活（--goal 意外沿用旧判定），
+      // 且「续跑目标」角标已消失，残留文案无处解释（所见 ≠ 所跑）。
+      // 用户没手改过目标才清空；手改过（goalTouchedRef）尊重用户输入。
+      setGoalSel('');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, stageSel, resumeSel]);
 
@@ -637,9 +653,17 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // 字段（老 run）→ 维持 product，不误标「续跑模式」。与 defaultRunIteration /
   // defaultRunGoal 同范式（阶段预填后再填，依赖 stageSel）。
   React.useEffect(() => {
-    if (modeTouchedRef.current || !resumeSel) return;
-    const runMode = defaultRunMode(data?.state, stageSel);
-    if (runMode && modeSel !== runMode) setModeSel(runMode);
+    if (modeTouchedRef.current) return;
+    if (resumeSel) {
+      const runMode = defaultRunMode(data?.state, stageSel);
+      if (runMode && modeSel !== runMode) setModeSel(runMode);
+    } else if (modeSel !== 'product') {
+      // 续跑模式失效回退：断点恢复取消 / 切到无进行中 run 的阶段后，之前为旧 run
+      // 预填的 framework 模式不再有意义——残留 framework 会让新 run 意外走框架评分，
+      // 且「续跑模式」角标已消失，残留模式无处解释（所见 ≠ 所跑）。
+      // 用户没手改过模式才回落 product；手改过（modeTouchedRef）尊重用户选择。
+      setModeSel('product');
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, stageSel, resumeSel]);
 
