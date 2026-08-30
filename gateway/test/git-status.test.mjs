@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'git.mjs')).href)
-const { parsePorcelainHead } = mod
+const { parsePorcelainHead, parseStashList } = mod
 
 let pass = 0
 let fail = 0
@@ -62,6 +62,47 @@ assert(
   'No commits yet on main',
   JSON.stringify(parsePorcelainHead('No commits yet on main')) === JSON.stringify({ branch: 'main', upstream: null, detached: false }),
 )
+
+console.log('== 4) stash 列表解析（git stash list --format=%gd: %gs）==')
+const WIP_LINE = 'stash@{0}: WIP on main: abc1234 暂存中的改动'
+const nonWip = 'stash@{1}: On feat/x: def5678 feature wip'
+const noCommit = 'stash@{2}: WIP on main: 没有 commit 的行'
+assert(
+  'WIP 行 → ref/分支/commit/说明',
+  JSON.stringify(parseStashList(WIP_LINE)) ===
+    JSON.stringify([{ ref: 'stash@{0}', branch: 'main', commit: 'abc1234', subject: '暂存中的改动' }]),
+  JSON.stringify(parseStashList(WIP_LINE)),
+)
+assert(
+  '非 WIP stash（On <branch>:）→ branch 取 On 后分支',
+  JSON.stringify(parseStashList(nonWip)) ===
+    JSON.stringify([{ ref: 'stash@{1}', branch: 'feat/x', commit: 'def5678', subject: 'feature wip' }]),
+  JSON.stringify(parseStashList(nonWip)),
+)
+assert(
+  '缺 commit 的行 → commit 为 null（整段说明保留为 subject，不丢信息）',
+  JSON.stringify(parseStashList(noCommit)) ===
+    JSON.stringify([{ ref: 'stash@{2}', branch: 'main', commit: null, subject: '没有 commit 的行' }]),
+  JSON.stringify(parseStashList(noCommit)),
+)
+assert(
+  '仅 ref + commit（无说明）→ subject 为 null',
+  JSON.stringify(parseStashList('stash@{3}: WIP on main: abc1234')) ===
+    JSON.stringify([{ ref: 'stash@{3}', branch: 'main', commit: 'abc1234', subject: null }]),
+  JSON.stringify(parseStashList('stash@{3}: WIP on main: abc1234')),
+)
+assert(
+  '多行（含空行）→ 按行解析',
+  JSON.stringify(parseStashList(`${WIP_LINE}\n\n${nonWip}\n`)) ===
+    JSON.stringify([
+      { ref: 'stash@{0}', branch: 'main', commit: 'abc1234', subject: '暂存中的改动' },
+      { ref: 'stash@{1}', branch: 'feat/x', commit: 'def5678', subject: 'feature wip' },
+    ]),
+  JSON.stringify(parseStashList(`${WIP_LINE}\n\n${nonWip}\n`)),
+)
+assert('空输入 → []', JSON.stringify(parseStashList('')) === '[]' && JSON.stringify(parseStashList('   ')) === '[]')
+assert('null/undefined/非字符串 → []', JSON.stringify(parseStashList(null)) === '[]' && JSON.stringify(parseStashList(undefined)) === '[]')
+assert('非法行（非 stash 格式）→ 跳过', JSON.stringify(parseStashList('abc def')) === '[]')
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 process.exit(fail > 0 ? 1 : 0)

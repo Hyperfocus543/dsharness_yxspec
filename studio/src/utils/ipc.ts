@@ -1279,6 +1279,18 @@ export interface GitDirtyStats {
   removed: number;
 }
 
+/** 单条 stash 速览（git stash list 只读采集；工具守卫白名单同口径，纯展示不做操作）。 */
+export interface GitStashEntry {
+  /** ref（如 `stash@{0}`） */
+  ref: string;
+  /** WIP 来源分支（`WIP on <branch>:`；非 WIP stash → null） */
+  branch: string | null;
+  /** 指向 commit（短 hash；行格式缺 commit → null） */
+  commit: string | null;
+  /** 该 stash 的提交说明（`--format=%gs`；无 → null） */
+  subject: string | null;
+}
+
 /** 单条 commit 摘要（工作区管控卡「最近提交」数据源）。 */
 export interface GitRecentCommit {
   hash: string;
@@ -1318,6 +1330,9 @@ export interface GitStatus {
   /** 指向当前 HEAD 的 tag（普通 tag = objectname / 注解 tag = peeled commit 对齐；
    *  前端 tag 列表据此把 HEAD tag 高亮 + 标「HEAD」角标；无 → 空数组） */
   headTags?: string[];
+  /** 工作区 stash 速览（git stash list 只读采集：ref + WIP 分支 + 指向 commit + 说明）。
+   *  无 stash / git 不可用 / 老网关无此字段 → 空数组（前端整区块静默不渲染） */
+  stashes?: GitStashEntry[];
 }
 
 /** 单条 tag 信息（网关 for-each-ref 富格式采集；轻量/注解 tag 归一为「指向的 commit」）。 */

@@ -4,6 +4,8 @@
 // 能力：
 //   · 顶部：分支 + HEAD commit（mono）+ 连接状态徽标（gitAvailable 才亮）
 //   · 脏文件列表：路径 + 状态色标（新增/修改/删除/未暂存），空则「工作区干净」
+//   · stash 暂存速览：被藏起来的 WIP（git stash list 只读采集，ref + 来源分支 + commit + 说明），
+//     与脏文件列表互补 —— 排障/交接时不漏掉藏起来的改动；只读展示，apply/pop 在终端显式执行
 //   · commit 历史：最近 5 条（message + hash + 相对时间）
 //   · 阶段留痕：输入/选择 stage → 列出该阶段 commit/tag 对照（复用 getGitCommits）；
 //     tag 徽标 hover 显示可读摘要（utils/gitTagName：阶段 + 序号，变体阶段不混淆）
@@ -21,7 +23,7 @@ import { EmptyState, GitDiffPreview, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
-import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitWorkspace } from '../../utils/ipc';
+import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitStashEntry, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { parseYxspecTag, stageTagSummary, yxspecTagOf } from '../../utils/gitTagName';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
@@ -286,6 +288,52 @@ const DirtyDiffPreview: React.FC<{ file: GitDirtyFile; open: boolean; root?: str
 };
 
 /** 留痕 diff 预览浮层已迁移至共享组件 ui/GitDiffPreview.tsx（见 import）。 */
+
+/** 单条 stash 速览行：ref + WIP 来源分支 + 指向 commit + 提交说明。
+ *  数据源 = /api/git/status 的 stashes（网关 git stash list 只读采集，零新接口）。
+ *  只读展示，不做 apply/pop —— 与 tool-guard 白名单同口径（只读查看，写操作须显式授权）。
+ *  字段缺省（非 WIP stash / 行格式缺 commit / 无说明）→ 对应位省略，不占行宽。 */
+const StashRow: React.FC<{ s: GitStashEntry }> = ({ s }) => {
+  const title = [
+    s.ref,
+    s.branch ? `WIP 来源：${s.branch}` : null,
+    s.commit ? `指向 commit：${s.commit}` : null,
+    s.subject ? `说明：${s.subject}` : null,
+    '（git stash list 只读速览；apply/pop 需在终端显式执行）',
+  ]
+    .filter((l): l is string => Boolean(l))
+    .join('\n');
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
+      title={title}
+    >
+      <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-[10px]">
+        <Icon name={I.clock} size={10} className="shrink-0 text-zinc-400" />
+        {s.ref}
+      </span>
+      {s.branch && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono text-[10px] border border-emerald-200/70"
+          title={`WIP 来源分支：${s.branch}`}
+        >
+          <Icon name={I.branch} size={10} className="shrink-0" />
+          {s.branch}
+        </span>
+      )}
+      {s.commit && (
+        <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-500 font-mono text-[10px]" title={`指向 commit：${s.commit}`}>
+          {shortHash(s.commit)}
+        </span>
+      )}
+      {s.subject && (
+        <span className="min-w-0 truncate text-zinc-500" title={s.subject}>
+          {s.subject}
+        </span>
+      )}
+    </div>
+  );
+};
 
 /** 单条 git 写操作留痕行：结果徽标 + 动作徽标 + 入参/错误 + 相对时间。
  *  成败色标与状态徽标同语义：成功 sage / 失败 red / 未确认 zinc。
@@ -641,6 +689,10 @@ export const GitWorkspaceCard: React.FC = () => {
   // 工作区脏文件改动汇总（git diff HEAD --numstat 聚合：+N/-M 行数 + 文件数）。
   // 与头部「N 处改动」同源；老网关/无 HEAD/无净改动 → null，section 头部 chip 不渲染。
   const dirtyStats = status?.dirtyStats ?? null;
+  // 工作区 stash 速览（git stash list 只读采集）：被藏起来的 WIP（stash 栈）在脏文件
+  // 列表里看不到 —— 临时藏起的工作改动了然。老网关无此字段 → undefined → 空数组
+  // （区块整体不渲染，静默降级，不占行宽）。
+  const stashes = status?.stashes ?? [];
   // 悬停预览 diff 的文件路径（仅一个；state 驱动渲染，与 CommitRow/TraceRow 的
   // hover 预览同交互——ref 不触发重渲染，悬停永远不出现预览，是已修的死角）。
   // 固定展开 diff 的文件路径（点击 diff 按钮或空格/回车切换；最多一个浮层）。
@@ -1821,6 +1873,31 @@ export const GitWorkspaceCard: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* stash 速览：被临时藏起的 WIP（git stash list 只读采集）。
+          与脏文件列表互补 —— 脏文件是「正在工作区里」的改动，stash 是「藏起来的」改动；
+          git 工作流里 stash 栈是常见的暂停点，缺了它排障/交接会漏掉一整块变更。
+          只读展示（apply/pop 需在终端显式执行），无 stash → 区块整体静默不渲染。 */}
+      {gitOk && stashes.length > 0 && (
+        <div className="space-y-1.5">
+          <SectionLabel>
+            <span className="inline-flex items-center gap-1.5">
+              stash 暂存
+              <span
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-[10px] font-mono text-zinc-500"
+                title={`${stashes.length} 条 stash（git stash list 只读速览；apply/pop 需在终端显式执行）`}
+              >
+                {stashes.length}
+              </span>
+            </span>
+          </SectionLabel>
+          <div className="space-y-1">
+            {stashes.map((s) => (
+              <StashRow key={s.ref} s={s} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* commit 历史：最近 5 条 */}
       <div className="space-y-1.5">

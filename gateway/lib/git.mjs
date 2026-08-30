@@ -2,7 +2,7 @@
 // git.mjs — 网关 git 工作区状态 API（只读执行 git + 追加审计 JSONL）
 // =============================================================================
 // 职责：
-//   1. getStatus()            — 工作区 git 状态（分支/HEAD/脏文件/领先落后/最近提交）
+//   1. getStatus()            — 工作区 git 状态（分支/HEAD/脏文件/领先落后/最近提交/stash 速览）
 //   2. getStageRecords(stage) — 阶段 ↔ commit ↔ tag 对照表（轨迹 JSONL × git log/tag）
 //   3. recordRollback(...)    — 回滚审计留档（JSONL 尾部追加，只留档不执行 git reset）
 //
@@ -160,6 +160,48 @@ export function parseNumstat(out) {
 }
 
 /**
+ * 解析 `git stash list --format` 输出 → 暂存条目（纯函数，供工作区 stash 速览）。
+ * 每行 `stash@{0}  WIP on main: abc1234 提交说明`（非 WIP 分支为 `On <branch>:`）。
+ * 兼容性：
+ *   - 空/非字符串 → []（工作区无 stash，前端整区块静默不渲染）
+ *   - 行格式缺 ref / 缺 WIP 分支 / 缺 commit → 该行字段降级为 null，
+ *     不丢弃整行（前端行内显示「—」，stash@{N} 仍可辨识）
+ *   - `--include-untracked` 藏的 `WIP on main: ...` 与普通 stash 同形，无需特判
+ * @param {string} out `git stash list --format` stdout
+ * @returns {{ref:string, branch:string|null, commit:string|null, subject:string}[]}
+ */
+export function parseStashList(out) {
+  if (typeof out !== 'string' || !out.trim()) return []
+  const rows = []
+  for (const line of out.split('\n')) {
+    const raw = line.trim()
+    if (!raw) continue
+    // 先剥 ref（`stash@{N}`）—— %gd 恒不含冒号，按首个 `: ` 切分，冒号右侧整段是 %gs
+    const refMatch = /^([^:]+):\s+(.+)$/.exec(raw)
+    if (!refMatch) continue
+    const ref = refMatch[1].trim()
+    const msg = refMatch[2].trim()
+    // %gs 形态：`WIP on <branch>: <commit> <subject>`（普通 stash）或
+    // `On <branch>: <commit> <subject>`（detached/非分支上创建的 stash）。
+    // 分支名再按首个 `: ` 切分；subject 内还可能含冒号，交给 commit 段贪心承接。
+    const body = /^(?:WIP on |On )?([^:]+):\s*(.+)$/.exec(msg)
+    if (body) {
+      const branch = body[1].trim()
+      const rest = body[2].trim()
+      const commitMatch = /^([0-9a-fA-F]{4,40})(?:\s+([\s\S]*))?$/.exec(rest)
+      const commit = commitMatch ? commitMatch[1] : null
+      // 有 commit 哈希 → 说明 = commit 后剩余；无哈希（格式异常）→ 整段当说明，不丢信息
+      const subject = commitMatch ? (commitMatch[2] ? commitMatch[2].trim() : null) : rest || null
+      rows.push({ ref, branch, commit, subject })
+    } else {
+      // 无 `: ` 分隔的异常行：ref + 整段说明仍可辨识，字段降级不丢行
+      rows.push({ ref, branch: null, commit: null, subject: msg || null })
+    }
+  }
+  return rows
+}
+
+/**
  * 解析 git 仓库根（候选优先级见文件头）。
  * 可选 root 参数：显式指定要查看的工作区 —— 只校验该路径，
  * `git -C <root> rev-parse --show-toplevel` 成功 → { root: <真实根>, source: 'explicit' }；
@@ -255,7 +297,7 @@ export function parsePorcelainHead(branchInfo) {
 
 /**
  * GET /api/git/status 数据源。
- * 返回工作区 git 全貌：分支 / HEAD / 脏文件 / 领先落后 / 最近 5 条提交。
+ * 返回工作区 git 全貌：分支 / HEAD / 脏文件 / 领先落后 / 最近 5 条提交 / stash 速览。
  * git 不可用（不是仓库/未安装）→ gitAvailable:false + error，不抛。
  * @param {string} [root] 显式工作区根（缺省走 env/默认根解析）
  * @returns {Promise<object>}
@@ -278,6 +320,9 @@ export async function getStatus(root) {
     recentCommits: [],
     tags: [],
     headTags: [],
+    // 工作区 stash 速览（git stash list 只读采集：ref + WIP 分支 + 指向 commit + 说明）。
+    // 无 stash / git 不可用 / 采集失败 → []（前端整区块静默不渲染，不占行宽）。
+    stashes: [],
     root: null,
     error: null,
   }
@@ -288,7 +333,7 @@ export async function getStatus(root) {
   }
   base.root = gr.root
   const cwd = gr.root
-  const [statusR, headR, logR, tagR, numstatR] = await Promise.all([
+  const [statusR, headR, logR, tagR, numstatR, stashR] = await Promise.all([
     // -c core.quotepath=false：含非 ASCII（中文）的文件路径以原始 UTF-8 输出，
     // 而不是 `"docs/\345\271\263..."` 这类 octal 转义（前端直接可读/可直接拼接路径）。
     runGit(['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-b'], { cwd }),
@@ -305,6 +350,10 @@ export async function getStatus(root) {
     // 与 dirtyFiles 并列采集（同一 Promise.all 批次，不额外串行）；
     // 首次提交前无 HEAD → 该命令失败，dirtyStats 保持 null（前端不展示，语义正确）。
     runGit(['diff', 'HEAD', '--numstat'], { cwd }),
+    // stash 列表（只读采集，与 tool-guard 白名单 `git stash list`/`git stash show`
+    // 同口径）：只展示不操作——工具守卫允许 agent 只读查看，前端同样只读速览。
+    // stash@{N}:  WIP on <branch>: <commit> <subject>；无 stash 输出为空 → 静默 []。
+    runGit(['stash', 'list', '--format=%gd: %gs'], { cwd }),
   ])
   if (!statusR.ok) {
     base.error =
@@ -371,6 +420,9 @@ export async function getStatus(root) {
   // 前端据此不渲染「0 文件」误导统计。与 dirtyFiles 同源（同一工作区同一时刻），
   // 前端头部计数与「+N/-M」chip 一眼对应。
   base.dirtyStats = numstatR.ok ? parseNumstat(numstatR.stdout) : null
+  // stash 速览：解析 `git stash list --format=%gd: %gs`（ref + WIP 分支 + commit + 说明）。
+  // 仅 git 可用（statusR.ok 已由上文保证）且采集成功时才有值；无 stash / 失败 → [] 静默。
+  base.stashes = stashR.ok ? parseStashList(stashR.stdout) : []
   base.head = headR.ok && headR.stdout.trim() ? headR.stdout.trim() : null
   if (logR.ok) {
     for (const line of logR.stdout.split('\n')) {
