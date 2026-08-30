@@ -65,9 +65,12 @@ log() {
 # 子代理执行（无人值守全自动，带超时保护防卡死）
 run_agent() {
   # .out 按日归档：log-night2/YYYYMMDD/ 子目录，跨午夜自动切日（与 SUMMARY/.patch 同步）
-  local TASK="$1" ROUND="$2" PROMPT="$3" \
-        DAY_DIR="$LOG_DIR/$(date +%Y%m%d)" OUT="$DAY_DIR/$TASK-r$ROUND.out"
+  # 注意：local 多行续行里带命令替换在 MSYS bash set -u 下会报 unbound（DAY_DIR），
+  # 必须拆成单独声明，先收标量参数再算派生路径。
+  local TASK="$1" ROUND="$2" PROMPT="$3"
   local TIMEOUT_S="${4:-1800}"   # 默认 30 分钟；verify 传短超时
+  local DAY_DIR="$LOG_DIR/$(date +%Y%m%d)"
+  local OUT="$DAY_DIR/$TASK-r$ROUND.out"
   mkdir -p "$DAY_DIR"
   log "  → 子代理 $TASK 第${ROUND}轮 (${OUT##*/}) 超时=${TIMEOUT_S}s"
   if [ -n "$TIMEOUT_BIN" ]; then
