@@ -1036,7 +1036,12 @@ export const GitWorkspaceCard: React.FC = () => {
               <div key={i} className="h-9 bg-zinc-100 rounded-lg animate-pulse" />
             ))}
           </div>
-        ) : workspaceError ? (
+        ) : workspaceError && workspaces.length === 0 ? (
+          // 错误态只给「真无数据」的情况：网关首拉失败、列表里没有任何可看的工作区。
+          // 列表已有内容时 refreshWorkspaces 失败（写操作后联动 / 手动点刷新）不覆盖为
+          // 错误态——已登记的工作区仍可读可用（store 在写操作响应里同步过新列表，
+          // 不是陈旧数据），只应保持展示，不把可用列表闪成错误条再切回。与下方
+          // 「刷新静默对齐」同理念：有东西可展示就不闪加载/错误骨架。
           <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-red-200 rounded-lg space-y-1.5">
             <div>工作区列表加载失败（{workspaceError}）</div>
             <button
