@@ -413,23 +413,40 @@ function gitSubUnsafe(sub, segment) {
     return true;
   }
   if (sub === 'config') {
-    // 只读：无参（列出全部）与 `--get`/`--get-all`/`--get-regexp`/`--list`/`-l`/
-    // `--show-origin`/`--show-scope` 查询形态（配置只读，不落盘）。首个非 flag
-    // token 若不以这些 flag 开头即写操作（`git config user.name x` 写本地值、
-    // `--add`/`--unset`/`--unset-all`/`--rename-section`/`--remove-section` 等）
-    // → 拒绝。扫描 args 里每个 token：遇到上述只读 flag → 放行；遇到其它 `-` flag
-    // 或非 flag 实参且未见只读 flag → 写操作拒绝。注意 `-z` 不作为只读判据——
-    // 它是 NUL 输出格式开关，可前置写操作（`git config -z --add user.name x`
-    // 实测会写本地值），放行会漏网。误伤面：`git config --get user.name`
-    // （agent 查身份/URL 常规只读调用）此前整段被默认拒绝，现放行。
+    // 只读：`--get`/`--get-all`/`--get-regexp`/`--get-urlmatch`/`--list`/`-l`/
+    // `--show-origin`/`--show-scope` 查询形态，以及**裸键查询**（`git config
+    // user.name` / `git config --global user.name` —— 键后无值 = 查询该键，恒只读；
+    // git 对无值形态只会返回/报错，绝不写）。
+    // 写操作：`--add`/`--unset`/`--unset-all`/`--replace-all`/`--rename-section`/
+    // `--remove-section`/`--edit`（编辑器改配置）显式拒绝；裸键后跟值
+    // （`git config user.name x` = 键+值 2 个裸 token）→ 拒绝。
+    // 判定：逐 token 扫——读 flag 放行；写 flag 拒绝；其它 `-` flag（--global/--local/
+    // --file/-f/--blob/--type/--default/-z/--fixed-value/--name-only 等）是修饰符，
+    // 跳过（带值 flag 连值 token 一起跳）；裸 token 计数：≥2 = 键+值（写）拒绝，
+    // ≤1 = 无参列出/键查询（读）放行。
+    // 注意 `-z` 不作为只读判据——它是 NUL 输出格式开关，可前置写操作
+    // （`git config -z --add user.name x` 实测会写本地值），放行会漏网。
+    // 误伤面：`git config --get user.name` / `git config user.name`（agent 查身份/
+    // URL 常规只读调用）此前整段被默认拒绝，现放行。
     const after = gitArgsAfter('config', segment);
     const toks = after.split(/\s+/).filter(Boolean);
     if (toks.length === 0) return false; // `git config` 纯列出 → 只读
-    for (const t of toks) {
+    const CONFIG_VALUE_FLAGS = new Set(['--file', '-f', '--blob', '--type', '--default']);
+    let pos = 0;
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
       if (/^--(?:get|get-all|get-regexp|get-urlmatch|list|show-origin|show-scope)(?:=.*)?$/.test(t) || t === '-l') return false;
-      return true; // 首个其它 token（`--add`/`--unset`/键名/值）即写操作
+      if (/^--(?:add|unset|unset-all|replace-all|rename-section|remove-section|edit)(?:=.*)?$/.test(t) || t === '-e') return true;
+      if (t.startsWith('-')) {
+        // `--file <path>` / `--type <type>` 等带值 flag：值 token 一起跳过。
+        // 仅「空格分隔」形态才跳（`=` 连写 `--type=path` 已是单个 token，值已含在
+        // 该 token 内——再跳下一个会把键/值漏成 pos 计数，写操作漏网）。
+        if (CONFIG_VALUE_FLAGS.has(t) && !t.includes('=')) i += 1;
+        continue;
+      }
+      pos += 1;
     }
-    return true;
+    return pos >= 2; // 裸键后无值（pos=1）→ 查询；键+值（pos≥2）→ 写
   }
   if (sub === 'stash') {
     // 只读：`list`（列出暂存）+ `show [stash] [--stat]`（查看某条 stash 的改动，

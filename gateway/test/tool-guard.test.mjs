@@ -61,6 +61,12 @@ for (const cmd of [
   'git config -l',
   'git config --get-regexp user',
   'git config',
+  // 裸键查询（键后无值 = 查询，恒只读）：`git config user.name` /
+  // `git config --global user.name`（带修饰 flag 的键查询同样只读）
+  'git config user.name',
+  'git config --global user.name',
+  'git config --local core.autocrlf',
+  'git config --file .gitconfig user.name',
   'git stash list',
   'git stash show',
   'git stash show stash@{0}',
@@ -118,6 +124,12 @@ for (const cmd of [
   'git config --add user.name y',
   'git config --unset user.name',
   'git config --global user.name z',
+  // 键+值形态（裸 token 计数 ≥2）写操作拒绝；`=` 连写带值 flag 不跳值 token
+  'git config --global user.name linhanfei',
+  'git config --type=string user.name x',
+  'git config --file .gitconfig user.name x',
+  'git config --edit',
+  'git config -e',
   // `-z` 是 NUL 输出格式开关，可前置写操作（`git config -z --add user.name x`
   // 实测会写本地值）——不作为只读判据，写操作必须仍拒绝
   'git config -z --add user.name x',
