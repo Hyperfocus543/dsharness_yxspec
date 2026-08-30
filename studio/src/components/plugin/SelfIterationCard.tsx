@@ -519,7 +519,10 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     const d = await fetchSelfIteration();
     if (d) {
       setData(d);
-    } else {
+    } else if (!opts?.quiet) {
+      // 首次/整卡非静默加载才清空并报错；静默刷新（手动「刷新」/启动完成联动）
+      // 网关瞬时失败时保留已有数据、不闪错误态 —— 与 GitWorkspaceCard 刷新
+      // 「有内容可展示就不闪骨架/错误」同理念，也呼应发送期 8s 轮询（拿新才更）。
       setData(null);
       setLoadError('网关未响应或未启动');
     }
