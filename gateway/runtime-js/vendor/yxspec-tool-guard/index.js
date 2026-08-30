@@ -412,6 +412,32 @@ function gitSubUnsafe(sub, segment) {
     if (after === '' || /^-l(?:[ \t]+[^-]\S*)?$/.test(after) || /^--list(?:[ \t]+[^-]\S*)?$/.test(after)) return false;
     return true;
   }
+  if (sub === 'config') {
+    // 只读：无参（列出全部）与 `--get`/`--get-all`/`--get-regexp`/`--list`/`-l`/
+    // `--show-origin`/`--show-scope` 查询形态（配置只读，不落盘）。首个非 flag
+    // token 若不以这些 flag 开头即写操作（`git config user.name x` 写本地值、
+    // `--add`/`--unset`/`--unset-all`/`--rename-section`/`--remove-section` 等）
+    // → 拒绝。扫描 args 里每个 token：遇到上述只读 flag → 放行；遇到其它 `-` flag
+    // 或非 flag 实参且未见只读 flag → 写操作拒绝。误伤面：`git config --get
+    // user.name`（agent 查身份/URL 常规只读调用）此前整段被默认拒绝，现放行。
+    const after = gitArgsAfter('config', segment);
+    const toks = after.split(/\s+/).filter(Boolean);
+    if (toks.length === 0) return false; // `git config` 纯列出 → 只读
+    for (const t of toks) {
+      if (/^--(?:get|get-all|get-regexp|get-urlmatch|list|show-origin|show-scope)(?:=.*)?$/.test(t) || t === '-l' || t === '-z') return false;
+      return true; // 首个其它 token（`--add`/`--unset`/键名/值）即写操作
+    }
+    return true;
+  }
+  if (sub === 'stash') {
+    // 只读：`list`（列出暂存）+ `show [stash] [--stat]`（查看某条 stash 的改动，
+    // 纯展示不落盘）。其余（push/drop/pop/apply/clear/create/store/branch 等）都改
+    // stash 栈/工作树 → 拒绝。`git stash show` 与 `git stash list` 是 agent 查暂存区
+    // 的常规只读调用，此前整段被默认拒绝（误伤，与 config --get 同源）。
+    const after = gitArgsAfter('stash', segment);
+    const m = /^\s*list(?:\s|$)/.exec(after) || /^\s*show(?:\s|$)/.exec(after);
+    return m ? false : true;
+  }
   if (sub === 'remote') {
     // 只读：纯列出（无子命令，如 `git remote` / `git remote -v`）与 `show <name>`
     // （展示远端信息）。其余子命令（add/remove/rm/set-url/rename/prune/update/...）

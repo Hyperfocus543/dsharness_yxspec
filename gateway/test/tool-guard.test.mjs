@@ -51,6 +51,20 @@ for (const cmd of [
   'git remote -v',
   'git remote --verbose',
   'git remote show origin',
+  // 2026-08-31 追加：config/stash 只读子命令放行——`git config --get user.name`
+  // （agent 查身份/remote URL 的常规只读调用）与 `git stash list`/`git stash show`
+  // （查暂存区，纯展示不落盘）此前整段被默认拒绝误伤，现按 flag/子命令细分放行。
+  'git config --get user.name',
+  'git config --get-all remote.origin.url',
+  'git config --get user.name --show-origin',
+  'git config --list',
+  'git config -l',
+  'git config --get-regexp user',
+  'git config',
+  'git stash list',
+  'git stash show',
+  'git stash show stash@{0}',
+  'git stash show --stat',
   'git status && git log -1',
   // 2026-08-29 追加：`=` 连写带值 flag 的引号值（含空格）整体当 token——此前
   // `--work-tree="D:/my work" status` 在内部空格拆成 `work"` 当子命令名 → 只读误伤
@@ -96,6 +110,20 @@ for (const cmd of [
   'git tag v1.0',
   'git tag -d v1.0',
   'git remote add origin http://x',
+  // 2026-08-31 追加：config/stash 写操作拒绝——`git config user.name x`（写本地值）、
+  // `git config --add/--unset/--global`（改配置），`git stash push/drop/pop/apply/clear`
+  // （改 stash 栈/工作树）。此前这些未被细分拦截（config/stash 整体被默认拒绝，
+  // 属「误伤掩盖漏网」：config 只读查询一并误伤），现只读细分后写操作必须仍拒绝。
+  'git config user.name x',
+  'git config --add user.name y',
+  'git config --unset user.name',
+  'git config --global user.name z',
+  'git stash push -m "wip"',
+  'git stash drop',
+  'git stash pop',
+  'git stash apply stash@{0}',
+  'git stash clear',
+  'git stash create',
   // 2026-08-30 追加：`-v`/`--verbose` 是 remote 的「列出」flag，不是子命令——
   // `git remote -v add origin <url>` 仍执行 add（实测 git 把 -v 当 flag），
   // 此前把 -v 当子命令白名单 → 写操作漏过守卫，现须拒绝。
