@@ -19,7 +19,7 @@ night/log-night2/
 night/*.out
 night/manifest.json
 night/SUMMARY.md
-night/SUMMARY-night2.md
+night/SUMMARY-night2*.md
 night/stop-flag
 night/.night2.lock
 night/commit-msg.txt
