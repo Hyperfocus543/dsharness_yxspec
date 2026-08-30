@@ -817,9 +817,12 @@ export const GitWorkspaceCard: React.FC = () => {
     }
   };
 
-  // 分支列表：首次打开面板才拉（gitOperate branch 只读列分支，不做切换）
-  const loadBranches = async () => {
-    if (branches.length > 0 || !activeWorkspace) return;
+  // 分支列表：首次打开面板才拉（gitOperate branch 只读列分支，不做切换）。
+  // force=true：写操作成功后强制重拉（绕过「有缓存就跳过」的守卫），
+  // 让 fetch 拉到的新远端分支 / checkout 新建的本地分支立即可见；
+  // 缺省 false 保持「面板打开才拉一次」的既有语义。
+  const loadBranches = async (force = false) => {
+    if ((!force && branches.length > 0) || !activeWorkspace) return;
     setBranchLoading(true);
     setBranchError(null);
     try {
@@ -833,6 +836,14 @@ export const GitWorkspaceCard: React.FC = () => {
     } finally {
       setBranchLoading(false);
     }
+  };
+
+  // 写操作成功后分支缓存失效：面板展开 → 原地强制重拉（新分支立即可见，带
+  // 「加载分支中…」刷新态）；面板收起 → 仅清空缓存（下次打开重拉，避免陈旧
+  // 列表，也不闪「加载分支中…」）。checkout 成功后面板已收起，走清空分支。
+  const invalidateBranches = (panelClosing = false) => {
+    if (!panelClosing && branchPanelOpen) void loadBranches(true);
+    else setBranches([]);
   };
 
   const doCheckout = async (branch: string) => {
@@ -850,6 +861,10 @@ export const GitWorkspaceCard: React.FC = () => {
       await refreshStatus().catch(() => {});
       // checkout 也是写操作 → 联动刷新操作留痕
       loadAudit().catch(() => {});
+      // checkout 会新建本地跟踪分支 / 改变当前分支 → 清空分支缓存（下次打开重拉），
+      // 且不再回滚上一次（invalidateBranches 后 status.branch 已更新）。
+      // panelClosing=true：面板即将收起，跳过「展开强制重拉」，只清空缓存。
+      invalidateBranches(true);
     } catch (e: any) {
       setBranchError(e?.message || `切换分支失败：${branch}`);
       // 失败回退分支选择：checkout 失败后 branchValue 仍指向该分支，下拉框会把
@@ -892,6 +907,9 @@ export const GitWorkspaceCard: React.FC = () => {
       await refreshStatus().catch(() => {});
       // 写操作成功 → 联动刷新操作留痕（本次操作的审计行立即出现，不用手动点刷新）
       loadAudit().catch(() => {});
+      // fetch 会拉入新的远端分支 / pull 会新建本地跟踪分支 / push 可能改变上游状态
+      // → 分支缓存失效（面板展开强制重拉，收起清空留待下次打开），下拉不再显示陈旧分支
+      invalidateBranches();
     } catch (e: any) {
       pushToast('error', `${label}失败：${e?.message || e}`);
     } finally {
@@ -919,6 +937,8 @@ export const GitWorkspaceCard: React.FC = () => {
       setRetryingRoot(null);
       await refreshStatus().catch(() => {});
       loadAudit().catch(() => {});
+      // 重试的写操作也可能改变分支（fetch 拉新远端分支 / checkout 切分支）→ 同样失效分支缓存
+      invalidateBranches();
     }
   };
 
