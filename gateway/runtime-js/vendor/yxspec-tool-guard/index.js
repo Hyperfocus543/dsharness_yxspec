@@ -404,12 +404,23 @@ function gitSubUnsafe(sub, segment) {
     return false;
   }
   if (sub === 'tag') {
-    // 只读：无参（列出）、-l/--list [pattern]（列出过滤，如 `git tag -l 'v1.*'`）。
+    // 只读：无参（列出）、-l/--list [pattern]（列出过滤，如 `git tag -l 'v1.*'`）、
+    // -n[<num>]（列出带注解，`git tag -n` / `git tag -n5`）、--sort=<key>（排序列出，
+    // 如 `git tag --sort=-creatordate`——sort 键可带前导 `-` 表示降序）。
     // pattern 是列出参数不是子命令，此前 ^(?:-l|--list)?$ 把带 pattern 的只读列出
     // 误判为拒绝（误伤）；pattern 以 - 开头的一律按不匹配处理（宁可误伤不放过，
-    // 防 `-l -d`/`-l --delete` 这类 flag 混排）。其余（打标签/删标签/带 flag）拒绝。
+    // 防 `-l -d`/`-l --delete` 这类 flag 混排）。`-n`/`--sort` 同为「列出」形态——
+    // 此前未被识别 → 只读列带注解/排序被默认拒绝误伤（`git tag -n1` 是 agent 查看
+    // 各 tag 提交说明、`--sort=-creatordate` 是网关/前端排序列 tag 的常规只读调用）。
+    // `--sort` 只认 `=` 连写值（git 对 `--sort -d foo` 会把 `-d` 解析成 --delete，
+    // 空格分隔形态因歧义不放行）；其余（打标签/删标签/带 flag）拒绝。
     const after = gitArgsAfter('tag', segment);
-    if (after === '' || /^-l(?:[ \t]+[^-]\S*)?$/.test(after) || /^--list(?:[ \t]+[^-]\S*)?$/.test(after)) return false;
+    if (
+      after === '' ||
+      /^-(?:l|n\d*)(?:[ \t]+[^-]\S*)?$/.test(after) ||
+      /^--list(?:=[\S]+|[ \t]+[^-]\S*)?$/.test(after) ||
+      /^--sort=[\S]+$/.test(after)
+    ) return false;
     return true;
   }
   if (sub === 'config') {
@@ -458,9 +469,10 @@ function gitSubUnsafe(sub, segment) {
     return m ? false : true;
   }
   if (sub === 'remote') {
-    // 只读：纯列出（无子命令，如 `git remote` / `git remote -v`）与 `show <name>`
-    // （展示远端信息）。其余子命令（add/remove/rm/set-url/rename/prune/update/...）
-    // 都是写操作 → 拒绝。
+    // 只读：纯列出（无子命令，如 `git remote` / `git remote -v`）、`show <name>`
+    // （展示远端信息）与 `get-url [--push] <name>`（查询远端 URL，工作区管控卡
+    // 「远程仓库」读 URL 的常规调用）。其余子命令（add/remove/rm/set-url/rename/
+    // prune/update/...）都是写操作 → 拒绝。
     // 关键：`-v`/`--verbose` 是 remote 的「列出详情」flag，**不是**子命令——
     // `git remote -v add origin <url>` 仍会执行 add（实测 git 把 -v 当 flag，真正的
     // 子命令是紧随其后的 add），此前把 -v 当子命令白名单 → 写操作漏过守卫。
@@ -469,7 +481,7 @@ function gitSubUnsafe(sub, segment) {
     const toks = after.split(/\s+/).filter(Boolean);
     for (const t of toks) {
       if (t.startsWith('-')) continue;
-      return t !== 'show';
+      return t !== 'show' && t !== 'get-url';
     }
     return false;
   }

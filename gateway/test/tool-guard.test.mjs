@@ -48,9 +48,22 @@ for (const cmd of [
   'git branch --merged main',
   'git tag',
   'git tag -l "v1.*"',
+  // 2026-08-31 追加：tag 只读列出变体放行——`-n[<num>]`（带注解列出）与 `--sort=<key>`
+  // （排序列出）是只读列 tag 的常规形态（`git tag -n1` 查看各 tag 提交说明、网关/前端
+  // `--sort=-creatordate` 排序列 tag），此前不在只读白名单 → 默认拒绝误伤。
+  'git tag -n',
+  'git tag -n1',
+  'git tag -n 5',
+  'git tag --sort=-creatordate',
+  'git tag --sort=version:refname',
   'git remote -v',
   'git remote --verbose',
   'git remote show origin',
+  // 2026-08-31 追加：`git remote get-url [--push] <name>` 只读查询远端 URL（工作区管控卡
+  // 「远程仓库」读 URL 的常规调用），此前被当写操作默认拒绝误伤。
+  'git remote get-url origin',
+  'git remote get-url --all origin',
+  'git remote get-url --push origin',
   // 2026-08-31 追加：config/stash 只读子命令放行——`git config --get user.name`
   // （agent 查身份/remote URL 的常规只读调用）与 `git stash list`/`git stash show`
   // （查暂存区，纯展示不落盘）此前整段被默认拒绝误伤，现按 flag/子命令细分放行。
@@ -115,6 +128,13 @@ for (const cmd of [
   'git branch -t foo main',
   'git tag v1.0',
   'git tag -d v1.0',
+  // 2026-08-31 追加：tag 写/破坏性形态拒绝——带注解/强覆盖/混合 flag 不得因
+  // 只读列出细分被放行（`-n`/`--sort` 只读放行后，写形态必须仍拦截）。
+  'git tag -a v1.0 -m msg',
+  'git tag -a -m msg v1.0',
+  'git tag -f v1.0',
+  'git tag v1.0 -m msg',
+  'git tag -l -d foo',
   'git remote add origin http://x',
   // 2026-08-31 追加：config/stash 写操作拒绝——`git config user.name x`（写本地值）、
   // `git config --add/--unset/--global`（改配置），`git stash push/drop/pop/apply/clear`
