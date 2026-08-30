@@ -856,14 +856,20 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     // 匹配恒落空，进度条静默降级为纯秒表）。返回的 root/cloneDir 已走 stripTrailingSep，
     // 同一 key 语义下注册表记录与激活根一致。
     const g = await cloneWithProgress(['clone', '--progress', url, dir], { cwd: dir, key: stripTrailingSep(dir) })
-    recordGitOp({ root: dir, action: 'clone', args: { url, dir }, ok: g.ok, stdout: g.stdout, error: g.error })
-    if (!g.ok) return { ok: false, error: g.error, message: 'git clone 执行失败' }
+    if (!g.ok) {
+      // 失败：审计 root 记剥尾目标目录（git 可能未落盘/非仓库，无真根可取；前端
+      // gitWorkspaceName 归一后仍可辨识末段目录名）
+      recordGitOp({ root: stripTrailingSep(dir), action: 'clone', args: { url, dir }, ok: false, stdout: g.stdout, error: g.error })
+      return { ok: false, error: g.error, message: 'git clone 执行失败' }
+    }
     // clone 成功后自动登记新仓库进工作区列表
     const added = await addWorkspace({ root: dir })
     // 返回的 root/cloneDir 归一为真根（git rev-parse 输出）——与登记条 root 逐字一致，
     // 否则 dir 带尾分隔符（`D:/x/`）时前端 pickWorkspaceToActivate 按 root 精确匹配
     // 新仓库会落空（登记条无尾分隔符），激活失败停在旧默认工作区。
     const realCloneRoot = added.ok ? added.workspace?.root ?? stripTrailingSep(dir) : stripTrailingSep(dir)
+    // 成功审计 root = 登记后真根（与返回/登记条目逐字一致，行内重试/展示才不漂移）
+    recordGitOp({ root: realCloneRoot, action: 'clone', args: { url, dir }, ok: true, stdout: g.stdout, error: g.error })
     return { ok: true, root: realCloneRoot, cloneDir: realCloneRoot, registered: added.ok ? added.workspace ?? added.already : false }
   }
   // 3b) init 特有校验（dir 目标目录），init 的 root 只是「目标父目录」锚点。
@@ -882,13 +888,18 @@ export async function gitOperate({ root, action, args = {} } = {}) {
       return { ok: false, error: 'bad-request', message: `init 目标目录不可用：${String(e?.message ?? e)}` }
     }
     const g = await runGit(['init'], { cwd: dir })
-    recordGitOp({ root: dir, action: 'init', args: { dir }, ok: g.ok, stdout: g.stdout, error: g.error })
-    if (!g.ok) return { ok: false, error: g.error, message: 'git init 执行失败' }
+    if (!g.ok) {
+      // 失败：审计 root 记剥尾目标目录（无真根可取；前端归一后仍可辨识末段目录名）
+      recordGitOp({ root: stripTrailingSep(dir), action: 'init', args: { dir }, ok: false, stdout: g.stdout, error: g.error })
+      return { ok: false, error: g.error, message: 'git init 执行失败' }
+    }
     // init 后即 git 仓库 → 自动登记进工作区列表（verifyGitRepo 通过）
     const added = await addWorkspace({ root: dir })
     // 返回的 root/initDir 归一为真根（git rev-parse 输出）——与登记条 root 逐字一致，
     // 否则 dir 带尾分隔符时前端按 root 精确匹配激活新仓库会落空（同 clone 分支）。
     const realInitRoot = added.ok ? added.workspace?.root ?? stripTrailingSep(dir) : stripTrailingSep(dir)
+    // 成功审计 root = 登记后真根（与返回/登记条目逐字一致，行内重试/展示才不漂移）
+    recordGitOp({ root: realInitRoot, action: 'init', args: { dir }, ok: true, stdout: g.stdout, error: g.error })
     return { ok: true, root: realInitRoot, initDir: realInitRoot, registered: added.ok ? added.workspace ?? added.already : false }
   }
   // 4) checkout 特有校验（branch 非空、无空格、必须是可解析的 git 引用）

@@ -157,6 +157,38 @@ test('gitOperate init：dir 校验先于 git（非法目录 → bad-request，�
   }
 })
 
+test('gitOperate init：审计 root 与登记/返回同口径（带尾斜杠 dir 剥尾记录）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-init-audit-'))
+  const regPath = join(dir, 'registry.json')
+  const auditPath = join(dir, 'audit.jsonl')
+  writeFileSync(regPath, JSON.stringify({ version: 1, defaultRoot: null, activeId: null, workspaces: [] }))
+  const prevWs = process.env.YXSPEC_GIT_WORKSPACES
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_WORKSPACES = regPath
+  process.env.YXSPEC_GIT_AUDIT = auditPath
+  try {
+    // 用户输入目标目录带尾斜杠（`D:/Work/x/` 常见形态）→ init 成功
+    const target = (join(dir, 'x') + '/').replace(/\\/g, '/')
+    const r = await gitOperate({ root: target, action: 'init', args: { dir: target } })
+    assert.equal(r.ok, true, `init 应成功: ${JSON.stringify(r)}`)
+    // 返回 root / 登记 root 恒剥尾（前端按 root 精确匹配激活）；rev-parse 返回规范长路径
+    assert.equal(r.root.endsWith('/'), false, '返回 root 不应带尾斜杠')
+    assert.equal(r.initDir, r.root, '返回 initDir 与 root 一致')
+    // 审计 root 与登记/返回同口径（不再记录带尾斜杠的原值）
+    const audit = readFileSync(auditPath, 'utf8').trim()
+    const last = JSON.parse(audit.split('\n').pop())
+    assert.equal(last.action, 'init')
+    assert.equal(last.root, r.root, '审计 root 应与返回 root 一致（剥尾归一）')
+    assert.equal(last.args.dir, target, '审计 args.dir 保留用户原始输入')
+  } finally {
+    if (prevWs === undefined) delete process.env.YXSPEC_GIT_WORKSPACES
+    else process.env.YXSPEC_GIT_WORKSPACES = prevWs
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('gitOperate clone：root 未登记不报 unknown-workspace（锚点例外），url/dir 校验先于 git', async () => {
   // clone 的 root 只是「目标父目录」锚点，本身无需已登记（头注释红线声明）。
   // 修复前：未登记 root → 先撞 isRegistered → unknown-workspace，url/dir 校验死代码；
