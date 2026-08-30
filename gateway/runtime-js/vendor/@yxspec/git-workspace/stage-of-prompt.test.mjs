@@ -34,6 +34,22 @@ test('token 本身（下划线形态）命中 → 兜底返回', () => {
   assert.equal(stageOfPrompt('开始 swe_coding_do'), 'swe_coding_do')
 })
 
+test('token 兜底必须整词边界：变体/接口/过渡阶段不被前缀阶段吞掉', () => {
+  // 回归：旧实现 `text.includes(token)` 把 `swe_coding_verify_pc` 误标成
+  // `swe_coding_verify`、`swe_arch_if` → `swe_arch`、`swe_release_promote` →
+  // `swe_release`（表顺序前缀在前 → 变体恒错）。修复后长 token 内的前缀 token
+  // 因尾随 `_`（词字符）不命中 \b 边界 → 精准回落。
+  assert.equal(stageOfPrompt('进入 swe_coding_verify_pc 阶段'), 'swe_coding_verify_pc')
+  assert.equal(stageOfPrompt('swe_arch_if 阶段开始'), 'swe_arch_if')
+  assert.equal(stageOfPrompt('推进 swe_release_promote'), 'swe_release_promote')
+  // 前缀 token 本体（独立词）仍照常命中
+  assert.equal(stageOfPrompt('进入 swe_coding_verify 阶段'), 'swe_coding_verify')
+  assert.equal(stageOfPrompt('swe_arch'), 'swe_arch')
+  assert.equal(stageOfPrompt('推进 swe_release'), 'swe_release')
+  // 下划线形态拼接的其他 token 不受影响
+  assert.equal(stageOfPrompt('开始 swe_coding_plan'), 'swe_coding_plan')
+})
+
 test('非阶段注入 / 无命令 → null', () => {
   assert.equal(stageOfPrompt('通用咨询：帮我看看这段代码'), null)
   assert.equal(stageOfPrompt(''), null)

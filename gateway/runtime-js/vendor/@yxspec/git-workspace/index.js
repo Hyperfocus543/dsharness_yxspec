@@ -97,7 +97,13 @@ function stageOfPrompt(prompt) {
     const esc = st.command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const re = new RegExp(`(?:^|[^\\w-])${esc}(?:$|[\\s.,;:!?，。；：！？、)）]|(?:[^\\w-]))`)
     if (re.test(text)) return token
-    if (text.includes(token)) return token // token 本身（下划线形态）直接命中 → 兜底
+    // token 本身（下划线形态）直接命中 → 兜底。必须整词边界（\b）而非子串 includes：
+    // `swe_coding_verify_pc` / `swe_arch_if` / `swe_release_promote` 都以前缀阶段 token
+    // 开头（表顺序里前缀在前），includes 会把变体/接口/过渡阶段误标成前缀阶段的 tag/审计
+    // （实测复现）。token 全为 [a-z0-9_]（下划线是 \w 词字符），\b 让长 token 内的前缀
+    // token 因尾随 `_`（词字符）不命中边界 → 精准回落。
+    const tokenRe = new RegExp(`\\b${token}\\b`)
+    if (tokenRe.test(text)) return token
   }
   return null
 }
