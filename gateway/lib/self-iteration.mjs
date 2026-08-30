@@ -126,6 +126,9 @@ export function selfIterationOverview() {
         currentRound: Number.isInteger(runState.currentRound) ? runState.currentRound : 0,
         maxIter: Number.isInteger(runState.maxIter) ? runState.maxIter : 3,
         goal: typeof runState.goal === 'string' ? runState.goal : '',
+        // 评估模式透传：run-state 持久化后，前端续跑预填可读回（product=评阶段产物 /
+        // framework=评框架效率）；老 run-state 无 mode 字段 → null（前端视为 product 默认）
+        mode: runState.mode === 'framework' ? 'framework' : runState.mode === 'product' ? 'product' : null,
         status: typeof runState.status === 'string' ? runState.status : 'running',
         converged: runState.converged === true,
         baselineTotal: typeof runState.baselineTotal === 'number' ? runState.baselineTotal : null,

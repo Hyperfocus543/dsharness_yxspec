@@ -82,3 +82,24 @@ export function defaultRunGoal(
   const goal = g.trim();
   return goal ? goal : null;
 }
+
+/**
+ * 断点恢复时「评估模式」应预填的 run mode：同阶段 run 进行中（可续跑）→ 返回该 run
+ * 的评估模式（run-state 持久化的 mode）；否则 → null（表单维持默认 product）。
+ * 判定与 shouldDefaultResume 严格一致——预填模式只在「将要续跑」时才有意义：
+ * 续跑时模式应延续该 run 的评估口径（framework 续跑若回落默认 product，同一 run
+ * 的评分维度前后不一致，框架效率判定（--eval-framework）也无从对比）。旧 run-state
+ * 未持久化 mode → null（视为 product 默认，不回填不误标「续跑模式」）。
+ * 与 defaultRunIteration / defaultRunGoal 同范式：纯前端派生，零新接口。
+ * @param state run-state 摘要（/api/self-iteration 的 state；无 → null）
+ * @param stage 表单当前所选阶段（空 → 不预填）
+ */
+export function defaultRunMode(
+  state: SelfIterationState | null | undefined,
+  stage: string | null | undefined,
+): 'framework' | null {
+  if (!shouldDefaultResume(state, stage)) return null;
+  // run-state 显式 framework 才回填；product / 缺省（老 run-state 无 mode 字段）→ null，
+  // 表单维持默认 product，不把「未持久化」误回填成 product 角标（与 defaultRunGoal 空串同口径）。
+  return state?.mode === 'framework' ? 'framework' : null;
+}

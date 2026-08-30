@@ -14,17 +14,17 @@ test('mode 显式 --mode=framework 命中 → mode=framework，stageRaw 正常�
   assert.equal(p.stageRaw, 'sqt_script_gen')
 })
 
-test('mode 缺省 → product（评阶段产物，向后兼容）', () => {
+test('mode 缺省 → null（不指定=延续 run-state 既有 mode；新 run 由 openRun/emptyState 回落 product）', () => {
   const p = parseSelfIterate('/yxspec:self-iterate sqt_script_gen')
   assert.ok(p, '应命中自迭代命令')
-  assert.equal(p.mode, 'product')
+  assert.equal(p.mode, null)
   assert.equal(p.stageRaw, 'sqt_script_gen')
 })
 
-test('--mode=bogus（非法值）→ 回退 product，不报错', () => {
+test('--mode=bogus（非法值）→ null 同未指定（不误覆盖 run-state mode；execSelfIterScore 侧兜底 product）', () => {
   const p = parseSelfIterate('/yxspec:self-iterate sqt_script_gen --mode=bogus')
   assert.ok(p, '应命中自迭代命令')
-  assert.equal(p.mode, 'product')
+  assert.equal(p.mode, null)
   assert.equal(p.stageRaw, 'sqt_script_gen')
 })
 

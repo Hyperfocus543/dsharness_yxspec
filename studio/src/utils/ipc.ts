@@ -1836,6 +1836,9 @@ export interface SelfIterationState {
   currentRound: number;
   maxIter: number;
   goal: string;
+  /** 该 run 的评估模式：product=评阶段产物 / framework=评框架效率。
+   *  网关 run-state 摘要缺省不落此字段（product 为插件默认）→ null 视为 product */
+  mode?: 'product' | 'framework' | null;
   status: string;
   converged: boolean;
   baselineTotal: number | null;

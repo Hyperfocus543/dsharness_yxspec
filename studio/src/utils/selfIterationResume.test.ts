@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldDefaultResume, defaultRunIteration, defaultRunGoal } from './selfIterationResume';
+import { shouldDefaultResume, defaultRunIteration, defaultRunGoal, defaultRunMode } from './selfIterationResume';
 import type { SelfIterationState } from './ipc';
 
 /** run-state 摘要构造器（非收敛、running、有完成轮次 = 可续跑的最小形态）。 */
@@ -111,5 +111,31 @@ describe('defaultRunGoal（续跑收敛目标预填）', () => {
 
   it('goal 非字符串（run-state 缺字段）→ null', () => {
     expect(defaultRunGoal(state({ goal: '' }), 'sqt_script_gen')).toBe(null);
+  });
+});
+
+describe('defaultRunMode（续跑评估模式预填）', () => {
+  it('同阶段可续跑 + run-state mode=framework → 返回 framework（续跑延续评分口径）', () => {
+    expect(defaultRunMode(state({ mode: 'framework' }), 'sqt_script_gen')).toBe('framework');
+  });
+
+  it('可续跑但 run-state 为 product / 无 mode 字段（老 run-state）→ null（维持默认 product，不误标）', () => {
+    expect(defaultRunMode(state({ mode: 'product' }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunMode(state({ mode: null }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunMode(state(), 'sqt_script_gen')).toBe(null);
+  });
+
+  it('判定为不续跑（阶段不符 / 已收敛 / 非 running / 无轮次）→ null', () => {
+    expect(defaultRunMode(state({ mode: 'framework' }), 'swe_arch')).toBe(null);
+    expect(defaultRunMode(state({ mode: 'framework', converged: true, status: 'converged' }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunMode(state({ mode: 'framework', status: 'stopped' }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunMode(state({ mode: 'framework', currentRound: 0 }), 'sqt_script_gen')).toBe(null);
+  });
+
+  it('state 为 null / stage 为空 → null', () => {
+    expect(defaultRunMode(null, 'sqt_script_gen')).toBe(null);
+    expect(defaultRunMode(undefined, 'sqt_script_gen')).toBe(null);
+    expect(defaultRunMode(state({ mode: 'framework' }), '')).toBe(null);
+    expect(defaultRunMode(state({ mode: 'framework' }), null)).toBe(null);
   });
 });

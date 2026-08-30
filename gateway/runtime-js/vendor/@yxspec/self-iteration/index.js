@@ -136,10 +136,11 @@ function parseSelfIterate(prompt) {
   const goal = flagVal('goal')
   const stageRaw0 = flagVal('stage')
   const resume = /(?:^|\s)--resume(?:\s|$)/.test(rest)
-  // mode：显式 --mode=product|framework 命中取之，否则缺省 product（评阶段产物）。
-  // 非法值（--mode=bogus）回退 product 而非报错：mode 是选择性开关，不影响命令可解析。
+  // mode：显式 --mode=product|framework 命中取之；未指定 → null（延续 run-state 既有 mode，
+  // 由 openRun 覆盖逻辑决定——新 run 回落 product，续跑保持 run 原模式）。
+  // 非法值（--mode=bogus）→ null 同未指定（不误覆盖）；execSelfIterScore 侧 `?? 'product'` 归一兜底。
   const modeRaw = flagVal('mode')
-  const mode = /^(product|framework)$/.test(String(modeRaw ?? '')) ? modeRaw : 'product'
+  const mode = /^(product|framework)$/.test(String(modeRaw ?? '')) ? modeRaw : null
 
   // stage：优先显式 --stage=，否则取命令后第一个非 flag 裸词（阶段命令名/token）。
   // 剥离带值 flag 时须与 flagVal 支持的形态对称（`--key=val` / `--key "带空格值"` /
@@ -223,6 +224,7 @@ function emptyState(stage) {
     stage,
     maxIter: DEFAULT_MAX_ITER,
     goal: '',
+    mode: 'product', // 评估模式（product=评阶段产物 / framework=评框架效率），openRun 覆盖
     sessionId: session,
     sessionStartedAt: now,
     currentRound: 0,
@@ -849,6 +851,10 @@ export function apply(ctx, input = {}) {
       st.goal = opts.goal
     }
     if (opts.maxIter) st.maxIter = opts.maxIter
+    // 评估模式持久化：命令显式 --mode= 才覆盖（opts.mode 非 null）。续跑命令未带
+    // --mode → 保持 run 原模式（product 评阶段产物 / framework 评框架效率），
+    // 避免续跑后模式静默回落默认；新 run（emptyState）已默认 product。
+    if (opts.mode) st.mode = opts.mode
     st.lastScore = null // 开新轮次会话：清掉上一会话遗留的打分暂存（防跨会话泄漏）
     writeRunState(stateRoot, st)
     sessions.set(sessionId, { stage, state: 'open' })
@@ -918,7 +924,7 @@ export function apply(ctx, input = {}) {
       if (cur && cur.state === 'open' && cur.stage === token) return // 同会话续跑
       if (cur && cur.state === 'open') finishRound(sessionId, 'stage-switch')
       const st = openRun(sessionId, token, {
-        maxIter: parsed.maxIter, goal: parsed.goal, resume: parsed.resume,
+        maxIter: parsed.maxIter, goal: parsed.goal, resume: parsed.resume, mode: parsed.mode,
       })
       log(`open self-iteration run: ${token} maxIter=${st.maxIter} goal=${st.goal} resume=${parsed.resume}`)
       return

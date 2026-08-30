@@ -9,6 +9,9 @@
 //   · 启动表单轮数 run 预算预填：同阶段 run 进行中（断点恢复已默认勾选）时，轮数框
 //     预填该 run 的 maxIter 预算 + 「续跑预算」角标——续跑时插件用表单值覆盖预算，
 //     默认 3 会让大预算 run 缩水；预填让「所见 = 所跑」，手动改过后不再覆盖
+//   · 启动表单评估模式 run mode 预填：续跑该 run（framework 评框架效率）时模式
+//     切到 framework + 「续跑模式」角标——续跑回落默认 product 会让同一 run 的
+//     评分维度前后不一致，框架效率判定（--eval-framework）也无从对比；手动改过后不再覆盖
 //   · 轮次瀑布：每阶段一条评分线（总分 + 等级 + 弱项 + 门禁），带 verdict 判定
 //     （continue 琥珀 / converge 绿 / degrade 红），score 与 round 分色标识
 //   · 评分 × git 检查点：每轮评分行对齐该评分时刻的阶段执行 commit + tag
@@ -45,7 +48,7 @@ import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
 import { useGitStore } from '../../store/gitStore';
 import { buildSelfIterateCommand, clampMaxIterInput } from '../../utils/selfIterateCommand';
-import { shouldDefaultResume, defaultRunIteration, defaultRunGoal } from '../../utils/selfIterationResume';
+import { shouldDefaultResume, defaultRunIteration, defaultRunGoal, defaultRunMode } from '../../utils/selfIterationResume';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
@@ -504,6 +507,9 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // 「收敛目标」是否已被用户手动改过：run goal 预填只在用户未干预时套用
   // （续跑语义下用户删空/另填 = 有意重设目标，刷新/重挂不覆盖）。
   const goalTouchedRef = React.useRef(false);
+  // 「评估模式」是否已被用户手动改过：run mode 预填只在用户未干预时套用
+  // （续跑语义下用户切到另一模式 = 有意改变评估口径，刷新/重挂不覆盖）。
+  const modeTouchedRef = React.useRef(false);
   // 启动联动：本次启动目标阶段（sending 期间瀑布高亮该块 + 运行中徽标；取消/结束不残留）
   const [targetStage, setTargetStage] = React.useState('');
   // 阶段评分瀑布区 DOM 引用（启动后滚进视区，聚焦轮次瀑布）
@@ -617,6 +623,20 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     if (goalTouchedRef.current || !resumeSel) return;
     const runGoal = defaultRunGoal(data?.state, stageSel);
     if (runGoal != null && goalSel !== runGoal) setGoalSel(runGoal);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, stageSel, resumeSel]);
+
+  // 启动表单「评估模式」run mode 预填：同阶段 run 进行中且「断点恢复」勾选
+  // （resumeSel=true）且该 run 是 framework（评框架效率）时，模式切到 framework——
+  // 续跑回落默认 product 会让同一 run 的评分维度前后不一致，框架效率判定
+  // （--eval-framework 需先后两轮对比）也无从进行。默认 product 不回填（无差异）。
+  // 只在用户未手动改过模式（modeTouchedRef）且确实在续跑时套用；run-state 无 mode
+  // 字段（老 run）→ 维持 product，不误标「续跑模式」。与 defaultRunIteration /
+  // defaultRunGoal 同范式（阶段预填后再填，依赖 stageSel）。
+  React.useEffect(() => {
+    if (modeTouchedRef.current || !resumeSel) return;
+    const runMode = defaultRunMode(data?.state, stageSel);
+    if (runMode && modeSel !== runMode) setModeSel(runMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, stageSel, resumeSel]);
 
@@ -777,7 +797,10 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
           <div className="flex items-center gap-1 bg-zinc-100 border border-zinc-200 rounded p-0.5 w-fit" role="group" aria-label="评估模式">
             <button
               type="button"
-              onClick={() => setModeSel('product')}
+              onClick={() => {
+                modeTouchedRef.current = true; // 用户手动切模式 → 不再按 run mode 覆盖
+                setModeSel('product');
+              }}
               aria-pressed={modeSel === 'product'}
               disabled={sending}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
@@ -790,7 +813,10 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
             </button>
             <button
               type="button"
-              onClick={() => setModeSel('framework')}
+              onClick={() => {
+                modeTouchedRef.current = true; // 用户手动切模式 → 不再按 run mode 覆盖
+                setModeSel('framework');
+              }}
               aria-pressed={modeSel === 'framework'}
               disabled={sending}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-all focus-visible:outline-none active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
@@ -802,6 +828,18 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               框架
             </button>
           </div>
+          {/* 续跑模式角标：断点恢复勾选 + 该 run 是 framework（未手动改过模式）时标注
+              「续跑模式 = framework」——与续跑预算/续跑目标角标同范式，让表单模式 =
+              run 实际模式（所见 = 所跑）。用户手动改过 / 取消断点恢复 → 不再提示。 */}
+          {resumeSel && !modeTouchedRef.current && modeSel === 'framework' && (
+            <span
+              className="shrink-0 inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/70"
+              title="该 run 的评估模式为 framework（评框架效率）：续跑时模式以此为准。手动切换将改变评估口径。"
+            >
+              <Icon name={I.fileCode} size={9} weight="fill" />
+              续跑模式
+            </span>
+          )}
         </div>
         {modeSel === 'framework' && (
           <div className="text-[10px] text-zinc-400 pl-1">
