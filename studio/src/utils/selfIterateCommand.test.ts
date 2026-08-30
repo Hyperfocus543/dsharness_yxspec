@@ -5,8 +5,8 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { buildSelfIterateCommand, clampMaxIterInput } from './selfIterateCommand';
-import type { SelfIterateOptions } from './selfIterateCommand';
+import { buildSelfIterateCommand, buildSelfIteratePreview, clampMaxIterInput } from './selfIterateCommand';
+import type { SelfIterateFormState, SelfIterateOptions } from './selfIterateCommand';
 
 describe('buildSelfIterateCommand（/yxspec:self-iterate 派活命令拼装）', () => {
   it('stage 为空 → 返回 \'\'（调用方据此提示不派发）', () => {
@@ -189,5 +189,60 @@ describe('clampMaxIterInput（轮数输入归一，与派活钳制同口径）',
   it('数字前缀截取（e / 中文等混入时仍取前导数字）', () => {
     expect(clampMaxIterInput('5轮')).toBe('5');
     expect(clampMaxIterInput('3e2')).toBe('3');
+  });
+});
+
+describe('buildSelfIteratePreview（启动表单实况 → 派活命令预览）', () => {
+  const base: SelfIterateFormState = { stage: 'sqt_script_gen', maxIter: '3', goal: '', mode: 'product', resume: false };
+
+  it('表单默认实况 → 基础命令（无 flag）', () => {
+    expect(buildSelfIteratePreview(base)).toBe('/yxspec:self-iterate sqt_script_gen');
+  });
+
+  it('阶段为空 → 空串（预览降级提示，与启动按钮禁用态一致）', () => {
+    expect(buildSelfIteratePreview({ ...base, stage: '' })).toBe('');
+    expect(buildSelfIteratePreview({ ...base, stage: '   ' })).toBe('');
+  });
+
+  it('轮数串与 buildSelfIterateCommand 直接传数字同构（maxIter 5 → 拼 --max-iter=5）', () => {
+    expect(buildSelfIteratePreview({ ...base, maxIter: '5' })).toBe('/yxspec:self-iterate sqt_script_gen --max-iter=5');
+  });
+
+  it('轮数空串 → 不拼（与表单未填走网关默认 3 同构）', () => {
+    expect(buildSelfIteratePreview({ ...base, maxIter: '' })).toBe('/yxspec:self-iterate sqt_script_gen');
+  });
+
+  it('轮数超界串（999）→ 与派活同钳制（--max-iter=10）', () => {
+    expect(buildSelfIteratePreview({ ...base, maxIter: '999' })).toBe('/yxspec:self-iterate sqt_script_gen --max-iter=10');
+  });
+
+  it('目标 → 拼 ` --goal="<goal>"`（保留空格）', () => {
+    expect(buildSelfIteratePreview({ ...base, goal: 'Total>=80 且门禁全绿' })).toBe(
+      '/yxspec:self-iterate sqt_script_gen --goal="Total>=80 且门禁全绿"',
+    );
+  });
+
+  it('目标空白串 → 不拼', () => {
+    expect(buildSelfIteratePreview({ ...base, goal: '   ' })).toBe('/yxspec:self-iterate sqt_script_gen');
+  });
+
+  it('framework 模式 → 拼 ` --mode=framework`', () => {
+    expect(buildSelfIteratePreview({ ...base, mode: 'framework' })).toBe('/yxspec:self-iterate sqt_script_gen --mode=framework');
+  });
+
+  it('断点恢复 → 拼尾随 ` --resume`', () => {
+    expect(buildSelfIteratePreview({ ...base, resume: true })).toBe('/yxspec:self-iterate sqt_script_gen --resume');
+  });
+
+  it('全参实况 → 顺序 max-iter → goal → mode → resume（与 buildSelfIterateCommand 组合一致）', () => {
+    expect(
+      buildSelfIteratePreview({
+        stage: 'swe_arch',
+        maxIter: '8',
+        goal: 'Total>=85 且门禁全绿',
+        mode: 'framework',
+        resume: true,
+      }),
+    ).toBe('/yxspec:self-iterate swe_arch --max-iter=8 --goal="Total>=85 且门禁全绿" --mode=framework --resume');
   });
 });

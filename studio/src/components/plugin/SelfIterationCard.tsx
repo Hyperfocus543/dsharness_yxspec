@@ -12,6 +12,9 @@
 //   · 启动表单评估模式 run mode 预填：续跑该 run（framework 评框架效率）时模式
 //     切到 framework + 「续跑模式」角标——续跑回落默认 product 会让同一 run 的
 //     评分维度前后不一致，框架效率判定（--eval-framework）也无从对比；手动改过后不再覆盖
+//   · 派活命令预览：表单实况（阶段/轮数/目标/模式/断点恢复）实时派生为即将派发的
+//     /yxspec:self-iterate 命令（复用 buildSelfIterateCommand 纯函数），点启动前一眼
+//     核对「实际要跑什么」，所见 = 所跑；空阶段 → 占位提示，发送期间隐藏
 //   · 轮次瀑布：每阶段一条评分线（总分 + 等级 + 弱项 + 门禁），带 verdict 判定
 //     （continue 琥珀 / converge 绿 / degrade 红），score 与 round 分色标识
 //   · 评分 × git 检查点：每轮评分行对齐该评分时刻的阶段执行 commit + tag
@@ -47,7 +50,7 @@ import {
 import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
 import { useGitStore } from '../../store/gitStore';
-import { buildSelfIterateCommand, clampMaxIterInput } from '../../utils/selfIterateCommand';
+import { buildSelfIterateCommand, buildSelfIteratePreview, clampMaxIterInput, type SelfIterateFormState } from '../../utils/selfIterateCommand';
 import { shouldDefaultResume, defaultRunIteration, defaultRunGoal, defaultRunMode } from '../../utils/selfIterationResume';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
@@ -709,6 +712,24 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     [summaries],
   );
 
+  // 启动表单实况 → 派活命令预览（纯前端派生，零接口）：
+  // 表单每一项（阶段/轮数/目标/模式/断点恢复）都是派活命令的一个 flag，改动即重算，
+  // 让「实际要跑什么」在点启动前一眼可见——启动新迭代不再是把命令交出去的黑盒。
+  // 与 onStart 的 buildSelfIterateCommand 调用同构（见 utils/selfIterateCommand.buildSelfIteratePreview），
+  // 所见 = 所跑；空阶段 → 空串（预览区降级提示）。必须在所有条件 return 之前调用
+  // （hooks 顺序恒定），空串回退在渲染层处理。
+  const previewCmd = React.useMemo(
+    () =>
+      buildSelfIteratePreview({
+        stage: stageSel,
+        maxIter: maxIterSel,
+        goal: goalSel,
+        mode: modeSel,
+        resume: resumeSel,
+      } satisfies SelfIterateFormState),
+    [stageSel, maxIterSel, goalSel, modeSel, resumeSel],
+  );
+
   if (loading) {
     return (
       <div
@@ -950,6 +971,35 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
             )}
           </label>
         </div>
+        {/* 派活命令预览：表单实况 → 即将派发的 /yxspec:self-iterate 命令（纯前端派生）。
+            启动新迭代不再是黑盒——阶段/轮数/目标/模式/断点恢复每个改动都实时反映在
+            「将要执行」的命令里，点启动前一眼核对；空阶段 → 中性占位提示（与启动按钮
+            禁用态一致）。sending 期间隐藏，避免与「已执行 Ns」计时并排占用行宽。 */}
+        {!sending && (
+          <div
+            className="flex items-center gap-1.5 text-[11px]"
+            title={
+              previewCmd
+                ? '派活命令预览：点「启动」将派发此命令（与表单各项实时同步）'
+                : '选择阶段后显示即将派发的 /yxspec:self-iterate 命令预览'
+            }
+          >
+            <span className="shrink-0 text-zinc-400 inline-flex items-center gap-0.5">
+              <Icon name={I.terminal} size={11} />
+              将执行
+            </span>
+            {previewCmd ? (
+              <code
+                className="min-w-0 flex-1 truncate rounded bg-zinc-100 border border-zinc-200 px-1.5 py-0.5 font-mono text-[10px] text-emerald-800"
+                title={previewCmd}
+              >
+                {previewCmd}
+              </code>
+            ) : (
+              <span className="text-zinc-300">选择阶段后预览命令</span>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <button
             type="button"

@@ -9,6 +9,37 @@
 // UI 基线：design-taste skill — 纯数据，提示/落盘由调用方组件负责。
 // =============================================================================
 
+/** 表单实况 → 派活命令（与 SelfIterationCard 表单状态同形；null = 空阶段/未就绪）。 */
+export interface SelfIterateFormState {
+  /** 表单「阶段」选择值（空串 = 未选择） */
+  stage: string;
+  /** 表单「轮数」输入值（空串 = 未填，走网关默认 3） */
+  maxIter: string;
+  /** 表单「收敛目标」输入值（trim 后空 → 不拼 --goal） */
+  goal: string;
+  /** 表单「评估模式」：'product'（默认）/ 'framework'（拼 --mode=framework） */
+  mode: 'product' | 'framework';
+  /** 表单「断点恢复」勾选（true 拼 --resume） */
+  resume: boolean;
+}
+
+/**
+ * 表单实况 → /yxspec:self-iterate 派活命令（纯前端派生，零接口）。
+ * 与 onStart 的 buildSelfIterateCommand 调用严格同构——表单每改一次就重算一次，
+ * 所见（预览）= 所跑（实际派发）恒一致；阶段空/空白 → 空串（预览降级提示）。
+ * maxIter 是原始输入串：空串/非法由 buildSelfIterateCommand 的
+ * typeof===number + finite 守卫自然落空（不拼），数字串 parseInt 后同构传参。
+ */
+export function buildSelfIteratePreview(state: SelfIterateFormState): string {
+  return buildSelfIterateCommand({
+    stage: state.stage,
+    maxIter: state.maxIter.trim() === '' ? undefined : parseInt(state.maxIter.trim(), 10),
+    goal: state.goal.trim() || undefined,
+    mode: state.mode,
+    resume: state.resume,
+  });
+}
+
 /** /yxspec:self-iterate 派活命令参数（全可选，缺省不拼对应 flag）。 */
 export interface SelfIterateOptions {
   /** 阶段 token（STAGE_ORDER 项，如 sqt_script_gen；也可传命令名 sqt-script-gen） */
