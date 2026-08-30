@@ -1144,7 +1144,8 @@ export const GitWorkspaceCard: React.FC = () => {
                     setWsMode(mode);
                     setWsFormError(null);
                   }}
-                  className={`px-2 py-0.5 rounded text-xs border transition-all active:scale-[0.98] ${
+                  disabled={operating}
+                  className={`px-2 py-0.5 rounded text-xs border transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed ${
                     wsMode === mode
                       ? 'bg-emerald-600 text-white border-emerald-700'
                       : 'bg-white border-zinc-200 text-zinc-500 hover:border-emerald-300 hover:text-emerald-700'
@@ -1158,7 +1159,8 @@ export const GitWorkspaceCard: React.FC = () => {
             {wsMode === 'local' ? (
               <input
                 autoFocus
-                className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                disabled={operating}
+                className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-zinc-50"
                 value={wsPath}
                 onChange={(e) => setWsPath(e.target.value)}
                 placeholder="D:/Work/01_Projects/..."
@@ -1168,7 +1170,8 @@ export const GitWorkspaceCard: React.FC = () => {
               <div className="space-y-1.5">
                 <input
                   autoFocus
-                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                  disabled={operating}
+                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-zinc-50"
                   value={wsInitDir}
                   onChange={(e) => setWsInitDir(e.target.value)}
                   placeholder="D:/Work/04_Temp/新仓库目录"
@@ -1182,14 +1185,16 @@ export const GitWorkspaceCard: React.FC = () => {
               <div className="space-y-1.5">
                 <input
                   autoFocus
-                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                  disabled={operating}
+                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-zinc-50"
                   value={wsUrl}
                   onChange={(e) => setWsUrl(e.target.value)}
                   placeholder="https://github.com/..."
                   title="远程仓库地址（https 或 git@）"
                 />
                 <input
-                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white"
+                  disabled={operating}
+                  className="w-full text-xs border border-zinc-300 rounded-md px-2 py-1 bg-white disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-zinc-50"
                   value={wsDir}
                   onChange={(e) => setWsDir(e.target.value)}
                   placeholder="D:/Work/04_Temp/新仓库名"
