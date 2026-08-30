@@ -1025,7 +1025,12 @@ export const GitWorkspaceCard: React.FC = () => {
           </button>
         </div>
 
-        {workspaceLoading ? (
+        {workspaceLoading && workspaces.length === 0 ? (
+          // 骨架只给「真无数据」的首拉：列表为空时没东西可展示，骨架承接加载中。
+          // 写操作成功后的联动刷新不闪骨架——store 已在写操作响应里同步过新列表
+          // （addWorkspace/removeWorkspace/activateAfterAdd 都 set workspaces），
+          // 此时列表有内容，refreshWorkspaces 只应在后台静默对齐，而非把刚刷新的
+          // 列表闪成 3 根灰条再跳回（数据其实已在手里）。
           <div className="space-y-1" role="status" aria-busy="true" aria-label="正在加载工作区列表">
             {Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="h-9 bg-zinc-100 rounded-lg animate-pulse" />
