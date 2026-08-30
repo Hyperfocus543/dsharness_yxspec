@@ -1086,7 +1086,7 @@ export const GitWorkspaceCard: React.FC = () => {
                 ? loading
                   ? '（状态加载中…）'
                   : '（状态不可用）'
-                : '（git 不可用，状态未知）'}
+                : '（git 不可用，无法读取状态）'}
           </span>
         </div>
         <button
