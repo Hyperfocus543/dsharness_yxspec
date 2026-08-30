@@ -211,7 +211,15 @@ export function apply(ctx, input = {}) {
       const prompt = promptFromInbox(event.data)
       const token = stageOfPrompt(prompt)
       if (!token) return // 通用咨询/无阶段命令 → 不记录
-      if (sessions.has(sessionId)) return // 同阶段续跑（未 turn/end 不重开）
+      // 同阶段续跑（未 turn/end 不重开）→ 复用现有记录；换阶段 → 旧记录作废。
+      // 换阶段时 aspice-trajectory 会在 inbox 里封口旧轨迹、按新阶段重开（stage-switch），
+      // 而本插件若沿用旧记录，turn/end 会把 tag/审计打进旧阶段目录 —— 与轨迹错位、
+      // 新阶段无 tag。与 aspice-trajectory 同口径：cur.stage 不同即作废重开。
+      const cur = sessions.get(sessionId)
+      if (cur) {
+        if (cur.stage === token) return
+        sessions.delete(sessionId) // 换阶段：作废旧记录，按新阶段预分配
+      }
       sessions.set(sessionId, { stage: token, seq: nextSeqFor(token) })
       return
     }
