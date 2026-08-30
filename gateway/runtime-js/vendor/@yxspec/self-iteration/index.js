@@ -175,13 +175,35 @@ function parseSelfIterate(prompt) {
   }
 }
 
-/** 阶段串（下划线 token 或连字符命令名）→ 权威 token；解析失败 → null。 */
+/** 阶段串（下划线 token 或连字符命令名）→ 权威 token；解析失败 → null。
+ *  解析顺序（由具体到兜底）：
+ *   1. 下划线 token 原样（`swe_arch` → `swe_arch`）
+ *   2. 完整命令名（连字符形态，`swe-arch-v2` → `swe_arch`）
+ *   3. 反查 token 表：连字符表单（`swe-arch` → `swe_arch`）
+ *   4. 兜底归一：下划线表单再查一次（`swe_arch_if` 这类**含下划线的连字符**原样
+ *      撞 CMD_TOKENS 值失败时，归一为连字符 `swe-arch-if` 才可能命中）。
+ *      注意不可用裸 `kebab` 替代表值去兜底：kebab 是**命令名**形态，不是 token 形态
+ *      （`swe-arch` 撞命令表只会因前缀/后缀关系误命中——权威表命令名是
+ *      `/yxspec:swe-arch-v2`，`swe-arch` 与其无任何精确匹配，取 `t===kebab` 恒 null），
+ *      而 token 表的键都是下划线 token（`swe_arch_if`），与 `swe-arch-if` 也无一字相等。
+ *      此前 `if (!CMD_TOKENS) return kebab` 对 harness 外（无表）运行是合理的命令名
+ *      兜底；表存在时用它反查却恒落空 → 命令命中但 resolveStageToken 失败 → 静默不开
+ *      run（自迭代轮次状态机形同虚设）。 */
 function resolveStageToken(raw) {
   if (!raw) return null
   const kebab = String(raw).replace(/_/g, '-')
   if (!CMD_TOKENS) return kebab // 权威表不可用 → 用连字符形式兜底（阶段名即命令名）
   for (const [cmd, t] of CMD_TOKENS) {
     if (cmd === `/yxspec:${kebab}` || t === raw || t === kebab) return t
+  }
+  // 兜底：把用户输入当成 token 的下划线归一形态再查（token 表键即下划线 token）。
+  // 覆盖「连字符命令名」与「含下划线的命令名」两类输入，保证任何能写出合法阶段的
+  // 拼写（前端 buildSelfIterateCommand 派活、agent 手写命令）都落回权威 token。
+  const under = String(raw).replace(/-/g, '_')
+  if (under !== raw) {
+    for (const t of CMD_TOKENS.values()) {
+      if (t === under) return t
+    }
   }
   return null
 }
