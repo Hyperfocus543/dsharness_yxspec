@@ -407,21 +407,29 @@ function gitSubUnsafe(sub, segment) {
     // 只读：无参（列出）、-l/--list [pattern]（列出过滤，如 `git tag -l 'v1.*'`）、
     // -n[<num>]（列出带注解，`git tag -n` / `git tag -n5`）、--sort=<key>（排序列出，
     // 如 `git tag --sort=-creatordate`——sort 键可带前导 `-` 表示降序）。
-    // pattern 是列出参数不是子命令，此前 ^(?:-l|--list)?$ 把带 pattern 的只读列出
-    // 误判为拒绝（误伤）；pattern 以 - 开头的一律按不匹配处理（宁可误伤不放过，
-    // 防 `-l -d`/`-l --delete` 这类 flag 混排）。`-n`/`--sort` 同为「列出」形态——
-    // 此前未被识别 → 只读列带注解/排序被默认拒绝误伤（`git tag -n1` 是 agent 查看
-    // 各 tag 提交说明、`--sort=-creatordate` 是网关/前端排序列 tag 的常规只读调用）。
-    // `--sort` 只认 `=` 连写值（git 对 `--sort -d foo` 会把 `-d` 解析成 --delete，
-    // 空格分隔形态因歧义不放行）；其余（打标签/删标签/带 flag）拒绝。
+    // pattern 是列出参数不是子命令；`-n`/`--sort` 同为「列出」形态。
+    // 判定：逐 token 分类——列清单 flag（-l/--list/-n[<num>]/--sort=<val>）放行；
+    // 其余 `-` 开头 flag（-a/-d/-D/-f/-m/-F/-s/-e/--delete/--force/…）都是写/破坏性
+    // 形态 → 拒绝；非 flag token（pattern/tag 名）只有「前面已见过列清单 flag」才是
+    // 列出 pattern（放行），否则就是要创建的 tag 名（`git tag v1.0`）→ 拒绝。
+    // 此前用整串正则逐一匹配单形态，flag 组合（`git tag -l --sort=-creatordate`、
+    // `git tag -n1 --sort=version:refname`）两形态都在只读集里却被默认拒绝误伤；
+    // token 分类把任意「纯只读 flag 组合 + pattern」都放行，破坏性 flag 仍一律拦截。
+    // `--sort` 只认 `=` 连写值（`--sort -d foo` 会把 `-d` 解析成 --delete，空格形态
+    // 因歧义由 `-d` 分支拦截，不放行）。
     const after = gitArgsAfter('tag', segment);
-    if (
-      after === '' ||
-      /^-(?:l|n\d*)(?:[ \t]+[^-]\S*)?$/.test(after) ||
-      /^--list(?:=[\S]+|[ \t]+[^-]\S*)?$/.test(after) ||
-      /^--sort=[\S]+$/.test(after)
-    ) return false;
-    return true;
+    if (after === '') return false;
+    const toks = after.split(/\s+/).filter(Boolean);
+    let listFlag = false;
+    for (const t of toks) {
+      if (/^--list(?:=|$)/.test(t) || /^--sort=.+/.test(t) || /^-(?:l|n\d*)$/.test(t)) {
+        listFlag = true;
+        continue;
+      }
+      if (t.startsWith('-')) return true;
+      if (!listFlag) return true;
+    }
+    return false;
   }
   if (sub === 'config') {
     // 只读：`--get`/`--get-all`/`--get-regexp`/`--get-urlmatch`/`--list`/`-l`/

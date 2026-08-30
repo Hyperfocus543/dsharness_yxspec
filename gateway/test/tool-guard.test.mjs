@@ -56,6 +56,14 @@ for (const cmd of [
   'git tag -n 5',
   'git tag --sort=-creatordate',
   'git tag --sort=version:refname',
+  // 2026-08-31 追加：只读 flag 组合形态放行——`-l`/`-n[<num>]` 与 `--sort=<key>` 混用
+  // （`git tag -l --sort=-creatordate` 按名字过滤 + 排序、`git tag -n1 --sort=version:refname`
+  // 带注解 + 排序）都是只读列 tag 的常规形态，此前只认单一 flag 形态整串正则 → 组合
+  // 被默认拒绝误伤（实测）。逐 token 分类后纯只读组合放行；破坏性 flag（-d/-a/-f 等）
+  // 仍一律拦截（见 §2 `git tag -l -d foo`）。
+  'git tag -l --sort=-creatordate',
+  'git tag -l "v1.*" --sort=-creatordate',
+  'git tag -n1 --sort=version:refname',
   'git remote -v',
   'git remote --verbose',
   'git remote show origin',
