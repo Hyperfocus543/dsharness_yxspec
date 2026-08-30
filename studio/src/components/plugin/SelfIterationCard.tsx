@@ -506,7 +506,13 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // data 首拉完成后补填一次（初始 data=null 时 run 阶段未知，表单留空等数据）。
   React.useEffect(() => {
     if (stageTouchedRef.current || stageSel) return;
-    const candidate = data?.state?.stage || defaultStage || '';
+    // 数据未就绪（data=null，首拉/网关慢）时不预填：run 阶段未知，若此刻用
+    // defaultStage（驾驶舱当前阶段）抢先填上，等 run-state 载入后 stageSel 已非空、
+    // 本效果不会重填 —— 正在自迭代的阶段（data.state.stage）被驾驶舱当前阶段覆盖，
+    // 「断点恢复」预勾也会因 shouldDefaultResume 阶段不符而失效，照常启动会误重置
+    // run-state（基线/轮次丢失）。先等数据，再按「run 阶段优先 → 驾驶舱当前阶段」填。
+    if (!data) return;
+    const candidate = data.state?.stage || defaultStage || '';
     if (candidate && (stageOptions as readonly string[]).includes(candidate)) {
       setStageSel(candidate);
     }
