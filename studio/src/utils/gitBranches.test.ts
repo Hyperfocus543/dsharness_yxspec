@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
-import { groupGitBranches, type GitBranchGroup } from './gitBranches';
+import { groupGitBranches, type GitBranchDivergence, type GitBranchGroup } from './gitBranches';
 
 describe('groupGitBranches（分支列表按远端分组）', () => {
   it('空 / null / undefined → []（调用方保持「无分支」展示）', () => {
@@ -105,5 +105,35 @@ describe('groupGitBranches（分支列表按远端分组）', () => {
     // 远端分支不携带 current 字段（恒未定义，绝不当成本地当前分支）
     expect(groups[1].branches[0]).toMatchObject({ label: 'origin/main', value: 'remotes/origin/main' });
     expect(groups[1].branches[0].current).toBeUndefined();
+  });
+
+  it('本地分支偏差（ahead/behind）透传：divergence 挂本地分支，远端恒不标', () => {
+    const details = new Map<string, GitBranchDivergence>([
+      ['main', { upstream: 'origin/main', ahead: 2, behind: 0 }],
+      ['topic', { upstream: 'origin/topic', ahead: 1, behind: 1 }],
+    ]);
+    const groups = groupGitBranches(['main', 'topic', 'remotes/origin/main', 'remotes/origin/topic'], 'main', details);
+    // 本地组
+    expect(groups[0].branches[0].divergence).toEqual({ upstream: 'origin/main', ahead: 2, behind: 0 });
+    expect(groups[0].branches[1].divergence).toEqual({ upstream: 'origin/topic', ahead: 1, behind: 1 });
+    // 远端组不携带 divergence
+    expect(groups[1].branches.every((b) => b.divergence === undefined)).toBe(true);
+    // value / current 语义不变（偏差纯装饰）
+    expect(groups[0].branches[0].value).toBe('main');
+    expect(groups[0].branches[0].current).toBe(true);
+  });
+
+  it('无偏差 / 缺 details → 不挂 divergence（与旧版行为完全一致）', () => {
+    // 无 details（老网关/缺省）→ 本地分支无 divergence
+    const plain = groupGitBranches(['main', 'dev'], 'main');
+    expect(plain[0].branches.every((b) => b.divergence === undefined)).toBe(true);
+    // details 提供但该分支不在其中 / 偏差 0（无净偏差）→ 无 divergence 或 0/0 原样透传
+    const det = new Map<string, GitBranchDivergence>([['main', { upstream: 'origin/main', ahead: 0, behind: 0 }]]);
+    const with0 = groupGitBranches(['main', 'dev'], 'main', det);
+    expect(with0[0].branches[0].divergence).toEqual({ upstream: 'origin/main', ahead: 0, behind: 0 });
+    expect(with0[0].branches[1].divergence).toBeUndefined();
+    // details 为 null / 空 Map → 无 divergence
+    expect(groupGitBranches(['main'], null, null)[0].branches[0].divergence).toBeUndefined();
+    expect(groupGitBranches(['main'], null, new Map())[0].branches[0].divergence).toBeUndefined();
   });
 });

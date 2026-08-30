@@ -526,6 +526,57 @@ export function checkoutSwitchSummary(beforeOut, afterOut) {
   }
 }
 
+/**
+ * 解析 `git branch -a --format` 输出 → 分支条目（含上游偏差）。纯函数（可单测）。
+ * 行格式 `%(HEAD)%09%(refname)%09%(upstream:short)%09%(upstream:track)`：
+ *   · HEAD    `*`（当前分支）或空
+ *   · refname `refs/heads/<名>`（本地）或 `refs/remotes/<remote>/<rest>`（远端）
+ *   · upstream:short 上游跟踪分支（本地分支有上游时如 `origin/main`；无 → 空）
+ *   · upstream:track 偏差括号 `[ahead 1]` / `[ahead 1, behind 1]`（无上游/无偏差 → 空）
+ * 本地分支 → { name: 短名, remote: null, current, upstream, ahead, behind }
+ * 远端分支 → { name: `remotes/<remote>/<rest>`（与旧 `git branch -a` 输出逐字一致，
+ *   前端 groupGitBranches 按 remotes/ 前缀分组）, remote: <remote>, current: false,
+ *   upstream: null, ahead: 0, behind: 0 }
+ * 偏差解析：`[ahead N]` / `[behind M]` / `[ahead N, behind M]`；`[gone]`（上游已删）→ 0/0。
+ * 空/非字符串 → []。
+ * @param {string} out
+ * @returns {Array<{name:string, remote:string|null, current:boolean, upstream:string|null, ahead:number, behind:number}>}
+ */
+export function parseBranchList(out) {
+  if (typeof out !== 'string' || !out.trim()) return []
+  const rows = []
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    const [head, ref, up, track] = line.split('\t')
+    if (ref === 'refs/heads/') continue
+    if (ref.startsWith('refs/heads/')) {
+      const name = ref.slice('refs/heads/'.length)
+      if (!name) continue
+      let ahead = 0
+      let behind = 0
+      const t = String(track ?? '')
+      const a = /ahead\s+(\d+)/.exec(t)
+      const b = /behind\s+(\d+)/.exec(t)
+      if (a) ahead = Number(a[1])
+      if (b) behind = Number(b[1])
+      rows.push({ name, remote: null, current: head === '*', upstream: up || null, ahead, behind })
+    } else if (ref.startsWith('refs/remotes/')) {
+      const short = ref.slice('refs/remotes/'.length) // origin/master
+      const slash = short.indexOf('/')
+      rows.push({
+        name: `remotes/${short}`,
+        remote: slash >= 0 ? short.slice(0, slash) : short,
+        current: false,
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+      })
+    }
+    // 其他 ref 形态（detached HEAD 无 refname / refs/tags）→ 忽略
+  }
+  return rows
+}
+
 /** 审计留痕展示动作 → 中文标签（listAuditLog 归一化用）。 */
 const AUDIT_ACTION_LABEL = {
   clone: '克隆',
@@ -1039,11 +1090,20 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     const line = (g.stdout || '').split('\n').find((l) => /HEAD\s*->/.test(l))
     return { ok: true, stdout: g.stdout, head: line || null, summary }
   }
-  // 6) branch -a：只读列表（不追加写审计）
-  const g = await runGit(['branch', '-a'], { cwd: realRoot })
+  // 6) branch -a：只读列表（不追加写审计）。用富格式一次 git 调用取
+  //    HEAD/refname/upstream/偏差（`--format` 输出 tab 分隔，行解析见 parseBranchList）：
+  //    旧实现用 `git branch -a` 再剥 `* `，分支名带空格/特殊字符时剥前缀脆弱、且拿不到
+  //    upstream/偏差 —— 分支下拉「一眼看出哪些分支落后/领先」的数据源。返回结构向前兼容：
+  //    branches = 旧版字符串数组（checkout value 语义不变），branchDetails = 富条目。
+  const g = await runGit([
+    'branch',
+    '-a',
+    '--format=%(HEAD)%09%(refname)%09%(upstream:short)%09%(upstream:track)',
+  ], { cwd: realRoot })
   if (!g.ok) return { ok: false, error: g.error, message: 'git branch 执行失败' }
-  const branches = (g.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => l.replace(/^\*\s*/, '').trim())
-  return { ok: true, branches }
+  const details = parseBranchList(g.stdout)
+  const branches = details.map((d) => d.name)
+  return { ok: true, branches, branchDetails: details }
 }
 
 /**

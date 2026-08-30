@@ -23,10 +23,10 @@ import { EmptyState, GitDiffPreview, Icon, SectionLabel } from '../ui';
 import { I } from '../ui/icons';
 import { STAGE_TABLE } from '../../data/stage-mapping';
 import type { StageToken } from '../../data/types';
-import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitStashEntry, type GitWorkspace } from '../../utils/ipc';
+import { getGitDiff, fetchCloneProgress, type CloneProgressRecord, type GitAuditEntry, type GitBranchDetail, type GitDiffResult, type GitDirtyFile, type GitStageTrace, type GitStashEntry, type GitWorkspace } from '../../utils/ipc';
 import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { parseYxspecTag, stageTagSummary, yxspecTagOf } from '../../utils/gitTagName';
-import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
+import { groupGitBranches, type GitBranchDivergence, type GitBranchGroup } from '../../utils/gitBranches';
 import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
 import { retryAuditLabel, retryAuditParams, retryAuditTitle, checkoutSwitchLabel, checkoutSwitchTooltip } from '../../utils/gitRetry';
 import { gitWorkspaceName } from '../../utils/gitWorkspaceName';
@@ -743,9 +743,23 @@ export const GitWorkspaceCard: React.FC = () => {
   // （不改变既有 checkout 语义 —— 远端分支仍按原样 checkout）。
   const [branchPanelOpen, setBranchPanelOpen] = React.useState(false);
   const [branches, setBranches] = React.useState<string[]>([]);
+  // 分支偏差（网关 branch action 富格式 branchDetails：本地分支 → 上游 ahead/behind）。
+  // 数据源 = loadBranches 同一次 /api/git/operate 响应，纯前端派生；老网关无
+  // branchDetails 字段 → undefined，与旧版行为完全一致（静默降级，不标偏差）。
+  const [branchDetails, setBranchDetails] = React.useState<GitBranchDetail[] | null>(null);
+  const detailsByValue = React.useMemo(() => {
+    if (!branchDetails) return undefined;
+    const m = new Map<string, GitBranchDivergence>();
+    for (const d of branchDetails) {
+      if (d.remote === null) {
+        m.set(d.name, { upstream: d.upstream, ahead: d.ahead, behind: d.behind });
+      }
+    }
+    return m;
+  }, [branchDetails]);
   const branchGroups = React.useMemo<GitBranchGroup[]>(
-    () => groupGitBranches(branches, status?.branch ?? null),
-    [branches, status?.branch],
+    () => groupGitBranches(branches, status?.branch ?? null, detailsByValue),
+    [branches, status?.branch, detailsByValue],
   );
   const branchTotal = React.useMemo(
     () => branchGroups.reduce((n, g) => n + g.branches.length, 0),
@@ -804,6 +818,7 @@ export const GitWorkspaceCard: React.FC = () => {
   // 回滚写进审计（无行标「待确认」、commit 与现留痕不匹配）——切 root 一并收起。
   React.useEffect(() => {
     setBranches([]);
+    setBranchDetails(null);
     setBranchPanelOpen(false);
     setBranchValue('');
     setBranchError(null);
@@ -946,6 +961,7 @@ export const GitWorkspaceCard: React.FC = () => {
         action: 'branch',
       });
       setBranches(res?.branches ?? []);
+      setBranchDetails(res?.branchDetails ?? null);
     } catch (e: any) {
       setBranchError(e?.message || '分支列表加载失败');
     } finally {
@@ -958,7 +974,10 @@ export const GitWorkspaceCard: React.FC = () => {
   // 列表，也不闪「加载分支中…」）。checkout 成功后面板已收起，走清空分支。
   const invalidateBranches = (panelClosing = false) => {
     if (!panelClosing && branchPanelOpen) void loadBranches(true);
-    else setBranches([]);
+    else {
+      setBranches([]);
+      setBranchDetails(null);
+    }
   };
 
   const doCheckout = async (branch: string) => {
@@ -1552,14 +1571,35 @@ export const GitWorkspaceCard: React.FC = () => {
                           展开列表里；给一条明确的退出路径。 */}
                       <option value="__close__">收起分支列表</option>
                       {/* 分组下拉：本地分支在前，远端按 remote 分组（多远端一眼可分）。
-                          当前分支标 ●（仅本地）；checkout 的 value 恒为原始分支名，语义不变。 */}
+                          当前分支标 ●（仅本地）；checkout 的 value 恒为原始分支名，语义不变。
+                          本地分支偏差（↑N 领先 / ↓M 落后）：网关 branchDetails 纯装饰标注，
+                          tooltip 给上游分支名——落后分支该 pull、领先分支该 push，一眼可判。 */}
                       {branchGroups.map((g) => (
                         <optgroup key={g.label} label={`${g.label}（${g.branches.length}）`}>
-                          {g.branches.map((b) => (
-                            <option key={b.value} value={b.value}>
-                              {b.current ? `● ${b.label}` : b.label}
-                            </option>
-                          ))}
+                          {g.branches.map((b) => {
+                            const d = b.divergence;
+                            const divSuffix =
+                              d && (d.ahead > 0 || d.behind > 0)
+                                ? `${d.ahead > 0 ? ` ↑${d.ahead}` : ''}${d.behind > 0 ? ` ↓${d.behind}` : ''}`
+                                : '';
+                            return (
+                              <option
+                                key={b.value}
+                                value={b.value}
+                                title={
+                                  d && (d.ahead > 0 || d.behind > 0) && d.upstream
+                                    ? `相对 ${d.upstream}：${[
+                                        d.ahead > 0 ? `领先 ${d.ahead}` : null,
+                                        d.behind > 0 ? `落后 ${d.behind}` : null,
+                                      ].filter((l): l is string => Boolean(l)).join('、')}`
+                                    : undefined
+                                }
+                              >
+                                {b.current ? `● ${b.label}` : b.label}
+                                {divSuffix}
+                              </option>
+                            );
+                          })}
                         </optgroup>
                       ))}
                       {/* 面板打开但列表为空（0 分支 / 加载失败 / 重载被置空）→

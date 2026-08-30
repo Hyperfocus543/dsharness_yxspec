@@ -19,7 +19,7 @@ import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces, parsePushSummary, checkoutSwitchSummary } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces, parsePushSummary, checkoutSwitchSummary, parseBranchList } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -892,4 +892,55 @@ test('addWorkspace：重复登记当前生效根 → already:true 返回 default
     else process.env.YXSPEC_GIT_AUDIT = prevAudit
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// 分支富格式列表（branch -a --format 输出 → 条目含上游/偏差）。格式：
+//   %(HEAD)%09%(refname)%09%(upstream:short)%09%(upstream:track)
+// 远端 refname 为 refs/remotes/<remote>/<rest>，本地为 refs/heads/<name>；
+// 偏差括号 `[ahead N]` / `[behind M]` / `[ahead N, behind M]`；无上游/无偏差 → 空。
+test('parseBranchList：本地分支 + 上游偏差（ahead / behind / 组合）', () => {
+  const out = [
+    '*\trefs/heads/main\torigin/main\t[ahead 2]',
+    '\trefs/heads/topic\torigin/topic\t[ahead 1, behind 1]',
+    '\trefs/heads/old\torigin/old\t[behind 3]',
+    '\trefs/heads/local\t\t',
+  ].join('\n')
+  const rows = parseBranchList(out)
+  assert.equal(rows.length, 4)
+  // 当前分支：HEAD=* → current
+  assert.deepEqual(rows[0], { name: 'main', remote: null, current: true, upstream: 'origin/main', ahead: 2, behind: 0 })
+  // 组合偏差
+  assert.deepEqual(rows[1], { name: 'topic', remote: null, current: false, upstream: 'origin/topic', ahead: 1, behind: 1 })
+  // 仅落后
+  assert.deepEqual(rows[2], { name: 'old', remote: null, current: false, upstream: 'origin/old', ahead: 0, behind: 3 })
+  // 无上游 → upstream null + 偏差 0
+  assert.deepEqual(rows[3], { name: 'local', remote: null, current: false, upstream: null, ahead: 0, behind: 0 })
+})
+
+test('parseBranchList：远端分支 → remotes/<remote>/<rest>（与旧 branch -a 逐字一致）+ remote 名', () => {
+  const out = [
+    '\trefs/remotes/origin/main\t\t',
+    '\trefs/remotes/origin/feature/x\t\t',
+    '\trefs/remotes/upstream/main\t\t',
+  ].join('\n')
+  const rows = parseBranchList(out)
+  assert.deepEqual(rows, [
+    { name: 'remotes/origin/main', remote: 'origin', current: false, upstream: null, ahead: 0, behind: 0 },
+    { name: 'remotes/origin/feature/x', remote: 'origin', current: false, upstream: null, ahead: 0, behind: 0 },
+    { name: 'remotes/upstream/main', remote: 'upstream', current: false, upstream: null, ahead: 0, behind: 0 },
+  ])
+})
+
+test('parseBranchList：上游已删 [gone] → 偏差按 0（不误报）；空/非字符串 → []', () => {
+  const gone = parseBranchList('\trefs/heads/x\torigin/x\t[gone]')
+  assert.equal(gone[0].ahead, 0)
+  assert.equal(gone[0].behind, 0)
+  assert.equal(parseBranchList('').length, 0)
+  assert.equal(parseBranchList('   \n').length, 0)
+  assert.equal(parseBranchList(null).length, 0)
+  assert.equal(parseBranchList(undefined).length, 0)
+  // detached HEAD 行（refname 空）与 tags → 忽略
+  const noise = parseBranchList('\trefs/heads/main\torigin/main\t\n\t\t\t\n\trefs/tags/v1\t\t\n')
+  assert.equal(noise.length, 1)
+  assert.equal(noise[0].name, 'main')
 })

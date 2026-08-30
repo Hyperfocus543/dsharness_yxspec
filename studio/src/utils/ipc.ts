@@ -1565,6 +1565,24 @@ export interface GitCheckoutSwitch {
   branchChanged: boolean;
 }
 
+/** 单条分支富格式条目（action=branch 返回 branchDetails 元素）。
+ *  网关 `git branch -a --format=%(HEAD)%09%(refname)%09%(upstream:short)%09%(upstream:track)`
+ *  逐行解析；本地分支含上游跟踪分支 + ahead/behind 偏差，远端分支只列名（不可 checkout 偏差）。 */
+export interface GitBranchDetail {
+  /** 分支名：本地为短名（`main`），远端为 `remotes/<remote>/<rest>`（与 branches 数组同形） */
+  name: string;
+  /** 归属 remote（本地分支 → null） */
+  remote: string | null;
+  /** 是否当前分支（本地且 HEAD=*） */
+  current: boolean;
+  /** 上游跟踪分支（本地分支有上游 → `origin/main`；无 → null） */
+  upstream: string | null;
+  /** 领先上游提交数（`[ahead N]`；无上游/无偏差 → 0） */
+  ahead: number;
+  /** 落后上游提交数（`[behind M]`；无上游/无偏差 → 0） */
+  behind: number;
+}
+
 /** POST /api/git/operate 响应 */
 export interface GitOperateResult {
   ok: boolean;
@@ -1573,7 +1591,10 @@ export interface GitOperateResult {
   /** init 的目标目录（网关 /api/git/operate action=init 返回；与 root 同值） */
   initDir?: string;
   stdout?: string;
+  /** action=branch 的旧版分支名数组（`remotes/origin/x` 形，checkout 语义不变） */
   branches?: string[];
+  /** action=branch 的富格式分支条目（含上游跟踪分支 + ahead/behind 偏差；老网关无 → undefined） */
+  branchDetails?: GitBranchDetail[];
   head?: string | null;
   /** pull 的提交文件改动统计（无新提交 / git 不可用 / 失败 → null） */
   stats?: GitOpStats | null;
