@@ -1112,7 +1112,7 @@ export const GitWorkspaceCard: React.FC = () => {
                       type="button"
                       onClick={() => doSetActive(w.id)}
                       disabled={operating}
-                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed opacity-0 enabled:group-hover:opacity-100 group-focus-within:opacity-100"
                       title="切换为当前工作区"
                     >
                       设为当前
@@ -1150,7 +1150,7 @@ export const GitWorkspaceCard: React.FC = () => {
                         type="button"
                         onClick={() => setConfirmRemoveId(w.id)}
                         disabled={operating}
-                        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-red-300 hover:text-red-600 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed opacity-0 enabled:group-hover:opacity-100 group-focus-within:opacity-100"
                         title="移除该工作区（不做删除，仅取消登记）"
                       >
                         <Icon name={I.trash} size={11} />
