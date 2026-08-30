@@ -6,15 +6,15 @@
 //     错位、与前端 STAGE_ORDER 对不上）
 //   - token 本身（下划线形态）命中 → 兜底返回
 //   - 非阶段注入 / 无命令 → null
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-// 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
-const mod = await import(
-  pathToFileURL(join(process.cwd(), 'runtime-js', 'vendor', '@yxspec', 'git-workspace', 'index.js')).href,
-)
+// 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）。
+// 本文件位于 gateway/runtime-js/vendor/@yxspec/git-workspace/，index.js 同目录。
+const HERE = dirname(fileURLToPath(import.meta.url))
+const mod = await import(pathToFileURL(join(HERE, 'index.js')).href)
 const { stageOfPrompt } = mod
 
 test('命令名命中 prompt → 返回权威 token（token≠命令名 的阶段）', () => {
