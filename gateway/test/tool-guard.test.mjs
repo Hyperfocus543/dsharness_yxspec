@@ -118,6 +118,11 @@ for (const cmd of [
   'git config --add user.name y',
   'git config --unset user.name',
   'git config --global user.name z',
+  // `-z` 是 NUL 输出格式开关，可前置写操作（`git config -z --add user.name x`
+  // 实测会写本地值）——不作为只读判据，写操作必须仍拒绝
+  'git config -z --add user.name x',
+  'git config -z --unset user.name',
+  'git config -z user.name newval',
   'git stash push -m "wip"',
   'git stash drop',
   'git stash pop',

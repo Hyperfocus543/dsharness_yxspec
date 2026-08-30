@@ -418,13 +418,15 @@ function gitSubUnsafe(sub, segment) {
     // token 若不以这些 flag 开头即写操作（`git config user.name x` 写本地值、
     // `--add`/`--unset`/`--unset-all`/`--rename-section`/`--remove-section` 等）
     // → 拒绝。扫描 args 里每个 token：遇到上述只读 flag → 放行；遇到其它 `-` flag
-    // 或非 flag 实参且未见只读 flag → 写操作拒绝。误伤面：`git config --get
-    // user.name`（agent 查身份/URL 常规只读调用）此前整段被默认拒绝，现放行。
+    // 或非 flag 实参且未见只读 flag → 写操作拒绝。注意 `-z` 不作为只读判据——
+    // 它是 NUL 输出格式开关，可前置写操作（`git config -z --add user.name x`
+    // 实测会写本地值），放行会漏网。误伤面：`git config --get user.name`
+    // （agent 查身份/URL 常规只读调用）此前整段被默认拒绝，现放行。
     const after = gitArgsAfter('config', segment);
     const toks = after.split(/\s+/).filter(Boolean);
     if (toks.length === 0) return false; // `git config` 纯列出 → 只读
     for (const t of toks) {
-      if (/^--(?:get|get-all|get-regexp|get-urlmatch|list|show-origin|show-scope)(?:=.*)?$/.test(t) || t === '-l' || t === '-z') return false;
+      if (/^--(?:get|get-all|get-regexp|get-urlmatch|list|show-origin|show-scope)(?:=.*)?$/.test(t) || t === '-l') return false;
       return true; // 首个其它 token（`--add`/`--unset`/键名/值）即写操作
     }
     return true;
