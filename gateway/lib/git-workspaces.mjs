@@ -760,6 +760,8 @@ export function listCloneProgress({ dir } = {}) {
 
 /**
  * 归一化单条 git 写操作审计留痕为前端展示行（纯函数，可单测）。
+ * 展示层 stdout 截断标记：recordGitOp 落盘时恒 `slice(0, AUDIT_STDOUT_MAX)`，
+ * 存储值达到该上限即表示「源输出更长，已被截断」→ 追加 '…' 让回看方知道输出不完整。
  * @param {object} e 审计 JSONL 原始行（recordGitOp 写入形态；类型不完整时宽容降级）
  * @returns {object} { at, action, actionLabel, ok, okLabel, root, args, stdout, error, stats, behind } 展示字段恒存在
  */
@@ -774,7 +776,13 @@ export function normalizeAuditEntry(e) {
     e?.args && typeof e.args === 'object' && !Array.isArray(e.args)
       ? Object.fromEntries(Object.entries(e.args).filter(([, v]) => typeof v === 'string' && v.trim() !== ''))
       : {}
-  const stdout = typeof e?.stdout === 'string' && e.stdout.trim() ? e.stdout.trim() : null
+  // stdout 展示层：trim 后为 null（纯空白/缺失）；存储值达到截断上限
+  // （recordGitOp 恒 `slice(0, AUDIT_STDOUT_MAX)`，超长必落边界 4000）→ 追加 '…'
+  // 标记「已截断」。判定用**原始存储长度**而非 trim 后长度：存储值恰 4000 且尾随
+  // 空白时 trim 会变短，按 trim 后长度判断会漏标已截断（显示成完整输出，误导回看）。
+  const stdoutRaw = typeof e?.stdout === 'string' && e.stdout.trim() ? e.stdout.trim() : null
+  const stdout =
+    stdoutRaw && e.stdout.length >= AUDIT_STDOUT_MAX ? `${stdoutRaw.slice(0, AUDIT_STDOUT_MAX)}…` : stdoutRaw
   const error = typeof e?.error === 'string' && e.error.trim() ? e.error.trim() : null
   // 结果摘要透传：pull 的文件改动统计 / fetch 的落后提交摘要（老审计行无此字段 → 缺省 null）
   const stats =
@@ -845,9 +853,6 @@ export function listAuditLog({ limit = 20 } = {}) {
     if (!line || !line.trim()) continue
     try {
       const e = normalizeAuditEntry(JSON.parse(line))
-      // 截断 stdout 省略行（`… 截断 N 字符`）：审计文件里是 recordGitOp 已截断的
-      // stdout（AUDIT_STDOUT_MAX），展示用同样上限，防超大单行刷屏
-      if (e.stdout && e.stdout.length > AUDIT_STDOUT_MAX) e.stdout = e.stdout.slice(0, AUDIT_STDOUT_MAX) + '…'
       entries.push(e)
     } catch {
       // 单行 JSON 损坏（理论上 appendFileSync 不会产生）→ 跳过，不阻断整列表

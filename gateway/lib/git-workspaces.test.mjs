@@ -623,6 +623,54 @@ test('normalizeAuditEntry：checkout 分支切换摘要透传（switchSummary）
   )
 })
 
+test('normalizeAuditEntry：截断 stdout 追加省略号标记（存储值达上限即已截断）', () => {
+  // recordGitOp 落盘时恒 `slice(0, AUDIT_STDOUT_MAX)`——存储值恰 4000 即代表「源输出更长，
+  // 已被截断」，展示层必须追加 '…'，否则超长 stdout 显示成完整输出（误导回看）。
+  const AUDIT_STDOUT_MAX = 4000
+  const long = 'x'.repeat(AUDIT_STDOUT_MAX)
+  const e = normalizeAuditEntry({ at: 1725000000000, root: 'D:/Work/x', action: 'push', args: {}, ok: true, stdout: long })
+  assert.equal(e.stdout.length, AUDIT_STDOUT_MAX + 1, '截断行应保留上限长度 + 省略号')
+  assert.ok(e.stdout.endsWith('…'), '截断行应带省略号标记')
+  assert.equal(e.stdout.slice(0, AUDIT_STDOUT_MAX), long, '省略号前内容与存储值一致')
+
+  // 超上限的原始输入（老审计行/异常形态）→ 同样收敛到 上限 + 省略号，不超长
+  const over = 'y'.repeat(AUDIT_STDOUT_MAX + 100)
+  const e2 = normalizeAuditEntry({ at: 1, action: 'pull', ok: true, args: {}, stdout: over })
+  assert.equal(e2.stdout.length, AUDIT_STDOUT_MAX + 1, '超上限输入应收敛到 上限 + 省略号')
+
+  // 未达上限的 stdout → 原样透传，不加省略号（展示行不误标已截断）
+  const short = normalizeAuditEntry({ at: 2, action: 'fetch', ok: true, args: {}, stdout: 'a'.repeat(AUDIT_STDOUT_MAX - 1) })
+  assert.equal(short.stdout, 'a'.repeat(AUDIT_STDOUT_MAX - 1), '未达上限不应追加省略号')
+
+  // 尾随空白 + 存储值达上限：省略号判定按原始存储长度，不因 trim 变短漏标
+  const padded = normalizeAuditEntry({ at: 3, action: 'push', ok: true, args: {}, stdout: 'x'.repeat(AUDIT_STDOUT_MAX - 2) + '\n\n' })
+  assert.ok(padded.stdout.endsWith('…'), '存储值达上限但 trim 后变短也应标记已截断')
+})
+
+test('listAuditLog：截断 stdout 行展示含省略号（与 normalize 同口径）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-audit-trunc-'))
+  const auditPath = join(dir, 'audit.jsonl')
+  const prevAudit = process.env.YXSPEC_GIT_AUDIT
+  process.env.YXSPEC_GIT_AUDIT = auditPath
+  try {
+    // recordGitOp 形态的落盘行：stdout 恰 4000（截断后的存储值）
+    const AUDIT_STDOUT_MAX = 4000
+    writeFileSync(
+      auditPath,
+      JSON.stringify({ at: 1725000000000, root: 'D:/Work/x', action: 'push', args: {}, ok: true, stdout: 'x'.repeat(AUDIT_STDOUT_MAX) }) + '\n',
+      'utf8',
+    )
+    const r = listAuditLog({ limit: 5 })
+    assert.equal(r.count, 1)
+    assert.equal(r.entries[0].stdout.length, AUDIT_STDOUT_MAX + 1, '展示行应为 上限 + 省略号')
+    assert.ok(r.entries[0].stdout.endsWith('…'), '落盘截断行展示应带省略号')
+  } finally {
+    if (prevAudit === undefined) delete process.env.YXSPEC_GIT_AUDIT
+    else process.env.YXSPEC_GIT_AUDIT = prevAudit
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('listAuditLog：读审计文件返回时间倒序（新→旧），limit 截断，缺文件空数组', () => {
   const dir = mkdtempSync(join(tmpdir(), 'gw-audit-'))
   const auditPath = join(dir, 'audit.jsonl')
