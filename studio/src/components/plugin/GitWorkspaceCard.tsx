@@ -307,6 +307,8 @@ const AuditRow: React.FC<{
   const stats = e.stats ?? null;
   // fetch 落后提交摘要（老行/无上游 → null，不渲染 chip）
   const behind = e.behind ?? null;
+  // push 结果摘要（老行/无引用变更 → null，不渲染 chip）
+  const summary = e.summary ?? null;
   // root 可读名（优先注册表 name → 根末段目录名）；完整 root 放 tooltip
   const rootName = gitWorkspaceName(e.root, workspaces);
   const title = [
@@ -319,6 +321,11 @@ const AuditRow: React.FC<{
         : behind.before > 0
           ? `落后提交：${behind.before} → ${behind.after}（无新提交）`
           : '落后提交：已是最新（远端无新提交）'
+      : null,
+    summary
+      ? summary.upToDate
+        ? 'push：已是最新（无引用变更）'
+        : `push：${summary.commits} 个提交推送${summary.created > 0 ? ` + 新建 ${summary.created} 个引用` : ''}${summary.refs.length > 0 ? `（${summary.refs.join('、')}）` : ''}`
       : null,
     e.stdout ? `输出：${e.stdout}` : null,
     e.error ? `错误：${e.error}` : null,
@@ -384,6 +391,33 @@ const AuditRow: React.FC<{
             : behind.before > 0
               ? `落后 ${behind.before} → ${behind.after}`
               : '已是最新'}
+        </span>
+      )}
+      {/* push 结果摘要：`推送 N 个提交 → main`（含首次推送的引用计数；新网关审计行附带）。
+          upToDate（无引用变更）→ 「已是最新」；老行/无 summary 字段 → 不渲染（静默降级）。
+          与 pull stats / fetch behind 同口径：让「那次 push 到底推了什么」在留痕里可回看，
+          不再只有瞬时 toast。 */}
+      {e.summary && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono tabular-nums bg-sage-50 text-sage-700 border-sage-200/70"
+          title={
+            e.summary.upToDate
+              ? 'push：远端已是最新（无引用变更）'
+              : [
+                  e.summary.commits > 0 ? `推送 ${e.summary.commits} 个提交` : null,
+                  e.summary.created > 0 ? `新建 ${e.summary.created} 个引用` : null,
+                  e.summary.refs.length > 0 ? `→ ${e.summary.refs.join('、')}` : null,
+                ].filter((l): l is string => Boolean(l)).join(' · ')
+          }
+        >
+          <Icon name={I.upload} size={10} className="shrink-0" />
+          {e.summary.upToDate
+            ? '已是最新'
+            : [
+                e.summary.commits > 0 ? `${e.summary.commits} 提交` : null,
+                e.summary.created > 0 ? `+${e.summary.created} 引用` : null,
+                e.summary.refs.length > 0 ? `→ ${e.summary.refs.join('、')}` : null,
+              ].filter((l): l is string => Boolean(l)).join(' ')}
         </span>
       )}
       {argsText && (
@@ -894,6 +928,9 @@ export const GitWorkspaceCard: React.FC = () => {
       // 「已拉取远端更新（落后 3 → 0，拉到 3 个新提交）」——无上游/无更新时维持原文案。
       const behind = res?.behind;
       const stats = res?.stats;
+      // push 成功摘要（网关解析 stdout 的引用变更行）：「已推送到远端（3 个提交 → main）」；
+      // 无引用变更（已是最新）/ 老网关无 summary 字段 → 维持原文案。
+      const summary = res?.summary;
       pushToast(
         'success',
         action === 'fetch'
@@ -908,7 +945,15 @@ export const GitWorkspaceCard: React.FC = () => {
             ? stats
               ? `已同步远端更新（${stats.files} 文件 +${stats.added}/-${stats.removed}）`
               : '已同步远端更新'
-            : '已推送到远端',
+            : summary
+              ? summary.upToDate
+                ? '已推送到远端（已是最新，无引用变更）'
+                : `已推送到远端（${[
+                    summary.commits > 0 ? `${summary.commits} 个提交` : null,
+                    summary.created > 0 ? `新建 ${summary.created} 个引用` : null,
+                    summary.refs.length > 0 ? `→ ${summary.refs.join('、')}` : null,
+                  ].filter((l): l is string => Boolean(l)).join(' ')}）`
+              : '已推送到远端',
       );
       if (action === 'push') setPushConfirmOpen(false);
       await refreshStatus().catch(() => {});

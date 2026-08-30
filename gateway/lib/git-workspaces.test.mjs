@@ -19,7 +19,7 @@ import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces, parsePushSummary } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -290,6 +290,42 @@ test('fetchBehindSummary：任一边缺上游 / 非数字 → null（前端不�
   assert.equal(fetchBehindSummary(undefined, undefined), null)
 })
 
+test('parsePushSummary：引用更新行 → commits + refs（与 fetch behind / pull stats 对齐的结果摘要）', () => {
+  // 单分支更新（git push 典型 stdout：To 头 + `abc1234..def5678  main -> main`）
+  assert.deepEqual(
+    parsePushSummary('To github.com:org/repo.git\n   abc1234..def5678  main -> main\n'),
+    { refs: ['main'], commits: 1, created: 0, upToDate: false },
+  )
+  // 多分支/多 tag 更新 → commits 累加、refs 去重收集
+  assert.deepEqual(
+    parsePushSummary('   a1b2c3d..e4f5a6b  main -> main\n   01234567..89abcdef  feat/x -> feat/x\n'),
+    { refs: ['main', 'feat/x'], commits: 2, created: 0, upToDate: false },
+  )
+  // 新建分支 / 新建 tag（首次推送）→ created 计数 + refs
+  assert.deepEqual(
+    parsePushSummary('* [new branch]  feat -> feat\n* [new tag]     v1.0 -> v1.0\n'),
+    { refs: ['feat', 'v1.0'], commits: 0, created: 2, upToDate: false },
+  )
+  // 混合：更新 + 新建
+  assert.deepEqual(
+    parsePushSummary('   abc1234..def5678  main -> main\n* [new branch]  feat -> feat\n'),
+    { refs: ['main', 'feat'], commits: 1, created: 1, upToDate: false },
+  )
+  // 已是最新（无引用变更行）→ upToDate:true（前端据此展示「已是最新」）
+  assert.deepEqual(
+    parsePushSummary('Everything up-to-date\n'),
+    { refs: [], commits: 0, created: 0, upToDate: true },
+  )
+})
+
+test('parsePushSummary：空 / 非字符串 / 纯空白 → null（前端不展示误导摘要）', () => {
+  assert.equal(parsePushSummary(''), null)
+  assert.equal(parsePushSummary(null), null)
+  assert.equal(parsePushSummary(undefined), null)
+  assert.equal(parsePushSummary('   \n'), null)
+  assert.equal(parsePushSummary('  '), null)
+})
+
 test('canRemoveWorkspace：default/auto 拒绝、不存在 not-found、手动放行', () => {
   assert.equal(canRemoveWorkspace('default', null).error, 'cannot-remove-default')
   assert.equal(canRemoveWorkspace('default', { id: 'default', source: 'auto' }).error, 'cannot-remove-default')
@@ -346,13 +382,14 @@ test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文�
       error: null,
       stats: null,
       behind: null,
+      summary: null,
     },
   )
 
   // 失败行：ok=false → 「失败」，error 透传，stdout 为空保留 null
   assert.deepEqual(
     normalizeAuditEntry({ at: 1725000001000, root: 'D:/Work/x', action: 'fetch', args: {}, ok: false, error: 'boom' }),
-    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom', stats: null, behind: null },
+    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom', stats: null, behind: null, summary: null },
   )
 
   // clone / checkout / init / pull → 中文标签映射
@@ -375,7 +412,7 @@ test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文�
 
 test('normalizeAuditEntry：宽容降级（缺字段 / 类型异常不抛）', () => {
   // null / undefined / 非对象 → 全默认展示字段
-  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null, stats: null, behind: null })
+  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null, stats: null, behind: null, summary: null })
   assert.deepEqual(normalizeAuditEntry(undefined), normalizeAuditEntry(null))
 
   // 非数字 at → null；action 非字符串 → unknown
@@ -410,6 +447,7 @@ test('normalizeAuditEntry：pull/fetch 结果摘要透传（stats / behind）', 
       error: null,
       stats: { files: 3, added: 12, removed: 4 },
       behind: null,
+      summary: null,
     },
   )
 
@@ -419,9 +457,10 @@ test('normalizeAuditEntry：pull/fetch 结果摘要透传（stats / behind）', 
     { before: 0, after: 3, delta: 3 },
   )
 
-  // 老审计行（无 stats/behind）→ 缺省 null，不回退成 {0,0,0} 误导
+  // 老审计行（无 stats/behind/summary）→ 缺省 null，不回退成 {0,0,0} 误导
   assert.equal(normalizeAuditEntry({ action: 'push', ok: true }).stats, null)
   assert.equal(normalizeAuditEntry({ action: 'push', ok: true }).behind, null)
+  assert.equal(normalizeAuditEntry({ action: 'push', ok: true }).summary, null)
 
   // 类型异常（字符串/数组/null）→ 宽容降级 null，不抛
   assert.equal(normalizeAuditEntry({ action: 'pull', stats: '3' }).stats, null)
@@ -429,6 +468,35 @@ test('normalizeAuditEntry：pull/fetch 结果摘要透传（stats / behind）', 
   assert.equal(normalizeAuditEntry({ action: 'pull', stats: null }).stats, null)
   // 字段值非法（非数字）→ 兜底 0（不影响展示行形态稳定）
   assert.deepEqual(normalizeAuditEntry({ action: 'pull', stats: { files: 'x', added: 'y', removed: 'z' } }).stats, { files: 0, added: 0, removed: 0 })
+})
+
+test('normalizeAuditEntry：push 结果摘要透传（summary）', () => {
+  // push 成功行带 summary（recordGitOp 写入形态）→ 透传 refs/commits/created/upToDate
+  assert.deepEqual(
+    normalizeAuditEntry({
+      at: 1725000000000,
+      root: 'D:/Work/x',
+      action: 'push',
+      args: {},
+      ok: true,
+      summary: { refs: ['main'], commits: 3, created: 1, upToDate: false },
+    }).summary,
+    { refs: ['main'], commits: 3, created: 1, upToDate: false },
+  )
+  // upToDate（无引用变更）→ 透传 true
+  assert.deepEqual(
+    normalizeAuditEntry({ action: 'push', ok: true, summary: { refs: [], commits: 0, created: 0, upToDate: true } }).summary,
+    { refs: [], commits: 0, created: 0, upToDate: true },
+  )
+  // 老审计行无 summary / 非对象 → 缺省 null（前端不渲染，静默降级）
+  assert.equal(normalizeAuditEntry({ action: 'push', ok: true }).summary, null)
+  assert.equal(normalizeAuditEntry({ action: 'push', summary: 'x' }).summary, null)
+  assert.equal(normalizeAuditEntry({ action: 'push', summary: [1, 2] }).summary, null)
+  // 字段值非法（非数组/非数字）→ 宽容兜底（refs 滤非字符串、计数兜底 0），不抛
+  assert.deepEqual(
+    normalizeAuditEntry({ action: 'push', summary: { refs: ['main', 42], commits: 'x', created: null } }).summary,
+    { refs: ['main'], commits: 0, created: 0, upToDate: false },
+  )
 })
 
 test('listAuditLog：读审计文件返回时间倒序（新→旧），limit 截断，缺文件空数组', () => {

@@ -184,9 +184,10 @@ function appendAuditLine(entry) {
 }
 
 /** 追加 git 写操作审计（照规范固定字段）。args 对象序列化前先截断 stdout。
- *  附带结果摘要（pull 的 stats / fetch 的 behind）：与操作返回体同源，写入审计
- *  行后可回看「那次 pull 到底改了几个文件、fetch 拉到几个提交」，不再只有瞬时 toast。 */
-function recordGitOp({ root, action, args, ok, stdout, error, stats, behind }) {
+ *  附带结果摘要（pull 的 stats / fetch 的 behind / push 的 summary）：与操作返回体
+ *  同源，写入审计行后可回看「那次 pull 到底改了几个文件、fetch 拉到几个提交、
+ *  push 推了什么引用」，不再只有瞬时 toast。 */
+function recordGitOp({ root, action, args, ok, stdout, error, stats, behind, summary }) {
   const rec = { at: Date.now(), root, action, args }
   if (ok === true) rec.ok = true
   else rec.ok = false
@@ -194,6 +195,7 @@ function recordGitOp({ root, action, args, ok, stdout, error, stats, behind }) {
   if (error != null) rec.error = String(error)
   if (stats != null) rec.stats = stats
   if (behind != null) rec.behind = behind
+  if (summary != null) rec.summary = summary
   appendAuditLine(rec)
 }
 
@@ -450,6 +452,46 @@ export function fetchBehindSummary(beforeOut, afterOut) {
   return { before, after, delta: after - before }
 }
 
+/**
+ * 解析 `git push` 输出 → 推送摘要（纯函数，供 push 结果展示）。
+ * 入参 = push 成功的 stdout（git push 默认输出；非字符串/空 → null 前端不展示）。
+ * 识别两类「引用变更」行（其余行忽略）：
+ *   · 更新行 `abc1234..def5678  main -> main`  → commits++（该远端引用有提交推上去）
+ *   · 新建行 `* [new branch]  feat -> feat` / `* [new tag] v1.0 -> v1.0` → created++（首次推送）
+ * 无任何引用变更（`Everything up-to-date` 等）→ { refs:[], commits:0, created:0, upToDate:true }，
+ * 与 fetch behind / pull stats 的「无净改动 → 前端不展示误导摘要」语义对齐。
+ * @param {string|null|undefined} stdout push 的 stdout（保留原始行，内部逐行 trim 解析）
+ * @returns {{refs:string[], commits:number, created:number, upToDate:boolean} | null}
+ */
+export function parsePushSummary(stdout) {
+  if (typeof stdout !== 'string' || !stdout.trim()) return null
+  const refs = []
+  let commits = 0
+  let created = 0
+  for (const line of stdout.split('\n')) {
+    const l = line.trim()
+    // 更新行：`0a2b3c4..1d2e3f4  main -> main`（hash 4-40 位；远端引用取 `->` 右侧）
+    const upd = /^[0-9a-fA-F]{4,40}\.\.[0-9a-fA-F]{4,40}\s+(.+?)\s*->\s*(.+)$/.exec(l)
+    if (upd) {
+      commits++
+      const ref = upd[2].trim()
+      if (ref && !refs.includes(ref)) refs.push(ref)
+      continue
+    }
+    // 新建行：`* [new branch]  feat -> feat` / `* [new tag] v1.0 -> v1.0`
+    const nw = /^\*\s*\[new (branch|tag)\]\s+(.+?)\s*->\s*(.+)$/.exec(l)
+    if (nw) {
+      created++
+      const ref = nw[3].trim()
+      if (ref && !refs.includes(ref)) refs.push(ref)
+      continue
+    }
+    // 其余行（To <remote> 头 / Enumerating / Total / Everything up-to-date）→ 忽略
+  }
+  if (commits === 0 && created === 0) return { refs: [], commits: 0, created: 0, upToDate: true }
+  return { refs, commits, created, upToDate: false }
+}
+
 /** 审计留痕展示动作 → 中文标签（listAuditLog 归一化用）。 */
 const AUDIT_ACTION_LABEL = {
   clone: '克隆',
@@ -656,6 +698,16 @@ export function normalizeAuditEntry(e) {
     e?.behind && typeof e.behind === 'object' && !Array.isArray(e.behind)
       ? { before: Number(e.behind.before) || 0, after: Number(e.behind.after) || 0, delta: Number(e.behind.delta) || 0 }
       : null
+  // push 结果摘要透传（新网关审计行附带；老行/无引用变更 → null，行内不展示）
+  const summary =
+    e?.summary && typeof e.summary === 'object' && !Array.isArray(e.summary)
+      ? {
+          refs: Array.isArray(e.summary.refs) ? e.summary.refs.filter((r) => typeof r === 'string') : [],
+          commits: Number(e.summary.commits) || 0,
+          created: Number(e.summary.created) || 0,
+          upToDate: e.summary.upToDate === true,
+        }
+      : null
   return {
     at: Number.isFinite(t) ? t : null,
     action,
@@ -668,6 +720,7 @@ export function normalizeAuditEntry(e) {
     error,
     stats,
     behind,
+    summary,
   }
 }
 
@@ -904,11 +957,17 @@ export async function gitOperate({ root, action, args = {} } = {}) {
   }
   if (action === 'push') {
     const g = await runGit(['push'], { cwd: realRoot })
-    recordGitOp({ root: realRoot, action: 'push', args: {}, ok: g.ok, stdout: g.stdout, error: g.error })
+    // push 结果摘要（对齐 fetch behind / pull stats 的「写操作结果可回看」语义）：
+    // 成功时解析 stdout 的引用变更行（`abc..def main -> main` / `[new branch]`），
+    // 失败时 summary 保持 null —— 与 pull stats 同口径，失败行只留 error，不误导。
+    // 空 stdout → null（前端不展示）；无引用变更（Everything up-to-date）→
+    // summary 带 upToDate:true，前端据此展示「已是最新」而非「0 提交」。
+    const summary = g.ok ? parsePushSummary(g.stdout) : null
+    recordGitOp({ root: realRoot, action: 'push', args: {}, ok: g.ok, stdout: g.stdout, error: g.error, summary })
     if (!g.ok) return { ok: false, error: g.error, message: 'git push 执行失败' }
-    // push 成功回显 `HEAD -> branch` 信息（git push 默认输出第一行即远端更新摘要）
+    // 兼容透传：旧前端仍读 head 字段（git push 默认输出第一行即远端更新摘要行）
     const line = (g.stdout || '').split('\n').find((l) => /HEAD\s*->/.test(l))
-    return { ok: true, stdout: g.stdout, head: line || null }
+    return { ok: true, stdout: g.stdout, head: line || null, summary }
   }
   // 6) branch -a：只读列表（不追加写审计）
   const g = await runGit(['branch', '-a'], { cwd: realRoot })

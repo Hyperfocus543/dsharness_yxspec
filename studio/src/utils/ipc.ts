@@ -1526,6 +1526,18 @@ export interface GitFetchBehind {
   delta: number;
 }
 
+/** push 结果摘要（解析 git push 成功 stdout；无引用变更/失败 → null） */
+export interface GitPushSummary {
+  /** 推送到远端的引用名（去重；`main` / `feat` / `v1.0`；无 → 空数组） */
+  refs: string[];
+  /** 有提交推上去的远端引用数（`abc1234..def5678 main -> main` 行） */
+  commits: number;
+  /** 首次推送的引用数（`* [new branch]` / `* [new tag]` 行） */
+  created: number;
+  /** 无任何引用变更（Everything up-to-date）→ 前端展示「已是最新」 */
+  upToDate: boolean;
+}
+
 /** POST /api/git/operate 响应 */
 export interface GitOperateResult {
   ok: boolean;
@@ -1540,6 +1552,8 @@ export interface GitOperateResult {
   stats?: GitOpStats | null;
   /** fetch 的落后提交摘要（无上游 / git 不可用 / 失败 → null） */
   behind?: GitFetchBehind | null;
+  /** push 的结果摘要（无引用变更 / git 不可用 / 失败 → null） */
+  summary?: GitPushSummary | null;
   error?: string;
   message?: string;
 }
@@ -1692,6 +1706,8 @@ export interface GitAuditEntry {
   stats?: GitOpStats | null;
   /** fetch 的落后提交摘要（新网关审计行附带；老行/无上游 → null，行内不展示） */
   behind?: GitFetchBehind | null;
+  /** push 的结果摘要（新网关审计行附带；老行/无引用变更 → null，行内不展示） */
+  summary?: GitPushSummary | null;
 }
 
 /** GET /api/git/audit 响应。 */
