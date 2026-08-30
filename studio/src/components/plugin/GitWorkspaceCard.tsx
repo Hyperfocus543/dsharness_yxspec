@@ -1044,8 +1044,19 @@ export const GitWorkspaceCard: React.FC = () => {
             </button>
           </div>
         ) : workspaces.length === 0 ? (
-          <div className="text-xs text-zinc-400 py-3 text-center border border-dashed border-zinc-200 rounded-lg">
-            暂无工作区，点右上角「+ 添加」登记本地仓库、克隆远程仓库，或新建本地仓库（git init）
+          // 零工作区 = 首次登记路径：给直接入口（CTA 按钮打开下方添加表单，input 自动聚焦），
+          // 不再只指向上方小字「+ 添加」——首次打开该功能卡的用户找不到登记入口的体验死角。
+          <div className="text-xs text-zinc-400 py-4 px-3 text-center border border-dashed border-zinc-200 rounded-lg space-y-2">
+            <div>暂无工作区：登记本地仓库、克隆远程仓库，或新建本地仓库（git init）</div>
+            <button
+              type="button"
+              onClick={() => setWsFormOpen(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs border border-zinc-200 bg-white text-zinc-600 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98]"
+              title="打开添加表单：本地路径 / 远程仓库 / 新建仓库"
+            >
+              <Icon name={I.plus} size={11} />
+              添加工作区
+            </button>
           </div>
         ) : (
           <div className="space-y-1">
