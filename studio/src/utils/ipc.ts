@@ -1957,7 +1957,7 @@ function computeFromProgress(content: string): StageStatus[] {
     const mapping = STAGE_TABLE[token];
     result.push({
       token,
-      status: sections[mapping.aspice.toLowerCase().replace(/[^a-z]/g, '').replace('sys5', 'sys.5')] || 'pending',
+      status: sections[mapping.aspice.toLowerCase().replace(/[^a-z]/g, '')] || 'pending',
       artifacts: [],
       review: null,
       last_update: '',
