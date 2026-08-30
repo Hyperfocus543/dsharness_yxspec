@@ -22,7 +22,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { STAGES } from './stages.mjs'
+import { STAGES, STAGE_TOKENS } from './stages.mjs'
 
 // 状态根：与插件 DEFAULT_STATE_ROOT 同解析（gateway/runtime-js/runtime-data/self-iteration）。
 const DEFAULT_STATE_ROOT = join(
@@ -158,7 +158,10 @@ export function selfIterationOverview() {
       converged: latest?.verdict === 'converge' || latest?.verdict === 'converge_by_maxiter',
     }
   })
-  stages.sort((a, b) => (STAGES[a.token]?.order ?? 0) - (STAGES[b.token]?.order ?? 0))
+  // 阶段顺序 = STAGES 权威表声明顺序（flow 顺序；STAGES 对象字面量键序即推进序）。
+  // 旧实现按 STAGES[token].order 排序但该字段不存在 → 排序恒为 0，静默退化成
+  // JSONL 文件名/目录读序（append 顺序，与 flow 无关）——改为权威索引序。
+  stages.sort((a, b) => STAGE_TOKENS.indexOf(a.token) - STAGE_TOKENS.indexOf(b.token))
 
   return { ok: true, state, stages }
 }
