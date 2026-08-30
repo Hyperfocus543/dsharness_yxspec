@@ -616,6 +616,48 @@ test('cloneWithProgress：key 用剥尾分隔符的 dir（前端轮询口径）�
   }
 })
 
+// 回归：cloneWithProgress（spawn 版）曾无超时——远端无响应/凭据卡住的 clone 永不
+// settle，HTTP 请求挂死、前端 operating 锁一直转秒表（execFile 版 runGit 的
+// timeout: GIT_OP_TIMEOUT_MS 契约在进度采集重构里被弄丢）。修复后 spawn 版到点
+// SIGKILL + 落失败终态（进度注册表 failed + error 含超时文案）。
+test('cloneWithProgress：超时兜底——到点落失败终态（不挂起、不双 settle）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gw-clone-timeout-'))
+  const remote = join(dir, 'remote.git')
+  const work = join(dir, 'w')
+  try {
+    execFileSync('git', ['init', '-q', '--bare', remote], { cwd: dir })
+    execFileSync('git', ['clone', '-q', remote, work], { cwd: dir })
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: work })
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: work })
+    writeFileSync(join(work, 'a.txt'), 'x')
+    execFileSync('git', ['add', '-A'], { cwd: work })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: work })
+    execFileSync('git', ['push', '-q', 'origin', 'HEAD'], { cwd: work })
+
+    const target = join(dir, 'target').replace(/\\/g, '/')
+    // timeoutMs=1：timer 下一 tick 即触发，本地 clone 远未完成 → 超时路径。
+    // 断言 ok:false + 超时文案 + 进度注册表 failed 终态。
+    const g = await cloneWithProgress(['clone', '--progress', remote, target], { cwd: dir, key: target, timeoutMs: 1 })
+    assert.equal(g.ok, false, `超时应返回 ok:false: ${JSON.stringify(g)}`)
+    assert.ok(g.error && g.error.includes('超时'), `error 应含超时文案: ${g.error}`)
+    const entries = listCloneProgress({ dir: target })
+    assert.equal(entries.length, 1, '进度注册表应恰好 1 条')
+    assert.equal(entries[0].status, 'failed', `状态应为 failed，实际 ${entries[0].status}`)
+    assert.ok(entries[0].error && entries[0].error.includes('超时'), `进度 error 应含超时文案: ${entries[0].error}`)
+  } finally {
+    // 被 SIGKILL 的 git 可能短暂残留子进程（git-upload-pack 等）握着目录句柄（Windows），
+    // 立即 rmSync 偶发 EPERM——重试几次等句柄释放，不掩盖测试结论。
+    for (let i = 0; i < 20; i++) {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+        break
+      } catch {
+        await new Promise((r) => setTimeout(r, 25))
+      }
+    }
+  }
+})
+
 // 回归：addWorkspace 重复登记「当前生效根」。
 // 修复前：default 条目只在 listWorkspaces 内存合并（磁盘不落），existing 查不到当前根
 // → 重新 add 当前默认根会新建一条 manual ws-N，withDefaultRoot 见同 root 后抑制 auto 条目

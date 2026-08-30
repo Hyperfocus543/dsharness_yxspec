@@ -514,11 +514,15 @@ export function parseCloneProgressLine(line) {
 /**
  * spawn 版 `git clone --progress`：逐行解析 stderr 进度写入注册表。
  * 语义与 runGit 版完全一致（ok:true / ok:false + error），只是顺带采集进度。
+ * 超时与 runGit 同契约（timeoutMs 缺省 GIT_OP_TIMEOUT_MS）：spawn 没有 execFile 的
+ * 内置 timeout，远端无响应/凭据卡住的 clone 若一直挂着，HTTP 请求永不返回、前端
+ * operating 锁一直转秒表——到点必须 SIGKILL 子进程落失败终态（契约：任何 git 失败
+ * 返回 ok:false 不抛）。
  * @param {string[]} args `['clone', '--progress', url, dir]`（白名单校验已在 gitOperate 完成）
- * @param {{cwd: string, key: string}} opts cwd=已创建的目录；key=进度注册表键（gitOperate 传 dir）
+ * @param {{cwd: string, key: string, timeoutMs?: number}} opts cwd=已创建的目录；key=进度注册表键（gitOperate 传 dir）
  * @returns {Promise<{ok:boolean, stdout:string, stderr:string, error?:string}>}
  */
-export function cloneWithProgress(args, { cwd, key }) {
+export function cloneWithProgress(args, { cwd, key, timeoutMs = GIT_OP_TIMEOUT_MS }) {
   return new Promise((resolve_) => {
     let stdout = ''
     let stderr = ''
@@ -542,6 +546,19 @@ export function cloneWithProgress(args, { cwd, key }) {
     cloneProgress.set(key, prog)
     const child = spawn('git', args, { cwd, encoding: 'utf8', windowsHide: true })
     cloneSpawns.set(key, child)
+    // 超时兜底（与 runGit 的 execFile timeout 同契约）：远端无响应/凭据卡住的 clone
+    // 到点必须落失败终态，否则 HTTP 请求永不返回、前端 operating 锁一直转秒表。
+    // 先 settle 再 SIGKILL：kill 会触发 close（code=null），settle 已置位则 close
+    // 只做收尾（删 cloneSpawns）不覆盖终态——错误信息保持清晰的超时文案。
+    const timer = setTimeout(() => {
+      // 已 settle（恰好在同一 tick 正常完成）→ 不再覆盖 done 进度终态
+      if (settled) return
+      const msg = `git clone 超时（${Math.round(timeoutMs / 1000)}s 未完成，已终止）`
+      touch({ status: 'failed', error: msg })
+      try { child.kill('SIGKILL') } catch {}
+      settle({ ok: false, stdout, stderr, error: msg, code: 'ETIMEDOUT' })
+    }, timeoutMs)
+    timer.unref?.()
     const touch = (patch) => {
       const cur = cloneProgress.get(key)
       if (cur) cloneProgress.set(key, { ...cur, ...patch })
@@ -567,6 +584,7 @@ export function cloneWithProgress(args, { cwd, key }) {
     })
     child.on('error', (err) => {
       // spawn 失败（ENOENT：git 未装）→ 终态；进度条目同步标记，前端轮询拿得到原因
+      clearTimeout(timer)
       const msg = err?.code === 'ENOENT' ? 'git-not-installed' : String(err?.message ?? err)
       touch({ status: 'failed', error: msg })
       cloneSpawns.delete(key)
@@ -574,6 +592,7 @@ export function cloneWithProgress(args, { cwd, key }) {
     })
     child.on('close', (code) => {
       cloneSpawns.delete(key)
+      clearTimeout(timer)
       // 双 fire 场景（error 已 settle）：close 只是收尾信号，不再 touch 进度——
       // 否则会把 error 分支写下的具体原因（git-not-installed）覆盖成通用退出码文案。
       if (settled) return
