@@ -1189,7 +1189,7 @@ export const GitWorkspaceCard: React.FC = () => {
                     <Icon name={I.branch} size={11} />
                   </span>
                   <span className="font-mono text-zinc-700 truncate min-w-0" title={w.root}>
-                    {w.name}
+                    {gitWorkspaceName(w.root, workspaces)}
                   </span>
                   <span className="ml-auto shrink-0 text-[10px] text-zinc-400 truncate max-w-48" title={w.root}>
                     {w.root}
