@@ -19,7 +19,7 @@ import { pathToFileURL } from 'node:url'
 
 // 模块路径基于本文件位置解析（不再依赖 cwd——从仓库根或 gateway/ 下跑都正确）
 const mod = await import(pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'git-workspaces.mjs')).href)
-const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces, parsePushSummary } = mod
+const { isSafeGitUrl, isSafeTargetDir, gitOperate, canRemoveWorkspace, parseNumstat, fetchBehindSummary, setActiveWorkspace, normalizeAuditEntry, listAuditLog, parseCloneProgressLine, listCloneProgress, cloneWithProgress, addWorkspace, listWorkspaces, parsePushSummary, checkoutSwitchSummary } = mod
 
 test('isSafeGitUrl：合法 URL 通过', () => {
   for (const url of [
@@ -415,13 +415,14 @@ test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文�
       stats: null,
       behind: null,
       summary: null,
+      switchSummary: null,
     },
   )
 
   // 失败行：ok=false → 「失败」，error 透传，stdout 为空保留 null
   assert.deepEqual(
     normalizeAuditEntry({ at: 1725000001000, root: 'D:/Work/x', action: 'fetch', args: {}, ok: false, error: 'boom' }),
-    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom', stats: null, behind: null, summary: null },
+    { at: 1725000001000, action: 'fetch', actionLabel: '拉取远端', ok: false, okLabel: '失败', root: 'D:/Work/x', args: {}, stdout: null, error: 'boom', stats: null, behind: null, summary: null, switchSummary: null },
   )
 
   // clone / checkout / init / pull → 中文标签映射
@@ -444,7 +445,7 @@ test('normalizeAuditEntry：写操作审计行 → 展示字段（动作中文�
 
 test('normalizeAuditEntry：宽容降级（缺字段 / 类型异常不抛）', () => {
   // null / undefined / 非对象 → 全默认展示字段
-  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null, stats: null, behind: null, summary: null })
+  assert.deepEqual(normalizeAuditEntry(null), { at: null, action: 'unknown', actionLabel: 'unknown', ok: false, okLabel: '未确认', root: null, args: {}, stdout: null, error: null, stats: null, behind: null, summary: null, switchSummary: null })
   assert.deepEqual(normalizeAuditEntry(undefined), normalizeAuditEntry(null))
 
   // 非数字 at → null；action 非字符串 → unknown
@@ -480,6 +481,7 @@ test('normalizeAuditEntry：pull/fetch 结果摘要透传（stats / behind）', 
       stats: { files: 3, added: 12, removed: 4 },
       behind: null,
       summary: null,
+      switchSummary: null,
     },
   )
 
@@ -528,6 +530,96 @@ test('normalizeAuditEntry：push 结果摘要透传（summary）', () => {
   assert.deepEqual(
     normalizeAuditEntry({ action: 'push', summary: { refs: ['main', 42], commits: 'x', created: null } }).summary,
     { refs: ['main'], commits: 0, created: 0, upToDate: false },
+  )
+})
+
+test('checkoutSwitchSummary：分支切换前后名 + 游离态 + 有无变化', () => {
+  // 常规切换 main → feat（前后 symbolic-ref 均解析成功）
+  assert.deepEqual(checkoutSwitchSummary('main', 'feat'), {
+    from: 'main',
+    to: 'feat',
+    detached: false,
+    branchChanged: true,
+  })
+  // 切同分支（幂等）→ branchChanged false
+  assert.deepEqual(checkoutSwitchSummary('main', 'main'), {
+    from: 'main',
+    to: 'main',
+    detached: false,
+    branchChanged: false,
+  })
+  // checkout 到 commit/tag → 游离 HEAD（after 为空 → to=null + detached）
+  assert.deepEqual(checkoutSwitchSummary('main', ''), {
+    from: 'main',
+    to: null,
+    detached: true,
+    branchChanged: true,
+  })
+  assert.deepEqual(checkoutSwitchSummary('main', '  \n'), {
+    from: 'main',
+    to: null,
+    detached: true,
+    branchChanged: true,
+  })
+  // 从游离态 checkout 回分支（before 为空 → from=null，分支名变化）
+  assert.deepEqual(checkoutSwitchSummary('', 'feat'), {
+    from: null,
+    to: 'feat',
+    detached: false,
+    branchChanged: true,
+  })
+  // 两态都 null（未知/空仓库）→ 无变化，不误报游离到分支
+  assert.deepEqual(checkoutSwitchSummary(null, null), {
+    from: null,
+    to: null,
+    detached: true,
+    branchChanged: false,
+  })
+  assert.deepEqual(checkoutSwitchSummary(undefined, undefined), {
+    from: null,
+    to: null,
+    detached: true,
+    branchChanged: false,
+  })
+  // 空白输入归一 → null（stdout 为纯空白时 git 语义同空）
+  assert.deepEqual(checkoutSwitchSummary('\n', '\n'), {
+    from: null,
+    to: null,
+    detached: true,
+    branchChanged: false,
+  })
+})
+
+test('normalizeAuditEntry：checkout 分支切换摘要透传（switchSummary）', () => {
+  // 成功切换行带 switchSummary（recordGitOp 写入形态）→ 透传 from/to/detached/branchChanged
+  assert.deepEqual(
+    normalizeAuditEntry({
+      at: 1725000000000,
+      root: 'D:/Work/x',
+      action: 'checkout',
+      args: { branch: 'feat' },
+      ok: true,
+      switchSummary: { from: 'main', to: 'feat', detached: false, branchChanged: true },
+    }).switchSummary,
+    { from: 'main', to: 'feat', detached: false, branchChanged: true },
+  )
+  // checkout 到 commit → 游离态透传（to=null + detached）
+  assert.deepEqual(
+    normalizeAuditEntry({
+      action: 'checkout',
+      ok: true,
+      switchSummary: { from: 'main', to: null, detached: true, branchChanged: true },
+    }).switchSummary,
+    { from: 'main', to: null, detached: true, branchChanged: true },
+  )
+  // 老审计行无 switchSummary / 非对象 → 缺省 null（前端不渲染，静默降级）
+  assert.equal(normalizeAuditEntry({ action: 'checkout', ok: true }).switchSummary, null)
+  assert.equal(normalizeAuditEntry({ action: 'checkout', switchSummary: 'x' }).switchSummary, null)
+  assert.equal(normalizeAuditEntry({ action: 'checkout', switchSummary: [1, 2] }).switchSummary, null)
+  // 字段值非法（空字符串 from/to → 归一 null；布尔兜底 false）→ 宽容降级不抛
+  assert.deepEqual(
+    normalizeAuditEntry({ action: 'checkout', ok: true, switchSummary: { from: '', to: '', detached: true, branchChanged: true } }).switchSummary,
+    { from: null, to: null, detached: true, branchChanged: true },
   )
 })
 

@@ -19,7 +19,7 @@
 // UI 基线：design-taste skill — 纯数据，色/文案由调用方组件负责。
 // =============================================================================
 
-import type { GitAuditEntry, GitOperateParams } from './ipc';
+import type { GitAuditEntry, GitCheckoutSwitch, GitOperateParams } from './ipc';
 
 /** 可原地重试的 action 白名单（与网关 gitOperate KNOWN 子集对齐，排除 clone/branch）。 */
 const RETRYABLE = new Set(['fetch', 'pull', 'push', 'checkout', 'init']);
@@ -81,4 +81,38 @@ export function retryAuditTitle(e: GitAuditEntry): string {
     return e?.action === 'checkout' ? '该留痕缺分支参数，无法重试' : '该留痕缺目标目录参数，无法重试';
   }
   return `按原仓库 ${e.root} 重试${e?.actionLabel ? ` ${e.actionLabel}` : ` ${e.action}`}（成功与否都会刷新留痕）`;
+}
+
+// =============================================================================
+// checkout 分支切换摘要（纯逻辑，供 AuditRow 留痕行 chip + 成功 toast）
+// 数据源 = 审计行 / gitOperate 返回的 switchSummary（网关 checkout 前后各记
+//   symbolic-ref 派生：from/to 分支名 + 游离态 + 有无变化），与 pull stats /
+//   fetch behind / push summary 同口径 —— 让「那次 checkout 到底切了什么」可回看。
+// 老审计行 / 分支名解析失败（游离/无 HEAD）→ 字段缺省，chip 静默降级不渲染。
+// =============================================================================
+
+/** 分支名占位：null（游离 HEAD/解析失败）→ 「游离」。 */
+function branchName(b: string | null | undefined): string {
+  return b ? b : '游离';
+}
+
+/** 摘要短标签（chip 主文案）：`main → feat`；含游离态（`main → 游离`）。
+ *  两侧分支名都缺失（null/空对象/解析失败）→ null（无「游离 → 游离」误导，前端不渲染）。 */
+export function checkoutSwitchLabel(sw: GitCheckoutSwitch | null | undefined): string | null {
+  if (!sw || typeof sw !== 'object') return null;
+  if (!sw.from && !sw.to) return null; // 两侧都无可用分支名（如 {from:null,to:null}）→ 无信息量
+  return `${branchName(sw.from)} → ${branchName(sw.to)}`;
+}
+
+/** 摘要 tooltip 多行文本：切换方向 + 游离态 + HEAD 移动说明（与 pull stats/fetch behind 同口径）。
+ *  两侧分支名都缺失 → null（无信息量，前端不渲染）。 */
+export function checkoutSwitchTooltip(sw: GitCheckoutSwitch | null | undefined): string | null {
+  if (!sw || typeof sw !== 'object') return null;
+  if (!sw.from && !sw.to) return null;
+  const lines = [
+    `切换分支：${branchName(sw.from)} → ${branchName(sw.to)}`,
+    sw.detached ? '目标处于游离 HEAD（checkout 到 commit/tag 而非分支）' : null,
+    sw.branchChanged ? null : '分支未变化（checkout 幂等）',
+  ];
+  return lines.filter((l): l is string => Boolean(l)).join('\n');
 }

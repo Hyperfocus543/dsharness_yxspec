@@ -9,6 +9,8 @@
 //     tag 徽标 hover 显示可读摘要（utils/gitTagName：阶段 + 序号，变体阶段不混淆）
 //   · 回滚按钮：选中一条留痕 → 底部唯一确认面板（填原因）→ recordGitRollback（只留档）→ toast 提示不自动执行
 //   · 留痕 hover diff：每行该条 commit 相对上一留痕 commit 的改动（共享 ui/GitDiffPreview）
+//   · 写操作结果可回看：pull 文件改动统计 / fetch 落后提交摘要 / push 引用变更 /
+//     checkout 分支切换摘要（前后分支 + 游离态）——审计行 chip 化，不再只有瞬时 toast
 // UI 基线：design-taste skill — zinc 底 + emerald 单强调色，禁 emoji，Phosphor 图标。
 // =============================================================================
 
@@ -24,7 +26,7 @@ import { gitTraceBase, recentCommitDiffs } from '../../utils/gitTrace';
 import { parseYxspecTag, stageTagSummary, yxspecTagOf } from '../../utils/gitTagName';
 import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
-import { retryAuditLabel, retryAuditParams, retryAuditTitle } from '../../utils/gitRetry';
+import { retryAuditLabel, retryAuditParams, retryAuditTitle, checkoutSwitchLabel, checkoutSwitchTooltip } from '../../utils/gitRetry';
 import { gitWorkspaceName } from '../../utils/gitWorkspaceName';
 import { toGitTagInfo, gitTagTitle } from '../../utils/gitTagTitle';
 
@@ -311,6 +313,8 @@ const AuditRow: React.FC<{
   const behind = e.behind ?? null;
   // push 结果摘要（老行/无引用变更 → null，不渲染 chip）
   const summary = e.summary ?? null;
+  // checkout 分支切换摘要（老行/分支名解析失败 → null，不渲染 chip；null 分支名 → 「游离」）
+  const switchSummary = e.switchSummary ?? null;
   // root 可读名（优先注册表 name → 根末段目录名）；完整 root 放 tooltip
   const rootName = gitWorkspaceName(e.root, workspaces);
   const title = [
@@ -329,6 +333,8 @@ const AuditRow: React.FC<{
         ? 'push：已是最新（无引用变更）'
         : `push：${summary.commits} 个提交推送${summary.created > 0 ? ` + 新建 ${summary.created} 个引用` : ''}${summary.refs.length > 0 ? `（${summary.refs.join('、')}）` : ''}`
       : null,
+    // checkout 分支切换摘要（from → to，含游离态；与 pull stats/fetch behind 同口径可回看）
+    switchSummary ? `切换分支：${checkoutSwitchLabel(switchSummary)}` : null,
     e.stdout ? `输出：${e.stdout}` : null,
     e.error ? `错误：${e.error}` : null,
   ]
@@ -420,6 +426,19 @@ const AuditRow: React.FC<{
                 e.summary.created > 0 ? `+${e.summary.created} 引用` : null,
                 e.summary.refs.length > 0 ? `→ ${e.summary.refs.join('、')}` : null,
               ].filter((l): l is string => Boolean(l)).join(' ')}
+        </span>
+      )}
+      {/* checkout 分支切换摘要：`main → feat`（含游离态 `main → 游离`；新网关审计行附带）。
+          与 pull stats / fetch behind / push summary 同口径：让「那次 checkout 到底切到了哪、
+          从哪切来的、切完是不是游离态」在留痕里可回看。老行/分支名解析失败/两侧均无
+          分支名 → 不渲染（无信息量的空 chip 不占行宽）。 */}
+      {switchSummary && checkoutSwitchLabel(switchSummary) && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-mono tabular-nums bg-white border-zinc-200 text-zinc-600"
+          title={checkoutSwitchTooltip(switchSummary) ?? undefined}
+        >
+          <Icon name={I.branch} size={10} className="shrink-0 text-zinc-400" />
+          {checkoutSwitchLabel(switchSummary)}
         </span>
       )}
       {argsText && (
@@ -890,12 +909,21 @@ export const GitWorkspaceCard: React.FC = () => {
     if (!activeWorkspace || !branch) return;
     setBranchError(null);
     try {
-      await useGitStore.getState().gitOperate({
+      const res = await useGitStore.getState().gitOperate({
         root: activeWorkspace.root,
         action: 'checkout',
         args: { branch },
       });
-      pushToast('success', `已切换到分支 ${branch}`);
+      // checkout 结果摘要（前后分支名 + 游离态）拼进成功 toast —— 与 fetch behind /
+      // pull stats / push summary 同口径：这次切换从哪切到哪、切完是不是游离态一目了然。
+      // 老网关/分支名解析失败 → switchSummary null，维持原文案。
+      const sw = res?.switchSummary;
+      pushToast(
+        'success',
+        sw && checkoutSwitchLabel(sw)
+          ? `已切换到分支 ${branch}（${checkoutSwitchLabel(sw)}${sw.detached ? ' · 游离 HEAD' : ''}）`
+          : `已切换到分支 ${branch}`,
+      );
       setBranchValue('');
       setBranchPanelOpen(false);
       await refreshStatus().catch(() => {});

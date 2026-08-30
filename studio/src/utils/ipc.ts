@@ -1538,6 +1538,18 @@ export interface GitPushSummary {
   upToDate: boolean;
 }
 
+/** checkout 分支切换摘要（checkout 前后各记 symbolic-ref 派生；无分支名/游离 → null） */
+export interface GitCheckoutSwitch {
+  /** 切换前的分支名（null = 游离 HEAD / 解析失败） */
+  from: string | null;
+  /** 切换后的分支名（null = 游离 HEAD / 解析失败） */
+  to: string | null;
+  /** 操作后处于游离 HEAD（checkout 到 commit/tag 而非分支） */
+  detached: boolean;
+  /** 分支名有变化（含「游离 → 分支」与「分支 → 游离」） */
+  branchChanged: boolean;
+}
+
 /** POST /api/git/operate 响应 */
 export interface GitOperateResult {
   ok: boolean;
@@ -1554,6 +1566,8 @@ export interface GitOperateResult {
   behind?: GitFetchBehind | null;
   /** push 的结果摘要（无引用变更 / git 不可用 / 失败 → null） */
   summary?: GitPushSummary | null;
+  /** checkout 的分支切换摘要（分支名解析失败 / git 不可用 / 失败 → null） */
+  switchSummary?: GitCheckoutSwitch | null;
   error?: string;
   message?: string;
 }
@@ -1708,6 +1722,8 @@ export interface GitAuditEntry {
   behind?: GitFetchBehind | null;
   /** push 的结果摘要（新网关审计行附带；老行/无引用变更 → null，行内不展示） */
   summary?: GitPushSummary | null;
+  /** checkout 的分支切换摘要（新网关审计行附带；老行/分支名解析失败 → null，行内不展示） */
+  switchSummary?: GitCheckoutSwitch | null;
 }
 
 /** GET /api/git/audit 响应。 */

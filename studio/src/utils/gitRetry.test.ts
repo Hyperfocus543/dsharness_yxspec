@@ -11,8 +11,10 @@ import {
   retryAuditArgs,
   retryAuditParams,
   retryAuditTitle,
+  checkoutSwitchLabel,
+  checkoutSwitchTooltip,
 } from './gitRetry';
-import type { GitAuditEntry } from './ipc';
+import type { GitAuditEntry, GitCheckoutSwitch } from './ipc';
 
 function entry(partial: Partial<GitAuditEntry>): GitAuditEntry {
   return {
@@ -124,5 +126,48 @@ describe('retryAuditTitle（重试 tooltip）', () => {
   it('可重试 → 注明按原仓库重试哪个操作', () => {
     expect(retryAuditTitle(pullFailed)).toContain('D:/Work/x');
     expect(retryAuditTitle(pullFailed)).toContain('同步远端');
+  });
+});
+
+describe('checkoutSwitchLabel（切换摘要短标签）', () => {
+  it('常规切换 → `from → to`', () => {
+    const sw: GitCheckoutSwitch = { from: 'main', to: 'feat', detached: false, branchChanged: true };
+    expect(checkoutSwitchLabel(sw)).toBe('main → feat');
+  });
+  it('游离 → 分支 / 分支 → 游离：null 显示「游离」', () => {
+    const toBranch: GitCheckoutSwitch = { from: null, to: 'feat', detached: false, branchChanged: true };
+    const toDetached: GitCheckoutSwitch = { from: 'main', to: null, detached: true, branchChanged: true };
+    expect(checkoutSwitchLabel(toBranch)).toBe('游离 → feat');
+    expect(checkoutSwitchLabel(toDetached)).toBe('main → 游离');
+  });
+  it('切同分支（幂等）→ 标签仍给方向，不误报游离', () => {
+    const sw: GitCheckoutSwitch = { from: 'main', to: 'main', detached: false, branchChanged: false };
+    expect(checkoutSwitchLabel(sw)).toBe('main → main');
+  });
+  it('null / undefined / 非对象 → null（老审计行/缺摘要，前端不渲染）', () => {
+    expect(checkoutSwitchLabel(null)).toBeNull();
+    expect(checkoutSwitchLabel(undefined)).toBeNull();
+    expect(checkoutSwitchLabel({} as GitCheckoutSwitch)).toBeNull();
+  });
+});
+
+describe('checkoutSwitchTooltip（切换摘要 tooltip）', () => {
+  it('常规切换 → 方向说明', () => {
+    const sw: GitCheckoutSwitch = { from: 'main', to: 'feat', detached: false, branchChanged: true };
+    expect(checkoutSwitchTooltip(sw)).toBe('切换分支：main → feat');
+  });
+  it('目标游离 → 游离态说明', () => {
+    const sw: GitCheckoutSwitch = { from: 'main', to: null, detached: true, branchChanged: true };
+    const tip = checkoutSwitchTooltip(sw);
+    expect(tip).toContain('切换分支：main → 游离');
+    expect(tip).toContain('游离 HEAD');
+  });
+  it('切同分支 → 幂等说明', () => {
+    const sw: GitCheckoutSwitch = { from: 'main', to: 'main', detached: false, branchChanged: false };
+    expect(checkoutSwitchTooltip(sw)).toContain('分支未变化');
+  });
+  it('null → null', () => {
+    expect(checkoutSwitchTooltip(null)).toBeNull();
+    expect(checkoutSwitchTooltip(undefined)).toBeNull();
   });
 });

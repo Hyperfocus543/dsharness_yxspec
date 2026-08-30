@@ -184,10 +184,11 @@ function appendAuditLine(entry) {
 }
 
 /** 追加 git 写操作审计（照规范固定字段）。args 对象序列化前先截断 stdout。
- *  附带结果摘要（pull 的 stats / fetch 的 behind / push 的 summary）：与操作返回体
- *  同源，写入审计行后可回看「那次 pull 到底改了几个文件、fetch 拉到几个提交、
- *  push 推了什么引用」，不再只有瞬时 toast。 */
-function recordGitOp({ root, action, args, ok, stdout, error, stats, behind, summary }) {
+ *  附带结果摘要（pull 的 stats / fetch 的 behind / push 的 summary / checkout 的
+ *  switchSummary）：与操作返回体同源，写入审计行后可回看「那次 pull 到底改了几
+ *  个文件、fetch 拉到几个提交、push 推了什么引用、checkout 从哪切到哪」，不再只
+ *  有瞬时 toast。 */
+function recordGitOp({ root, action, args, ok, stdout, error, stats, behind, summary, switchSummary }) {
   const rec = { at: Date.now(), root, action, args }
   if (ok === true) rec.ok = true
   else rec.ok = false
@@ -196,6 +197,7 @@ function recordGitOp({ root, action, args, ok, stdout, error, stats, behind, sum
   if (stats != null) rec.stats = stats
   if (behind != null) rec.behind = behind
   if (summary != null) rec.summary = summary
+  if (switchSummary != null) rec.switchSummary = switchSummary
   appendAuditLine(rec)
 }
 
@@ -492,6 +494,38 @@ export function parsePushSummary(stdout) {
   return { refs, commits, created, upToDate: false }
 }
 
+/**
+ * checkout 分支切换摘要（纯函数，供 checkout 结果展示 + 审计回看）。
+ * 入参 = checkout 前后各一次 `git symbolic-ref --quiet --short HEAD` 的 stdout
+ *   （before 为操作前分支名；after 为操作后分支名；游离 HEAD / 解析失败 → null）。
+ * 返回 { from, to, detached, branchChanged }：
+ *   · from/to       = 切换前后的分支名（null = 游离 HEAD / 解析失败）
+ *   · detached      = 操作后处于游离 HEAD（checkout 到 commit/tag 而非分支）
+ *   · branchChanged = 分支名有变化（含「游离 → 分支」与「分支 → 游离」，
+ *                     空串归一 null 后比较；两态都 null 时按无变化处理）
+ * 与 fetch behind / pull stats / push summary 同口径：让「那次 checkout 到底切了什么」
+ * 在 toast 与审计留痕里可回看——旧实现只有「已切换到分支 X」，不知道从哪来的、
+ * 切完是不是游离态。
+ * @param {string|null|undefined} beforeOut checkout 前 symbolic-ref stdout
+ * @param {string|null|undefined} afterOut checkout 后 symbolic-ref stdout
+ * @returns {{from: string|null, to: string|null, detached: boolean, branchChanged: boolean}}
+ */
+export function checkoutSwitchSummary(beforeOut, afterOut) {
+  const name = (s) => {
+    if (typeof s !== 'string') return null
+    const t = s.trim()
+    return t ? t : null
+  }
+  const from = name(beforeOut)
+  const to = name(afterOut)
+  return {
+    from,
+    to,
+    detached: to === null,
+    branchChanged: (from ?? null) !== (to ?? null),
+  }
+}
+
 /** 审计留痕展示动作 → 中文标签（listAuditLog 归一化用）。 */
 const AUDIT_ACTION_LABEL = {
   clone: '克隆',
@@ -708,6 +742,16 @@ export function normalizeAuditEntry(e) {
           upToDate: e.summary.upToDate === true,
         }
       : null
+  // checkout 分支切换摘要透传（新网关审计行附带；老行/解析失败 → null，行内不展示）
+  const switchSummary =
+    e?.switchSummary && typeof e.switchSummary === 'object' && !Array.isArray(e.switchSummary)
+      ? {
+          from: typeof e.switchSummary.from === 'string' && e.switchSummary.from ? e.switchSummary.from : null,
+          to: typeof e.switchSummary.to === 'string' && e.switchSummary.to ? e.switchSummary.to : null,
+          detached: e.switchSummary.detached === true,
+          branchChanged: e.switchSummary.branchChanged === true,
+        }
+      : null
   return {
     at: Number.isFinite(t) ? t : null,
     action,
@@ -721,6 +765,7 @@ export function normalizeAuditEntry(e) {
     stats,
     behind,
     summary,
+    switchSummary,
   }
 }
 
@@ -915,10 +960,22 @@ export async function gitOperate({ root, action, args = {} } = {}) {
     if (!chk.ok) {
       return { ok: false, error: 'bad-request', message: `checkout 的 branch 不是有效的分支/引用：${branch}` }
     }
+    // checkout 分支切换摘要：操作前后各记当前分支（symbolic-ref）。游离 HEAD /
+    // 无 HEAD 时输出空 → null，摘要仍能表达「游离 → main」「main → 游离」。
+    // symbolic-ref 失败不阻断 checkout 本身，仅摘要降级为 null。
+    const before = await runGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: realRoot })
     const g = await runGit(['checkout', branch], { cwd: realRoot })
-    recordGitOp({ root: realRoot, action: 'checkout', args: { branch }, ok: g.ok, stdout: g.stdout, error: g.error })
+    let switchSummary = null
+    if (g.ok) {
+      const after = await runGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: realRoot })
+      // 用 after 重算：checkout 到 commit/tag（游离）时 after 为空 → to=null 表达游离态
+      switchSummary = checkoutSwitchSummary(before.stdout, after.stdout)
+      recordGitOp({ root: realRoot, action: 'checkout', args: { branch }, ok: true, stdout: g.stdout, switchSummary })
+    } else {
+      recordGitOp({ root: realRoot, action: 'checkout', args: { branch }, ok: false, stdout: g.stdout, error: g.error })
+    }
     if (!g.ok) return { ok: false, error: g.error, message: 'git checkout 执行失败' }
-    return { ok: true, stdout: g.stdout }
+    return { ok: true, stdout: g.stdout, switchSummary }
   }
   // 5) 其余写操作（fetch / pull / push）
   if (action === 'fetch') {
