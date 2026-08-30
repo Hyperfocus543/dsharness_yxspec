@@ -267,6 +267,22 @@ const RoundRow: React.FC<{
           {r.total}
         </span>
       )}
+      {/* 子分构成：Master（主流程成熟度）· Stage（阶段产物契合度）。
+          score_aggregate 确定性评分按 Master/Stage/Total 三维输出，网关已透传，
+          这里把总分拆成两个子分一眼可见——总分掉分时能判断掉在流程还是产物维度。
+          判定轮（round 类型）无子分 → 不渲染；score 轮才有。 */}
+      {(r.master != null || r.stageScore != null) && (
+        <span
+          className="shrink-0 inline-flex items-center gap-1 px-1 py-0.5 rounded bg-zinc-50 border border-zinc-200 text-[10px] font-mono text-zinc-500 tabular-nums"
+          title={`Master ${r.master ?? '—'}（主流程成熟度）· Stage ${r.stageScore ?? '—'}（阶段产物契合度）——score_aggregate 确定性评分`}
+        >
+          <Icon name={I.stack} size={10} className="text-zinc-400 shrink-0" />
+          <span>M{r.master ?? '—'}</span>
+          <span className="text-zinc-300">·</span>
+          <Icon name={I.fileCode} size={10} className="text-zinc-400 shrink-0" />
+          <span>S{r.stageScore ?? '—'}</span>
+        </span>
+      )}
       {r.level && (
         <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${LEVEL_STYLE[r.level] || 'bg-zinc-100 text-zinc-500 border-zinc-200'}`} title="等级">
           {r.level}
