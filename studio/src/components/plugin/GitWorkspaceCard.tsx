@@ -24,6 +24,7 @@ import { groupGitBranches, type GitBranchGroup } from '../../utils/gitBranches';
 import { auditFailureCount, filterAuditEntries } from '../../utils/gitAuditFilter';
 import { retryAuditLabel, retryAuditParams, retryAuditTitle } from '../../utils/gitRetry';
 import { gitWorkspaceName } from '../../utils/gitWorkspaceName';
+import { toGitTagInfo, gitTagTitle } from '../../utils/gitTagTitle';
 
 /** commit hash 缩写：保留前 8 位，其余折叠 */
 function shortHash(h: string | null | undefined): string {
@@ -1483,21 +1484,28 @@ export const GitWorkspaceCard: React.FC = () => {
               {tags.length} 个 tag
             </span>
             {tags.map((t) => {
-              const isHead = headTags.includes(t);
+              // 兼容归一：旧网关 tags 是字符串名，富格式网关是对象（含指向 commit）——
+              // 统一按 name 参与 HEAD 判定，tooltip 走 gitTagTitle（无 commit 信息 → 中性降级）。
+              const tagInfo = toGitTagInfo(t);
+              if (!tagInfo) return null;
+              const isHead = headTags.includes(tagInfo.name);
+              const tagTitle = isHead
+                ? '指向当前 HEAD（当前检查点）'
+                : (gitTagTitle(tagInfo) ?? tagInfo.name);
               return (
                 <span
-                  key={t}
+                  key={tagInfo.name}
                   className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border ${
                     isHead
                       ? 'bg-emerald-600 text-white border-emerald-700'
                       : 'bg-emerald-50 text-emerald-700 border-emerald-200/70'
                   }`}
-                  title={isHead ? `指向当前 HEAD（当前检查点）` : t}
+                  title={tagTitle}
                 >
                   {isHead && (
                     <span className="text-[9px] font-bold uppercase tracking-wide opacity-90">HEAD</span>
                   )}
-                  {t}
+                  {tagInfo.name}
                 </span>
               );
             })}

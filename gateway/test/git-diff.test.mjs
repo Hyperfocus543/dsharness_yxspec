@@ -118,6 +118,27 @@ try {
     assert('dirtyStats.added ≥1（工作区加行）', (st.dirtyStats?.added ?? 0) >= 1, JSON.stringify(st.dirtyStats))
     assert('dirtyStats.removed ≥0', (st.dirtyStats?.removed ?? -1) >= 0, JSON.stringify(st.dirtyStats))
   }
+
+  console.log('== 7) getStatus tags 富格式（tag → 指向 commit / subject / 提交时间）==')
+  {
+    const c1 = execFileSync('git', ['rev-parse', 'HEAD~1'], { cwd: TMP }).toString().trim()
+    const c2 = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: TMP }).toString().trim()
+    // 轻量 tag 指向 first commit；注解 tag 指向 second commit（= HEAD，应进 headTags）
+    execFileSync('git', ['tag', 'lt-1', c1], { cwd: TMP })
+    execFileSync('git', ['tag', '-a', 'annotated', '-m', 'annotated message', c2], { cwd: TMP })
+
+    const st = await getStatus()
+    const tags = st.tags
+    assert('tags 为对象数组（富格式）', Array.isArray(tags) && tags.length >= 2 && typeof tags[0] === 'object', JSON.stringify(tags))
+    const lt = tags.find((t) => t.name === 'lt-1')
+    const ann = tags.find((t) => t.name === 'annotated')
+    assert('轻量 tag → commit 指向 c1 + subject 取该 commit', lt && lt.commit === c1 && lt.subject === 'init', JSON.stringify(lt))
+    assert('注解 tag → commit 指向 c2（peeled）', ann && ann.commit === c2, JSON.stringify(ann))
+    assert('注解 tag → subject 取 peeled commit 的提交说明', ann && ann.subject === 'second', JSON.stringify(ann))
+    assert('注解 tag → commitAt 为 ISO 时间', ann && typeof ann.commitAt === 'string' && !Number.isNaN(new Date(ann.commitAt).getTime()), JSON.stringify(ann))
+    assert('commitShort 为 7 位短 hash', ann && ann.commitShort === c2.slice(0, 7), JSON.stringify(ann))
+    assert('headTags 命中指向 HEAD 的 tag（annotated）', Array.isArray(st.headTags) && st.headTags.includes('annotated'), JSON.stringify(st.headTags))
+  }
 } finally {
   rmSync(TMP, { recursive: true, force: true })
   delete process.env.YXSPEC_GIT_ROOT

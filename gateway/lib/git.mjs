@@ -284,9 +284,11 @@ export async function getStatus(root) {
     // 富格式 log：hash + unix 时间戳 + subject（与 getStageRecords 同款 format，
     // 便于前端展示提交时间；subject 不换行，message 兜底取 subject）
     runGit(['log', '-5', '--date=unix', '--format=%h%x09%ct%x09%s'], { cwd }),
-    // tag 清单：refname:short + 指向 commit（普通=objectname / 注解=peeled），
-    // 按创建时间倒序（普通/注解/远端 tag 均显示，最多 20 个）
-    runGit(['for-each-ref', 'refs/tags', '--sort=-creatordate', '--format=%(refname:short)%09%(objectname)%09%(*objectname)'], { cwd }),
+    // tag 清单富格式：refname:short + 指向 commit（普通=objectname / 注解=peeled）
+    // + 提交说明 + 提交时间 —— 前端 tag 徽标 hover 即可看到「该 tag 指向哪个检查点」。
+    // 注解 tag 的星号变体（%(*objectname)/%(*subject)/%(*committerdate)）剥到其指向的
+    // commit；轻量 tag 无星号变体，直接取 objectname/subject/committerdate（同 commit 字段）。
+    runGit(['for-each-ref', 'refs/tags', '--sort=-creatordate', '--format=%(refname:short)%09%(objectname)%09%(*objectname)%09%(subject)%09%(*subject)%09%(committerdate:iso-strict)%09%(*committerdate:iso-strict)'], { cwd }),
     // 脏文件改动汇总（git diff HEAD --numstat）：新增/删除行数聚合。
     // 与 dirtyFiles 并列采集（同一 Promise.all 批次，不额外串行）；
     // 首次提交前无 HEAD → 该命令失败，dirtyStats 保持 null（前端不展示，语义正确）。
@@ -370,9 +372,23 @@ export async function getStatus(root) {
       })
     }
   }
-  base.tags = tagR.ok
-    ? tagR.stdout.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20).map((l) => l.split('\t')[0])
-    : []
+  // tags：富格式 tag 清单（name + 指向 commit + subject + 提交时间，按创建时间倒序，最多 20 个）。
+  // 与 headTags 解析共用同一份 for-each-ref stdout（一次 git 调用喂两处）。
+  const tagsOut = tagR.ok ? tagR.stdout.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 20) : []
+  base.tags = tagsOut.map((l) => {
+    const [name, obj, peeled, subj, starSubj, ct, starCt] = l.split('\t')
+    const commitHash = peeled || obj // 轻量 tag：obj=commit；注解 tag：peeled=commit
+    const subject = starSubj || subj || ''
+    const commitAt = starCt || ct || ''
+    return {
+      name: name || '',
+      commit: commitHash || null,
+      commitShort: commitHash ? commitHash.slice(0, 7) : null,
+      subject: subject || null,
+      // ISO-8601（本地时区，如 `2026-08-30T08:16:12+08:00`）→ 前端 relTimeOf 直接 new Date()
+      commitAt: commitAt || null,
+    }
+  })
   // headTags：指向当前 HEAD 的 tag（普通 tag = objectname；注解 tag = peeled 指向 commit）。
   // 前端 tag 列表据此把 HEAD tag 高亮 + 标「HEAD」角标（git 语义：tag 指向 HEAD = 当前检查点）。
   // for-each-ref 只输出 20 行上限（base.tags 同款切片），HEAD 恰在切掉的部分时返回空数组——

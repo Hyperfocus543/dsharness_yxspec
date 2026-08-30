@@ -1298,11 +1298,26 @@ export interface GitStatus {
   recent?: GitRecentCommit[];
   /** 后端实际字段名：/api/git/status 返回 recentCommits */
   recentCommits?: GitRecentCommit[];
-  /** 仓库 tag 清单（普通/注解/远端 tag，按创建时间倒序，最多 20 个；无 → 空数组） */
-  tags?: string[];
+  /** 仓库 tag 清单（普通/注解/远端 tag，按创建时间倒序，最多 20 个；无 → 空数组）。
+   *  每条含指向的 commit + subject + 提交时间；旧网关只给字符串名 → 兼容解析成对象 */
+  tags?: (GitTagInfo | string)[];
   /** 指向当前 HEAD 的 tag（普通 tag = objectname / 注解 tag = peeled commit 对齐；
    *  前端 tag 列表据此把 HEAD tag 高亮 + 标「HEAD」角标；无 → 空数组） */
   headTags?: string[];
+}
+
+/** 单条 tag 信息（网关 for-each-ref 富格式采集；轻量/注解 tag 归一为「指向的 commit」）。 */
+export interface GitTagInfo {
+  /** tag 名（refname:short） */
+  name: string;
+  /** tag 指向的 commit 完整 hash（普通 tag = objectname / 注解 tag = peeled；无 → null） */
+  commit: string | null;
+  /** 指向 commit 的 7 位短 hash（无 → null） */
+  commitShort: string | null;
+  /** 指向 commit 的提交说明（注解 tag 取 peeled commit 的 subject；无 → null） */
+  subject: string | null;
+  /** 指向 commit 的提交时间（ISO-8601 本地时区，如 `2026-08-30T08:16:12+08:00`；无 → null） */
+  commitAt: string | null;
 }
 
 /** 单条阶段留痕记录（阶段↔commit↔tag 对照）。 */
