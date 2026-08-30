@@ -1034,19 +1034,9 @@ export const GitWorkspaceCard: React.FC = () => {
           </button>
         </div>
 
-        {workspaceLoading && workspaces.length === 0 ? (
-          // 骨架只给「真无数据」的首拉：列表为空时没东西可展示，骨架承接加载中。
-          // 写操作成功后的联动刷新不闪骨架——store 已在写操作响应里同步过新列表
-          // （addWorkspace/removeWorkspace/activateAfterAdd 都 set workspaces），
-          // 此时列表有内容，refreshWorkspaces 只应在后台静默对齐，而非把刚刷新的
-          // 列表闪成 3 根灰条再跳回（数据其实已在手里）。
-          <div className="space-y-1" role="status" aria-busy="true" aria-label="正在加载工作区列表">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="h-9 bg-zinc-100 rounded-lg animate-pulse" />
-            ))}
-          </div>
-        ) : workspaceError && workspaces.length === 0 ? (
-          // 错误态只给「真无数据」的情况：网关首拉失败、列表里没有任何可看的工作区。
+        {workspaceError && (!workspaces || workspaces.length === 0) ? (
+          // 错误态只给「真无数据」的情况：网关首拉失败、列表里没有任何可看的工作区
+          // （含首拉失败时 workspaces 仍为 null —— 错误优先于骨架，不把网关故障误显示成加载骨架）。
           // 列表已有内容时 refreshWorkspaces 失败（写操作后联动 / 手动点刷新）不覆盖为
           // 错误态——已登记的工作区仍可读可用（store 在写操作响应里同步过新列表，
           // 不是陈旧数据），只应保持展示，不把可用列表闪成错误条再切回。与下方
@@ -1061,6 +1051,19 @@ export const GitWorkspaceCard: React.FC = () => {
               <Icon name={I.refresh} size={11} />
               重试
             </button>
+          </div>
+        ) : !workspaces || (workspaceLoading && workspaces.length === 0) ? (
+          // 骨架：workspaces 初始 null（未加载）→ 首帧/加载中承接；真无数据（空数组）时
+          // 没东西可展示，骨架同样承接加载中。null 与「确认为空」区分（与 commits/audit
+          // 同口径）——避免网关返回前把「正在加载」误闪成下方「暂无工作区」空态再跳回。
+          // 写操作成功后的联动刷新不闪骨架——store 已在写操作响应里同步过新列表
+          // （addWorkspace/removeWorkspace/activateAfterAdd 都 set workspaces），
+          // 此时列表有内容，refreshWorkspaces 只应在后台静默对齐，而非把刚刷新的
+          // 列表闪成 3 根灰条再跳回（数据其实已在手里）。
+          <div className="space-y-1" role="status" aria-busy="true" aria-label="正在加载工作区列表">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-9 bg-zinc-100 rounded-lg animate-pulse" />
+            ))}
           </div>
         ) : workspaces.length === 0 ? (
           // 零工作区 = 首次登记路径：给直接入口（CTA 按钮打开下方添加表单，input 自动聚焦），

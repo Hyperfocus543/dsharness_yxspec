@@ -35,8 +35,8 @@ interface GitStore {
   /** status 加载失败（网关未起）时置 true */
   loadError: boolean;
   refreshStatus: () => Promise<void>;
-  /** GET /api/git/workspaces 注册表快照；初始 [] */
-  workspaces: GitWorkspace[];
+  /** GET /api/git/workspaces 注册表快照；初始 null = 未加载（null ≠ 空数组：首帧不误闪「暂无工作区」） */
+  workspaces: GitWorkspace[] | null;
   /** 当前活动工作区；缺省回落 defaultRoot（后端 activeId → 首项 → null） */
   activeWorkspace: GitWorkspace | null;
   /** workspaces 是否在加载中 */
@@ -95,7 +95,9 @@ export const useGitStore = create<GitStore>((set, get) => ({
     }
   },
 
-  workspaces: [],
+  // 初始 null = 未加载（refreshWorkspaces 成功才落数组；null 与「确认为空」区分，
+  // 供卡片首帧不误闪「暂无工作区」空态——与 commits/audit 的 null 口径一致）
+  workspaces: null,
   activeWorkspace: null,
   workspaceLoading: false,
   workspaceError: null,
