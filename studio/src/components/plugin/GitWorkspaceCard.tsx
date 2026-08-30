@@ -1220,8 +1220,17 @@ export const GitWorkspaceCard: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
+                  // 取消 = 丢弃本次表单草稿：清空各模式输入 + 回到默认「本地路径」tab。
+                  // 与成功路径（doAddLocal/doCloneRemote/doInitLocal 提交后清空对应输入）对齐——
+                  // 否则「输入到一半点取消再打开」会带回上次残留的 URL/路径，既有误提交风险
+                  // （陈旧的远程地址被再次克隆/登记），表单状态也与成功提交不一致。
                   setWsFormOpen(false);
                   setWsFormError(null);
+                  setWsPath('');
+                  setWsUrl('');
+                  setWsDir('');
+                  setWsInitDir('');
+                  setWsMode('local');
                 }}
                 disabled={operating}
                 className="px-2.5 py-1 rounded text-xs bg-white border border-zinc-300 text-zinc-600 hover:bg-zinc-50 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
