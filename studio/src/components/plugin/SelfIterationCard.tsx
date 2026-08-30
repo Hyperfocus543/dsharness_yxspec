@@ -6,6 +6,9 @@
 //   · 顶部：当前 run 摘要（阶段/轮次/基线/目标/收敛状态）+ 刷新
 //   · 启动表单默认阶段预填：表单为空时优先取当前 run 阶段（run-state.stage），
 //     其次取驾驶舱当前阶段（defaultStage prop；废弃/变体阶段排除），手动改过后不再覆盖
+//   · 启动表单轮数 run 预算预填：同阶段 run 进行中（断点恢复已默认勾选）时，轮数框
+//     预填该 run 的 maxIter 预算 + 「续跑预算」角标——续跑时插件用表单值覆盖预算，
+//     默认 3 会让大预算 run 缩水；预填让「所见 = 所跑」，手动改过后不再覆盖
 //   · 轮次瀑布：每阶段一条评分线（总分 + 等级 + 弱项 + 门禁），带 verdict 判定
 //     （continue 琥珀 / converge 绿 / degrade 红），score 与 round 分色标识
 //   · 评分 × git 检查点：每轮评分行对齐该评分时刻的阶段执行 commit + tag
@@ -40,7 +43,7 @@ import { useStageDispatch } from '../../hooks/useStageDispatch';
 import { useToastStore } from '../../store/toastStore';
 import { useGitStore } from '../../store/gitStore';
 import { buildSelfIterateCommand, clampMaxIterInput } from '../../utils/selfIterateCommand';
-import { shouldDefaultResume } from '../../utils/selfIterationResume';
+import { shouldDefaultResume, defaultRunIteration } from '../../utils/selfIterationResume';
 import { STAGE_ORDER } from '../../data/stage-mapping';
 
 /** verdict → 文案 + 色标（与轨迹面板语义对齐：continue 琥珀 / converge 绿 / degrade 红） */
@@ -446,6 +449,9 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
   // 「断点恢复」是否已被用户手动改过：默认勾选判定只在用户未干预时套用
   // （手动改过 → 尊重用户选择，刷新/重挂不覆盖），与 stageTouchedRef 同范式。
   const resumeTouchedRef = React.useRef(false);
+  // 「轮数」是否已被用户手动改过：run 预算预填只在用户未干预时套用
+  // （续跑语义下用户打任意数字 = 有意重设预算，刷新/重挂不覆盖）。
+  const maxIterTouchedRef = React.useRef(false);
   // 启动联动：本次启动目标阶段（sending 期间瀑布高亮该块 + 运行中徽标；取消/结束不残留）
   const [targetStage, setTargetStage] = React.useState('');
   // 阶段评分瀑布区 DOM 引用（启动后滚进视区，聚焦轮次瀑布）
@@ -531,6 +537,19 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
     if (resumeSel !== next) setResumeSel(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, stageSel]);
+
+  // 启动表单「轮数」run 预算预填：同阶段 run 进行中且「断点恢复」勾选（resumeSel=true）
+  // 时，轮数框预填该 run 的 maxIter 预算 —— 续跑时插件 openRun 用表单值覆盖 run 预算，
+  // 默认「3」会让 maxIter=10 的 run 续跑后预算缩水，而轮数框打任意数字都会静默
+  // 重设预算（所见 ≠ 所跑）。预填 + 输入框旁「续跑预算」角标让预算可见可回改。
+  // 只在用户未手动改过轮数（maxIterTouchedRef）且确实在续跑时套用；阶段预填后再填
+  // （依赖 stageSel，阶段未定/数据未就绪时预算未知，保持默认 3 不抢先覆盖）。
+  React.useEffect(() => {
+    if (maxIterTouchedRef.current || !resumeSel) return;
+    const runMax = defaultRunIteration(data?.state, stageSel);
+    if (runMax != null && maxIterSel !== String(runMax)) setMaxIterSel(String(runMax));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, stageSel, resumeSel]);
 
   // 启动新迭代：拼命令 → 空阶段 warn → 派活 → 派活完自动刷新卡内数据（新轮次留痕/新 run 摘要）
   const onStart = async () => {
@@ -746,10 +765,25 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
               min={1}
               max={10}
               value={maxIterSel}
-              onChange={(e) => setMaxIterSel(clampMaxIterInput(e.target.value))}
+              onChange={(e) => {
+                if (sending) return;
+                maxIterTouchedRef.current = true; // 用户手动改轮数 → 不再按 run 预算覆盖
+                setMaxIterSel(clampMaxIterInput(e.target.value));
+              }}
               disabled={sending}
               className="px-2 py-1 rounded border border-zinc-200 bg-white text-xs text-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-zinc-50"
             />
+            {/* 续跑预算角标：断点恢复勾选 + 轮数未被手动改过时，标注当前值 =
+                该 run 的 maxIter 预算（续跑时插件会用表单值覆盖预算，默认 3 会缩水）。
+                用户手动改过轮数 / 取消断点恢复 → 不再提示（尊重用户有意重设/开新 run）。 */}
+            {resumeSel && !maxIterTouchedRef.current && defaultRunIteration(data?.state, stageSel) != null && (
+              <span
+                className="self-start shrink-0 px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-[10px] font-medium"
+                title="该 run 的 maxIter 预算：续跑时轮数以此值为准（插件 openRun 用表单值覆盖预算）。手动修改轮数将重设预算。"
+              >
+                续跑预算 {maxIterSel}
+              </span>
+            )}
           </label>
           <label className="flex flex-col gap-1 text-[10px] text-zinc-400">
             收敛目标（可选）

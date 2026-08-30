@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shouldDefaultResume } from './selfIterationResume';
+import { shouldDefaultResume, defaultRunIteration } from './selfIterationResume';
 import type { SelfIterationState } from './ipc';
 
 /** run-state 摘要构造器（非收敛、running、有完成轮次 = 可续跑的最小形态）。 */
@@ -48,5 +48,36 @@ describe('shouldDefaultResume', () => {
 
   it('无完成轮次（currentRound=0）→ 无断点可续，不勾', () => {
     expect(shouldDefaultResume(state({ currentRound: 0 }), 'sqt_script_gen')).toBe(false);
+  });
+});
+
+describe('defaultRunIteration（续跑轮数预算预填）', () => {
+  it('同阶段可续跑 → 返回该 run 的 maxIter 预算', () => {
+    expect(defaultRunIteration(state({ maxIter: 10 }), 'sqt_script_gen')).toBe(10);
+  });
+
+  it('预算 = 默认 3 → 也返回 3（显式预填，角标标注「续跑预算」）', () => {
+    expect(defaultRunIteration(state({ maxIter: 3 }), 'sqt_script_gen')).toBe(3);
+  });
+
+  it('判定为不续跑（阶段不符 / 已收敛 / 非 running / 无轮次）→ null', () => {
+    expect(defaultRunIteration(state({ maxIter: 10 }), 'swe_arch')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 10, converged: true, status: 'converged' }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 10, status: 'stopped' }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 10, currentRound: 0 }), 'sqt_script_gen')).toBe(null);
+  });
+
+  it('maxIter 越界/非法（网关钳制域 [1,10] 外）→ null（不预填）', () => {
+    expect(defaultRunIteration(state({ maxIter: 0 }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 99 }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: NaN }), 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 2.5 }), 'sqt_script_gen')).toBe(2);
+  });
+
+  it('state 为 null / 无 run / stage 为空 → null', () => {
+    expect(defaultRunIteration(null, 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(undefined, 'sqt_script_gen')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 10 }), '')).toBe(null);
+    expect(defaultRunIteration(state({ maxIter: 10 }), null)).toBe(null);
   });
 });
