@@ -423,6 +423,39 @@ const StageBlock: React.FC<{ s: SelfIterationStage; running?: boolean }> = ({ s,
   );
 };
 
+/** 新阶段启动占位：目标阶段尚无任何留痕（stages 空 / 未含该阶段）时，瀑布渲染「运行中」
+ *  占位块 —— 否则启动进行中（表单已显示「已执行 Ns」）瀑布仍显示「尚未执行过自迭代」，
+ *  与「正在跑」的事实自相矛盾，还误引导用户再启动一次。复用 StageBlock 的运行中徽标
+ *  语义（emerald + animate-pulse clock + 已执行秒数），首轮打分留痕长出后自动被真实块取代。 */
+const RunningStageBlock: React.FC<{ token: string; elapsedSec: number; divRef?: React.Ref<HTMLDivElement> }> = ({ token, elapsedSec, divRef }) => (
+  <div
+    ref={divRef}
+    className="rounded-xl ring-2 ring-emerald-300/80 shadow-sm space-y-1"
+  >
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="shrink-0 px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 font-mono text-xs" title={token}>
+        {token}
+      </span>
+      <span
+        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-300 text-[10px] font-medium"
+        title="本次启动的迭代进行中：首轮打分完成后该阶段块自动出现"
+      >
+        <Icon name={I.clock} size={10} weight="fill" className="animate-pulse" />
+        运行中
+      </span>
+      <span
+        className="ml-auto shrink-0 text-[10px] text-zinc-400 tabular-nums"
+        title="本轮派活已执行时长（后台任务运行中；表单上方已有同源计时）"
+      >
+        已执行 {elapsedSec}s
+      </span>
+    </div>
+    <div className="text-xs text-zinc-400 border border-dashed border-emerald-200 bg-emerald-50/30 rounded-lg px-3 py-4 text-center">
+      正在执行 {token} 的自迭代：新阶段暂无留痕，首轮打分完成后自动出现
+    </div>
+  </div>
+);
+
 export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ defaultStage }) => {
   const [data, setData] = React.useState<SelfIterationOverview | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -976,12 +1009,19 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
       <div ref={waterfallRef} className="space-y-3">
         <SectionLabel>阶段评分</SectionLabel>
         {empty ? (
-          <div className="text-xs text-zinc-400 py-6 text-center border border-dashed border-zinc-200 rounded-lg space-y-1">
-            <div>尚未执行过自迭代（无留痕记录）</div>
-            <div className="text-[11px]">
-              在上方选择阶段并启动新迭代，每轮打分与判定会写入 runtime-data/trajectory/self_iteration/。
+          // 无任何留痕：启动进行中（targetStage 已定）→ 渲染运行中占位，不再显示
+          // 「尚未执行过自迭代（请在上方启动）」——启动已在跑，空态会自相矛盾并误导重复启动。
+          // 取消/结束后（sending=false）targetStage 已清空 → 回落真正的空态引导。
+          sending && targetStage ? (
+            <RunningStageBlock token={targetStage} elapsedSec={elapsedSec} divRef={runningBlockRef} />
+          ) : (
+            <div className="text-xs text-zinc-400 py-6 text-center border border-dashed border-zinc-200 rounded-lg space-y-1">
+              <div>尚未执行过自迭代（无留痕记录）</div>
+              <div className="text-[11px]">
+                在上方选择阶段并启动新迭代，每轮打分与判定会写入 runtime-data/trajectory/self_iteration/。
+              </div>
             </div>
-          </div>
+          )
         ) : (
           <div className="space-y-3">
             {stages.map((s) => {
@@ -996,6 +1036,11 @@ export const SelfIterationCard: React.FC<{ defaultStage?: string }> = ({ default
                 </div>
               );
             })}
+            {/* 启动的是全新阶段（stages 中尚无该阶段块）：新 run 首轮打分才会长出真实块，
+                启动进行中补一个运行中占位，瀑布不显示「缺了一块」的空档，也不误导用户去重复启动。 */}
+            {sending && targetStage && !stages.some((s) => s.token === targetStage) && (
+              <RunningStageBlock token={targetStage} elapsedSec={elapsedSec} divRef={runningBlockRef} />
+            )}
           </div>
         )}
       </div>
