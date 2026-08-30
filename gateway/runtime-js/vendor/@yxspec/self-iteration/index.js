@@ -157,8 +157,21 @@ function parseSelfIterate(prompt) {
       )
       .replace(/--resume(?:\s|$)/g, ' ')
       .trim()
-    const first = after.split(/\s+/)[0] || ''
+    const tokens = after.split(/\s+/).filter(Boolean)
+    const first = tokens[0] || ''
     if (first) stageRaw = first
+    // goal 值未加引号时的剥离残词兜底：`--goal=Total>=80 且门禁全绿 sqt-script-gen`
+    // （flag 在前的常见手写形态，goal 未用引号包裹）剥离已知 flag 后首 token 是 goal
+    // 值残词 `且门禁全绿` —— 上一版取「首个非 flag 裸词」会把它当阶段，resolveStageToken
+    // 解析失败 → 静默不开 run（自迭代状态机形同虚设，agent 拿不到轮次/评分/基线）。
+    // 阶段是命令唯一位置实参，恒在末尾；合法阶段 token 必为 [a-z0-9_-]（下划线 token /
+    // 连字符命令名，如 `sqt-script-gen` / `swe_arch`），含非 [\w-] 字符（中文/`>=`/空格）
+    // 的首 token 必是 flag 值残词 —— 此时兜底取末 token。首 token 形态合法则不改变
+    // 「stage 在前」的既有语义（`sqt-script-gen --goal="..."` 仍取首 token）。
+    if (stageRaw && !/^[\w-]+$/.test(stageRaw)) {
+      const last = tokens[tokens.length - 1] || ''
+      if (last && last !== stageRaw) stageRaw = last
+    }
   }
   // maxIter 钳制 [1,10]（与前端 buildSelfIterateCommand 派活钳制同口径）：轮数是
   // 状态机收敛边界（roundNo >= maxIter 收束），越界值必须就地归一——`--max-iter=999`
