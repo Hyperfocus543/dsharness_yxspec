@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const mod = await import(pathToFileURL(join(process.cwd(), 'lib', 'git.mjs')).href)
-const { parsePorcelainHead, parseStashList } = mod
+const { parsePorcelainHead, parseStashList, parseNumstatRows } = mod
 
 let pass = 0
 let fail = 0
@@ -103,6 +103,35 @@ assert(
 assert('空输入 → []', JSON.stringify(parseStashList('')) === '[]' && JSON.stringify(parseStashList('   ')) === '[]')
 assert('null/undefined/非字符串 → []', JSON.stringify(parseStashList(null)) === '[]' && JSON.stringify(parseStashList(undefined)) === '[]')
 assert('非法行（非 stash 格式）→ 跳过', JSON.stringify(parseStashList('abc def')) === '[]')
+
+console.log('== 5) 逐文件改动统计解析（git diff HEAD --numstat → 行内 +N/-M）==')
+assert(
+  '常规行 → {path,added,removed} 数组',
+  JSON.stringify(parseNumstatRows('1\t0\ta.md\n0\t2\tb.md\n3\t4\tc.md\n')) ===
+    JSON.stringify([
+      { path: 'a.md', added: 1, removed: 0 },
+      { path: 'b.md', added: 0, removed: 2 },
+      { path: 'c.md', added: 3, removed: 4 },
+    ]),
+  JSON.stringify(parseNumstatRows('1\t0\ta.md\n0\t2\tb.md\n3\t4\tc.md\n')),
+)
+assert(
+  '二进制 `-\t-` 行 → added/removed 归 0（文件仍计入）',
+  JSON.stringify(parseNumstatRows('-\t-\tassets/logo.png\n2\t1\td.md\n')) ===
+    JSON.stringify([
+      { path: 'assets/logo.png', added: 0, removed: 0 },
+      { path: 'd.md', added: 2, removed: 1 },
+    ]),
+  JSON.stringify(parseNumstatRows('-\t-\tassets/logo.png\n2\t1\td.md\n')),
+)
+assert(
+  '含空格路径（TAB 分隔不受影响）',
+  JSON.stringify(parseNumstatRows('2\t0\tmy file.txt\n')) ===
+    JSON.stringify([{ path: 'my file.txt', added: 2, removed: 0 }]),
+  JSON.stringify(parseNumstatRows('2\t0\tmy file.txt\n')),
+)
+assert('空/纯空白 → []', JSON.stringify(parseNumstatRows('')) === '[]' && JSON.stringify(parseNumstatRows('   \n')) === '[]')
+assert('null/undefined/非字符串 → []', JSON.stringify(parseNumstatRows(null)) === '[]' && JSON.stringify(parseNumstatRows(undefined)) === '[]')
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`)
 process.exit(fail > 0 ? 1 : 0)

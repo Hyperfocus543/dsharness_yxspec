@@ -1267,6 +1267,9 @@ export interface GitDirtyFile {
   status: string;
   /** 是否已暂存（index 区）；porcelain XY 首列非空即 staged */
   staged: boolean;
+  /** 逐文件改动统计（+N/-M；网关 git diff HEAD --numstat 逐文件派生）。
+   *  老网关/采集失败/该路径未命中 → undefined（行内不渲染 chip，静默降级） */
+  stats?: { added: number; removed: number };
 }
 
 /** 工作区脏文件改动汇总（git diff HEAD --numstat 聚合；有净改动才给值）。 */

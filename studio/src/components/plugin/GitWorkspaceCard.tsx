@@ -1881,12 +1881,29 @@ export const GitWorkspaceCard: React.FC = () => {
                 >
                   <div
                     className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs hover:border-emerald-300 transition-all group"
-                    title="点击 diff 按钮或悬停查看改动"
+                    title={
+                      f.stats
+                        ? `${f.path}：${st.label} +${f.stats.added}/-${f.stats.removed} 行\n点击 diff 按钮或悬停查看改动`
+                        : '点击 diff 按钮或悬停查看改动'
+                    }
                   >
                     <span className={`shrink-0 w-1 self-stretch rounded-full ${st.dot}`} aria-hidden />
                     <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${st.cls}`}>{st.label}</span>
                     {f.staged && (
                       <span className="shrink-0 text-[10px] px-1 py-0.5 rounded bg-zinc-100 text-zinc-500">已暂存</span>
+                    )}
+                    {/* 行内改动统计（+N/-M）：网关 git diff HEAD --numstat 逐文件派生，
+                        与 section 头「N 文件 +A/-R」chip 同数据源同色标（emerald 增/red 删）。
+                        一眼看出这个文件改了多少 —— 未命中（untracked/rename 边界/老网关）→
+                        不渲染（有 diff 按钮 + hover 预览兜底，行交互不依赖此 chip）。 */}
+                    {f.stats && (
+                      <span
+                        className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white border border-zinc-200 text-[10px] font-mono tabular-nums"
+                        title={`${f.path}：+${f.stats.added} / -${f.stats.removed}（git diff HEAD --numstat）`}
+                      >
+                        <span className="text-emerald-700">+{f.stats.added}</span>
+                        <span className="text-red-600">-{f.stats.removed}</span>
+                      </span>
                     )}
                     <span className="min-w-0 truncate text-zinc-600 font-mono" title={f.path}>
                       {f.path}

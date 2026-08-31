@@ -160,6 +160,35 @@ export function parseNumstat(out) {
 }
 
 /**
+ * 解析 `git diff HEAD --numstat` 输出 → 逐文件改动统计（纯函数，供脏文件行内 +N/-M）。
+ * 每行 `加行\t删行\t路径`：路径原样保留（重命名行取末段即目标路径，与 getStatus
+ * porcelain 的 dirtyFiles.path 取 ` -> ` 后目标路径同口径）；加删列 `-`（二进制）→
+ * 只算文件不计行。返回 `{ path, added, removed }` 数组（含空格路径不受 TAB 切分影响）。
+ * 空/非字符串 → []。与 parseNumstat（同一 stdout 的聚合视角）互补：这里给逐文件分布，
+ * 让脏文件列表每行能标注「这个文件改了多少」，不再只有整体 +N/-M chip。
+ * @param {string} out `git diff HEAD --numstat` stdout
+ * @returns {Array<{path:string, added:number, removed:number}>}
+ */
+export function parseNumstatRows(out) {
+  if (typeof out !== 'string' || !out.trim()) return []
+  const rows = []
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    const [a, d, ...pathParts] = line.split('\t')
+    const path = pathParts.join('\t').trim()
+    if (!path) continue
+    const addN = Number(a)
+    const delN = Number(d)
+    rows.push({
+      path,
+      added: Number.isFinite(addN) ? Math.max(0, addN) : 0,
+      removed: Number.isFinite(delN) ? Math.max(0, delN) : 0,
+    })
+  }
+  return rows
+}
+
+/**
  * 解析 `git stash list --format` 输出 → 暂存条目（纯函数，供工作区 stash 速览）。
  * 每行 `stash@{0}  WIP on main: abc1234 提交说明`（非 WIP 分支为 `On <branch>:`）。
  * 兼容性：
@@ -420,6 +449,14 @@ export async function getStatus(root) {
   // 前端据此不渲染「0 文件」误导统计。与 dirtyFiles 同源（同一工作区同一时刻），
   // 前端头部计数与「+N/-M」chip 一眼对应。
   base.dirtyStats = numstatR.ok ? parseNumstat(numstatR.stdout) : null
+  // 逐文件改动统计：与 dirtyStats 同一份 git diff HEAD --numstat stdout（零新增 git 调用），
+  // 按路径索引供脏文件列表行内 +N/-M 标注。porcelain 与 numstat 路径同源（rename 均取
+  // 目标路径），归一后逐字匹配即可对齐；命不中的路径（二进制行路径带引号等边界）→ 不标注。
+  const dirtyFileStats = numstatR.ok ? new Map(parseNumstatRows(numstatR.stdout).map((r) => [r.path, r])) : new Map()
+  for (const f of base.dirtyFiles) {
+    const r = dirtyFileStats.get(f.path)
+    if (r) f.stats = { added: r.added, removed: r.removed }
+  }
   // stash 速览：解析 `git stash list --format=%gd: %gs`（ref + WIP 分支 + commit + 说明）。
   // 仅 git 可用（statusR.ok 已由上文保证）且采集成功时才有值；无 stash / 失败 → [] 静默。
   base.stashes = stashR.ok ? parseStashList(stashR.stdout) : []
