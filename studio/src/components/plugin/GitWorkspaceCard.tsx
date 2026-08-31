@@ -354,6 +354,11 @@ const AuditRow: React.FC<{
   retrying?: boolean;
   onRetry?: (e: GitAuditEntry) => void;
 }> = ({ e, workspaces = null, retrying = false, onRetry }) => {
+  // git 写操作全局锁：任何操作（含顶部 fetch/pull/push、其他 root 的重试）进行中时，
+  // 本行重试按钮一并禁用 —— 否则点击会命中 doRetryAudit 的 `if (operating) return`
+  // 静默空转（按钮看着可点、实际无任何反馈，所见 ≠ 所跑），与其余 operating 门控按钮
+  // （fetch/pull/push/设为当前/添加表单）的禁用语义对齐。
+  const operating = useGitStore((s) => s.operating);
   const argsText = auditArgsText(e.args);
   // pull 文件改动统计（老行/无净改动 → null，不渲染 chip）
   const stats = e.stats ?? null;
@@ -507,9 +512,9 @@ const AuditRow: React.FC<{
         <button
           type="button"
           onClick={() => onRetry?.(e)}
-          disabled={retrying}
+          disabled={retrying || operating}
           className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-          title={retryAuditTitle(e)}
+          title={operating ? '另一项 git 操作进行中：完成后再重试（避免并发写同一仓库）' : retryAuditTitle(e)}
         >
           <Icon
             name={retrying ? I.clock : I.refresh}
