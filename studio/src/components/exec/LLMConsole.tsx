@@ -333,8 +333,8 @@ export const LLMConsole: React.FC = () => {
         </div>
       )}
 
-      {/* 对话区 */}
-      <div ref={chatScrollRef} className="flex-1 overflow-y-auto border border-zinc-200 rounded-md bg-white p-3 space-y-2 min-h-[200px]">
+      {/* 对话区：min-h 给个基础量（防空态太扁），flex-1 撑满剩余；终端矮时不挤占输入区 */}
+      <div ref={chatScrollRef} className="flex-1 overflow-y-auto border border-zinc-200 rounded-md bg-white p-3 space-y-2 min-h-[96px]">
         {chat.length === 0 ? (
           <EmptyState
             icon={I.terminal}
@@ -404,10 +404,10 @@ export const LLMConsole: React.FC = () => {
               onHover={setSlashHighlight}
             />
           )}
-          <div className="flex flex-col flex-1 min-w-0 gap-1">
+          <div className="flex flex-col min-w-0 gap-1">
             {/* 输入区拖拽手柄：对话区与输入区之间，可单独拉高/压低输入框 */}
             <div
-              className="h-1.5 cursor-row-resize group relative -mx-1"
+              className="h-1.5 cursor-row-resize group relative -mx-1 shrink-0"
               onMouseDown={(e) => {
                 inputDragRef.current = { startY: e.clientY, startRows: inputRows };
                 document.body.style.cursor = 'row-resize';
@@ -420,7 +420,7 @@ export const LLMConsole: React.FC = () => {
             </div>
             <textarea
               ref={textareaRef}
-              className="flex-1 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              className="shrink-0 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
               rows={inputRows}
               placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
               aria-label="派活指令输入框"
