@@ -11,7 +11,6 @@ import { useToastStore } from '../../store/toastStore';
 import type { ModelEntry } from '../../utils/ipc';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
-import { FeatureSettings } from './FeatureSettings';
 
 const MODALITIES_LABEL: Record<string, string> = {
   text: '文本',
@@ -320,20 +319,6 @@ export const ModelSettings: React.FC = () => {
         <code> settings.yaml</code> 中声明（否则运行时 UNKNOWN_MODEL 显式失败）。
         视觉模型（image）当前仅声明模态，对话区图片附件能力后续支持。
       </div>
-
-      {/* 功能开关（配置语义，从插件中心挪入） */}
-      <section className="border-t border-zinc-200 pt-4">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-emerald-600">
-            <Icon name={I.squares} size={16} />
-          </span>
-          <h3 className="text-sm font-bold text-zinc-800">功能开关</h3>
-          <span className="text-xs text-zinc-400">yxspec 适配功能启停（原插件中心 tab）</span>
-        </div>
-        <div className="bg-white border border-zinc-200 rounded-lg">
-          <FeatureSettings />
-        </div>
-      </section>
     </div>
   );
 };
