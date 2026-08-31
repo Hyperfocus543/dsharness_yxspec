@@ -15,10 +15,10 @@ interface TerminalSectionProps {
 }
 
 export const TerminalSection: React.FC<TerminalSectionProps> = ({ activeCard, onCollapse }) => {
-  // 整体高度：固定约 20% 屏高。留白区域不可拖拽调整；
-  // 若要更多输入空间，在 LLMConsole 里单独拉高输入区。
-  // 下限 240px 保证工具栏+对话区+输入区不挤压；上限 400px 防过高。
-  const height = Math.min(400, Math.max(240, Math.floor(window.innerHeight * 0.2)));
+  // 整体高度：约 20% 屏高、下限 300px（防装不下工具栏+对话区+输入区）。
+  // 留白区域不可拖拽调整；若要更多输入空间，在 LLMConsole 里单独拉高输入区。
+  // 240px 实测太矮：对话区 min-h 96 + 工具栏 + 模板行 + 输入区(3行) 会溢出挤压成大片留白。
+  const height = Math.max(300, Math.floor(window.innerHeight * 0.2));
 
   return (
     <section className="min-w-0 bg-zinc-50 flex flex-col" style={{ height }}>
