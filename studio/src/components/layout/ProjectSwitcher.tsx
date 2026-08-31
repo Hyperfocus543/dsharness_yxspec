@@ -16,6 +16,7 @@ import { useToastStore } from '../../store/toastStore';
 import type { ProjectListItem } from '../../utils/ipc';
 import { Icon } from '../ui';
 import { I } from '../ui/icons';
+import { ProjectManageModal, type ManageMode } from './ProjectManageModal';
 
 const RECENT_KEY = 'yxspec-studio.recent-projects';
 const MAX_RECENT = 5;
@@ -55,23 +56,37 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
   const [recent, setRecent] = React.useState<string[]>([]);
   const [input, setInput] = React.useState('');
   const [open, setOpen] = React.useState(false); // 菜单是否展开
+  // 项目管理弹窗：null=关闭；{mode, target?} = 打开（delete 需带目标项目）
+  const [manage, setManage] = React.useState<{ mode: ManageMode; target?: ProjectListItem } | null>(null);
   const pushToast = useToastStore((s) => s.push);
   const loadProject = useProjectStore((s) => s.load);
 
-  // 预置列表 + 最近记录
-  React.useEffect(() => {
-    let cancelled = false;
+  // 刷新预置项目列表（listProjects 逻辑抽取，manage 成功后复用）
+  const refresh = React.useCallback(() => {
     ipc
       .listProjects()
-      .then((list) => {
-        if (!cancelled) setProjects(list.filter((p) => p.hasProgress));
-      })
+      .then((list) => setProjects(list.filter((p) => p.hasProgress)))
       .catch(() => {});
-    setRecent(loadRecent());
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  // 预置列表 + 最近记录
+  React.useEffect(() => {
+    refresh();
+    setRecent(loadRecent());
+  }, [refresh]);
+
+  // 项目管理成功回调：关弹窗 + 刷新列表；新建/复制带新路径 → 自动打开
+  const handleManageDone = (newPath?: string) => {
+    setManage(null);
+    setOpen(false);
+    refresh();
+    if (newPath) {
+      loadProject(newPath);
+      remember(newPath);
+      setRecent(loadRecent());
+      setInput(newPath);
+    }
+  };
 
   // 当前项目变更时：刷新最近记录 + 折叠菜单
   React.useEffect(() => {
@@ -138,6 +153,14 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
         >
           {loading ? '打开中…' : '打开项目'}
         </button>
+        <button
+          className="text-xs px-2.5 py-1 bg-white border border-zinc-300 rounded-md hover:bg-zinc-50 text-zinc-600 flex items-center gap-1 active:scale-[0.98]"
+          onClick={() => setManage({ mode: 'create' })}
+          title="在 D:/Work/01_Projects 下新建项目"
+        >
+          <Icon name={I.plus} size={13} />
+          新建项目
+        </button>
       </div>
     );
   }
@@ -160,7 +183,7 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
         <>
           {/* 点击外部关闭 */}
           <div className="fixed inset-0 z-[58]" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 w-[340px] bg-white border border-zinc-200 rounded-lg shadow-xl z-[60] overflow-hidden">
+          <div className="absolute right-0 top-full mt-1 w-[340px] bg-white border border-zinc-200 rounded-lg shadow-xl z-[60] overflow-hidden group">
             {/* 手动输入 + 打开 */}
             <div className="p-2 border-b border-zinc-200 bg-zinc-50 flex gap-1.5">
               <input
@@ -206,23 +229,57 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
               <div className="py-1 border-b border-zinc-200">
                 <div className="px-3 py-1 text-xs text-zinc-400">预置项目</div>
                 {projects.map((p) => (
-                  <button key={p.path} className={menuItemCls} onClick={() => openWith(p.path)}>
-                    <span className="text-zinc-400">
-                      <Icon name={I.database} size={14} />
-                    </span>
-                    <span className="text-xs truncate">{p.name}</span>
-                    {p.path === currentPath && (
-                      <span className="ml-auto text-emerald-600 text-xs">
-                        <Icon name={I.check} size={14} />
+                  <div
+                    key={p.path}
+                    className="flex items-center pr-1.5 group/row"
+                  >
+                    <button className={menuItemCls} onClick={() => openWith(p.path)}>
+                      <span className="text-zinc-400">
+                        <Icon name={I.database} size={14} />
                       </span>
-                    )}
-                  </button>
+                      <span className="text-xs truncate">{p.name}</span>
+                      {p.path === currentPath && (
+                        <span className="ml-auto text-emerald-600 text-xs">
+                          <Icon name={I.check} size={14} />
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      className="shrink-0 p-1 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-all opacity-0 group-hover/row:opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setManage({ mode: 'delete', target: p });
+                      }}
+                      title={`删除项目：${p.name}`}
+                      aria-label={`删除项目 ${p.name}`}
+                    >
+                      <Icon name={I.trash} size={14} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
 
             {/* 操作 */}
             <div className="py-1">
+              <button
+                className={menuItemCls}
+                onClick={() => setManage({ mode: 'create' })}
+              >
+                <span className="text-zinc-400">
+                  <Icon name={I.plus} size={14} />
+                </span>
+                <span className="text-xs">新建项目</span>
+              </button>
+              <button
+                className={menuItemCls}
+                onClick={() => setManage({ mode: 'copy' })}
+              >
+                <span className="text-zinc-400">
+                  <Icon name={I.clipboard} size={14} />
+                </span>
+                <span className="text-xs">复制当前项目</span>
+              </button>
               <button
                 className={menuItemCls}
                 onClick={() => {
@@ -266,6 +323,18 @@ export const ProjectSwitcher: React.FC<Props> = ({ currentPath, loading }) => {
             </div>
           </div>
         </>
+      )}
+
+      {/* 项目管理弹窗（新建 / 复制 / 删除） */}
+      {manage && (
+        <ProjectManageModal
+          mode={manage.mode}
+          target={manage.target}
+          open
+          onClose={() => setManage(null)}
+          projects={projects}
+          onDone={handleManageDone}
+        />
       )}
     </div>
   );

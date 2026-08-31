@@ -268,6 +268,64 @@ export async function listProjects(): Promise<ProjectListItem[]> {
   return browserListProjects();
 }
 
+// =============================================================================
+// 项目管理（新建 / 复制 / 删除）
+// 浏览器模式经 Vite 中间件 /yxspec/{create,copy,delete}-project 实现；
+// Tauri 模式无对应 Rust 命令，抛错降级（与 listProjects 的降级惯例一致）。
+// =============================================================================
+
+export interface ProjectMutationResult {
+  ok: boolean;
+  path: string;      // 新建/复制：新项目绝对路径；删除：目标路径
+  name: string;
+  scope?: 'full' | 'skeleton';
+  deleted?: boolean; // 删除端点：是否已删本地文件
+  error?: string;
+}
+
+async function browserProjectMutation(
+  endpoint: string,
+  body: unknown,
+): Promise<ProjectMutationResult> {
+  const res = await fetch(`/yxspec/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => null)) as ProjectMutationResult | null;
+  if (!res.ok) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  return data as ProjectMutationResult;
+}
+
+function tauriNotSupported(): never {
+  throw new Error('项目管理暂不支持 Tauri 模式');
+}
+
+export async function createProject(name: string): Promise<ProjectMutationResult> {
+  if (isTauri) tauriNotSupported();
+  return browserProjectMutation('create-project', { name });
+}
+
+export async function copyProject(
+  source: string,
+  name: string,
+  scope: 'full' | 'skeleton',
+  includeGit?: boolean,
+): Promise<ProjectMutationResult> {
+  if (isTauri) tauriNotSupported();
+  return browserProjectMutation('copy-project', { source, name, scope, includeGit });
+}
+
+export async function deleteProject(
+  target: string,
+  includeFiles: boolean,
+): Promise<ProjectMutationResult> {
+  if (isTauri) tauriNotSupported();
+  return browserProjectMutation('delete-project', { target, includeFiles });
+}
+
 export async function computeAllStatus(projectPath: string): Promise<StageStatus[]> {
   if (isTauri) {
     const invoke = await getTauriInvoke();

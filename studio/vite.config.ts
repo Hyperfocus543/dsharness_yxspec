@@ -4,6 +4,108 @@ import * as fs from "fs";
 import * as path from "path";
 import { rewriteTaskStatus } from "./vite.task-writer";
 
+// =============================================================================
+// 项目管理 helper（新建/复制/删除项目共用）
+// =============================================================================
+
+// 项目根：与 /yxspec/projects 扫描同源（环境变量可覆盖）
+function getProjectsRoot(): string {
+  return process.env.YXSPEC_PROJECTS_ROOT || "D:/Work/01_Projects";
+}
+
+function getTemplateDir(): string {
+  return path.join(getProjectsRoot(), "_Templates", "Standard_Project_Template");
+}
+
+// 项目名校验：对齐 /yxspec/projects 扫描器的跳过规则（_ / . 开头、baselines/_monitor 保留名）
+// 返回错误串（不合法）或 null（合法）。
+function isSafeProjectName(name: string): string | null {
+  if (!name || !name.trim()) return "项目名为空";
+  const n = name.trim();
+  if (n.length > 120) return "项目名过长（≤120 字符）";
+  if (n.includes("..")) return "项目名不能包含 ..";
+  if (/[/\\:*?"<>|]/.test(n)) return "项目名不能包含 / \\ : * ? \" < > |";
+  if (n.startsWith("_") || n.startsWith(".")) return "项目名不能以 _ 或 . 开头";
+  if (/^(baselines?|_monitor)$/i.test(n)) return "项目名不能使用保留名 baselines/_monitor";
+  return null;
+}
+
+// 防逃逸：path.resolve 折叠 ../ 后必须仍在该根下（白名单层）
+function assertInsideRoot(abs: string, root: string): boolean {
+  const normAbs = path.resolve(abs);
+  const normRoot = path.resolve(root);
+  return normAbs.startsWith(normRoot + path.sep) && normAbs !== normRoot;
+}
+
+// 从模板造骨架 → dest（3 文件 + 9 空子目录），并在 PROGRESS.md 末尾补 ## 项目元信息 占位表
+// （模板 PROGRESS.md 缺此表，前端 parseProgressMeta 依赖它显示项目元信息）
+function copySkeletonFromTemplate(dest: string): void {
+  const tpl = getTemplateDir();
+  if (!fs.existsSync(tpl)) throw new Error(`模板目录不存在: ${tpl}`);
+  fs.mkdirSync(dest, { recursive: true });
+  for (const f of ["PROGRESS.md", "_README.md", "PROJECT_LINKS.md"]) {
+    const src = path.join(tpl, f);
+    if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dest, f));
+  }
+  for (const d of [
+    "00_Admin", "01_Input", "02_Design", "03_Documents", "04_Communication",
+    "05_Schedule", "06_Quality", "07_Deliverables", "99_Working",
+  ]) {
+    fs.mkdirSync(path.join(dest, d), { recursive: true });
+  }
+  const meta = [
+    "",
+    "## 项目元信息",
+    "",
+    "| 项 | 值 |",
+    "|----|-----|",
+    "| spec_id | 待填写 |",
+    "| 产品 | 待填写 |",
+    "| git 分支 | 待填写 |",
+    "| 团队仓远端 | 待填写 |",
+    "| 个人备份远端 | 待填写 |",
+    "| 基线分支 | 待填写 |",
+    "| 工期目标 | 待填写 |",
+    "",
+  ].join("\n");
+  fs.appendFileSync(path.join(dest, "PROGRESS.md"), meta, "utf-8");
+}
+
+// 完整复制：递归逐文件复制，跳过运行时产物；.git 仅在 includeGit 时保留
+const SKIP_COPY_DIRS = new Set([
+  "node_modules", "dist", "target", ".next", "__pycache__", ".dsh",
+]);
+function copyTree(src: string, dest: string, includeGit: boolean): void {
+  fs.mkdirSync(dest, { recursive: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const e of entries) {
+    if (e.name === ".git" && !includeGit) continue;
+    if (SKIP_COPY_DIRS.has(e.name)) continue;
+    const s = path.join(src, e.name);
+    const d = path.join(dest, e.name);
+    if (e.isDirectory()) {
+      copyTree(s, d, includeGit);
+    } else if (e.isFile()) {
+      fs.copyFileSync(s, d);
+    }
+  }
+}
+
+// 攒 body 再统一处理（POST 端点公共模式）
+function readBody(req: { on: (ev: string, cb: (chunk: any) => void) => void }): Promise<string> {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => resolve(body));
+  });
+}
+
+function sendJson(res: { statusCode: number; setHeader: (k: string, v: string) => void; end: (s: string) => void }, status: number, obj: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(obj));
+}
+
 // 浏览器模式下，通过 ?project=<path> 参数代理访问 yxspec 项目文件
 // 实现方式：Vite configureServer 中间件，拦截 /yxspec/* 请求，从本地文件系统读取
 // 示例：http://localhost:1420/?project=D:/Work/.../ai_tbox
@@ -214,6 +316,132 @@ export default defineConfig({
               res.end(JSON.stringify({ ok: false, error: String(e?.message || e) }));
             }
           });
+        });
+
+        // 中间件：/yxspec/create-project — 新建项目（从模板造骨架）
+        // （必须在通用 /yxspec 兜底之前注册，否则被兜底吞掉——兜底是前缀匹配）
+        server.middlewares.use("/yxspec/create-project", async (req, res, next) => {
+          if (req.method !== "POST") {
+            sendJson(res, 405, { ok: false, error: "method not allowed" });
+            return;
+          }
+          try {
+            const body = JSON.parse((await readBody(req)) || "{}");
+            const name = String(body?.name ?? "");
+            const root = getProjectsRoot();
+            if (!fs.existsSync(root)) throw new Error(`项目根不存在: ${root}`);
+            const nameErr = isSafeProjectName(name);
+            if (nameErr) {
+              sendJson(res, 400, { ok: false, error: nameErr });
+              return;
+            }
+            const dest = path.resolve(root, name.trim());
+            if (!assertInsideRoot(dest, root)) {
+              sendJson(res, 403, { ok: false, error: "路径越权" });
+              return;
+            }
+            if (fs.existsSync(dest)) {
+              sendJson(res, 409, { ok: false, error: `同名项目已存在: ${name.trim()}` });
+              return;
+            }
+            copySkeletonFromTemplate(dest);
+            sendJson(res, 200, { ok: true, path: dest.replace(/\\/g, "/"), name: name.trim(), created: true });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: String(e?.message || e) });
+          }
+        });
+
+        // 中间件：/yxspec/copy-project — 复制项目（full 完整 / skeleton 仅骨架）
+        server.middlewares.use("/yxspec/copy-project", async (req, res, next) => {
+          if (req.method !== "POST") {
+            sendJson(res, 405, { ok: false, error: "method not allowed" });
+            return;
+          }
+          try {
+            const body = JSON.parse((await readBody(req)) || "{}");
+            const source = String(body?.source ?? "");
+            const name = String(body?.name ?? "");
+            const scope = String(body?.scope ?? "skeleton");
+            const includeGit = Boolean(body?.includeGit);
+            const root = getProjectsRoot();
+            if (!fs.existsSync(root)) throw new Error(`项目根不存在: ${root}`);
+            if (!source) throw new Error("source 为空");
+            const src = path.resolve(root, source);
+            if (!assertInsideRoot(src, root)) {
+              sendJson(res, 403, { ok: false, error: "源路径越权" });
+              return;
+            }
+            const srcName = path.basename(src);
+            if (srcName.startsWith("_") || srcName.startsWith(".")) {
+              sendJson(res, 403, { ok: false, error: "禁止复制保留目录" });
+              return;
+            }
+            if (!fs.existsSync(path.join(src, "PROGRESS.md"))) {
+              sendJson(res, 404, { ok: false, error: `源项目不存在: ${source}` });
+              return;
+            }
+            const nameErr = isSafeProjectName(name);
+            if (nameErr) {
+              sendJson(res, 400, { ok: false, error: nameErr });
+              return;
+            }
+            const dest = path.resolve(root, name.trim());
+            if (!assertInsideRoot(dest, root)) {
+              sendJson(res, 403, { ok: false, error: "路径越权" });
+              return;
+            }
+            if (fs.existsSync(dest)) {
+              sendJson(res, 409, { ok: false, error: `同名项目已存在: ${name.trim()}` });
+              return;
+            }
+            if (scope === "full") {
+              copyTree(src, dest, includeGit);
+            } else {
+              copySkeletonFromTemplate(dest);
+            }
+            sendJson(res, 200, { ok: true, path: dest.replace(/\\/g, "/"), name: name.trim(), scope });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: String(e?.message || e) });
+          }
+        });
+
+        // 中间件：/yxspec/delete-project — 删除项目（includeFiles=false 只校验不写，由前端移除加载项）
+        server.middlewares.use("/yxspec/delete-project", async (req, res, next) => {
+          if (req.method !== "POST") {
+            sendJson(res, 405, { ok: false, error: "method not allowed" });
+            return;
+          }
+          try {
+            const body = JSON.parse((await readBody(req)) || "{}");
+            const target = String(body?.target ?? "");
+            const includeFiles = Boolean(body?.includeFiles);
+            const root = getProjectsRoot();
+            if (!fs.existsSync(root)) throw new Error(`项目根不存在: ${root}`);
+            if (!target) throw new Error("target 为空");
+            const abs = path.resolve(root, target);
+            if (!assertInsideRoot(abs, root)) {
+              sendJson(res, 403, { ok: false, error: "路径越权" });
+              return;
+            }
+            if (abs === path.resolve(root)) {
+              sendJson(res, 403, { ok: false, error: "禁止删除项目根目录" });
+              return;
+            }
+            if (!fs.existsSync(abs)) {
+              sendJson(res, 404, { ok: false, error: `目标项目不存在: ${target}` });
+              return;
+            }
+            if (!fs.existsSync(path.join(abs, "PROGRESS.md"))) {
+              sendJson(res, 400, { ok: false, error: "目标不是项目目录（无 PROGRESS.md），拒绝删除" });
+              return;
+            }
+            if (includeFiles) {
+              fs.rmSync(abs, { recursive: true, force: true });
+            }
+            sendJson(res, 200, { ok: true, deleted: includeFiles, path: abs.replace(/\\/g, "/") });
+          } catch (e: any) {
+            sendJson(res, 400, { ok: false, error: String(e?.message || e) });
+          }
         });
 
         server.middlewares.use("/yxspec", (req, res, next) => {
