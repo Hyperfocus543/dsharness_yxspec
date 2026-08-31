@@ -89,7 +89,7 @@ export const LLMConsole: React.FC = () => {
     [slashOpen, prompt, features],
   );
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-  // 输入框高度（行数）—— 默认 3 行，记住上次拖的行数（localStorage 持久化）
+  // 输入框高度（行数）—— 默认 8 行（用户反馈 3 行太小），记住上次拖的行数（localStorage 持久化）
   const [inputRows, setInputRows] = React.useState<number>(() => {
     try {
       const raw = localStorage.getItem('yxspec-studio.console-input-rows');
@@ -98,7 +98,7 @@ export const LLMConsole: React.FC = () => {
     } catch {
       /* ignore */
     }
-    return 3;
+    return 8;
   });
   const inputDragRef = React.useRef<{ startY: number; startRows: number } | null>(null);
 
@@ -404,7 +404,7 @@ export const LLMConsole: React.FC = () => {
               onHover={setSlashHighlight}
             />
           )}
-          <div className="flex flex-col min-w-0 gap-1">
+          <div className="flex flex-col flex-1 min-w-0 gap-1">
             {/* 输入区拖拽手柄：对话区与输入区之间，可单独拉高/压低输入框 */}
             <div
               className="h-1.5 cursor-row-resize group relative -mx-1 shrink-0"
@@ -420,7 +420,7 @@ export const LLMConsole: React.FC = () => {
             </div>
             <textarea
               ref={textareaRef}
-              className="shrink-0 border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+              className="shrink-0 w-full border border-zinc-300 rounded-md px-3 py-2 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
               rows={inputRows}
               placeholder="输入要派给模型的活，或输入 / 选择 yxspec 命令，回车发送 / Ctrl+Enter 换行"
               aria-label="派活指令输入框"
