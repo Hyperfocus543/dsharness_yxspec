@@ -111,6 +111,28 @@ test('isSafeTargetDir：反斜杠归一为合法（D:\\Work\\x）', () => {
   assert.equal(isSafeTargetDir('D:/Work\\x'), true)
 })
 
+test('isSafeTargetDir：`.` 段形变不绕过盘符根（Windows 路径解析把 `.` 折叠为当前目录）', () => {
+  // Windows 解析路径时 `D:/.` ≡ `D:/`（`.`=当前目录）、`D://.` ≡ `D:/`（连续分隔符
+  // 折叠 + 剥 `.`）——只对原始输入判 `D:/` 精确形态会让形变绕过盘符根拦截，
+  // git clone/init 直接落在盘符根（`git init D:/.` 实测在 D:\ 写 .git）。
+  for (const dir of [
+    'D:/.', // ≡ D:/
+    'D:/./', // ≡ D:/
+    'D://.', // ≡ D:/
+    'C:\\.', // ≡ C:\（反斜杠形态）
+    'C:/./',
+  ]) {
+    assert.equal(isSafeTargetDir(dir), false, `应拒绝（盘符根形变）: ${JSON.stringify(dir)}`)
+  }
+  // 剥 `.`/折叠分隔符后仍是普通子目录 → 放行（不误伤）
+  assert.equal(isSafeTargetDir('D:/Work/./x'), true)
+  assert.equal(isSafeTargetDir('D:/Work//x'), true)
+  assert.equal(isSafeTargetDir('D:/Work/x/.'), true)
+  assert.equal(isSafeTargetDir('D:/x//y'), true)
+  assert.equal(isSafeTargetDir('D:/./x'), true) // D:/x 子目录，非盘符根
+  assert.equal(isSafeTargetDir('D:/x/.'), true) // D:/x 子目录，非盘符根
+})
+
 test('gitOperate：未知 action → ok:false', async () => {
   const r = await gitOperate({ root: 'D:/Work/x', action: 'reset', args: {} })
   assert.equal(r.ok, false)

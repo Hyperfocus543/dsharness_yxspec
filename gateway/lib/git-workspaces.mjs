@@ -1137,8 +1137,12 @@ export function isSafeGitUrl(url) {
 
 /**
  * clone 目标目录校验（纯函数）。
- * 规则：Windows 绝对路径（盘符开头，正/反斜杠均可）→ 归一正斜杠后须非盘符根、
- * 不含 `..` 段；相对路径 / 空 / 非盘符绝对路径一律拒绝。
+ * 规则：Windows 绝对路径（盘符开头，正/反斜杠均可）→ 归一正斜杠、剥 `.` 段、
+ * 折叠连续分隔符后须非盘符根、不含 `..` 段；相对路径 / 空 / 非盘符绝对路径一律拒绝。
+ * 先归一再判盘符根：Windows 解析路径时把 `.` 段当「当前目录」（`D:/.` ≡ `D:/`）、
+ * 折叠连续分隔符（`D:/x//y` ≡ `D:/x/y`）——若只对原始输入判 `D:/` 精确形态，
+ * `D:/.` / `D:/./` / `D:/x//y` 这类形变会绕过盘符根拦截（git clone/init 落在盘符根）。
+ * 归一后 `D:/.` → `D:/` 命中 isWindowsDriveRoot 拒绝；`D:/Work/x` 归一后不变仍放行。
  * @param {string} dir
  * @returns {boolean}
  */
@@ -1146,8 +1150,13 @@ export function isSafeTargetDir(dir) {
   if (typeof dir !== 'string' || !dir.trim()) return false
   const d = dir.trim()
   if (!isWindowsAbsolute(d)) return false
-  const norm = d.replace(/\\/g, '/')
-  if (isWindowsDriveRoot(norm)) return false
+  // 归一 + 剥 `.` 段 + 折叠连续分隔符后，再判盘符根与 `..` 逃逸。
+  // 必须先归一后判：Windows 解析路径时把 `.` 段当「当前目录」（`D:/.` ≡ `D:/`）、
+  // 折叠连续分隔符（`D:/x//y` ≡ `D:/x/y`）——若只对原始输入判 `D:/` 精确形态，
+  // `D:/.` / `D:/./` / `D://.` 这类形变会绕过盘符根拦截（git clone/init 落在盘符根）。
+  // 剥 `.` 段后盘符根只剩裸盘符（`D:`），isWindowsDriveRoot 只认 `D:/` 形态，须补判。
+  const norm = d.replace(/\\/g, '/').replace(/\/+/g, '/').split('/').filter((s) => s && s !== '.').join('/')
+  if (isWindowsDriveRoot(norm) || /^[A-Za-z]:$/.test(norm)) return false
   if (norm.split('/').includes('..')) return false
   return true
 }
