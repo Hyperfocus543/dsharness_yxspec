@@ -1270,13 +1270,15 @@ export const GitWorkspaceCard: React.FC = () => {
                   <span className="ml-auto shrink-0 text-[10px] text-zinc-400 truncate max-w-48" title={w.root}>
                     {w.root}
                   </span>
-                  {/* hover 操作：非当前行「设为当前」；手动行「移除」；自动当前行标「默认」 */}
+                  {/* 非当前行「设为当前」恒可见：切换活动工作区是列表的核心操作，
+                      opacity-0 hover 才出现会让新用户找不到切换入口（卡片其余动作
+                      按钮都常显）；「移除」保留 hover 揭示（破坏性操作渐进披露 + 二次确认）。 */}
                   {!isActive && (
                     <button
                       type="button"
                       onClick={() => doSetActive(w.id)}
                       disabled={operating}
-                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed opacity-0 enabled:group-hover:opacity-100 group-focus-within:opacity-100"
+                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-200 bg-white text-[11px] text-zinc-500 hover:border-emerald-300 hover:text-emerald-700 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
                       title="切换为当前工作区"
                     >
                       设为当前
